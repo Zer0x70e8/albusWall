@@ -6,7 +6,7 @@ albuswall.resources 包 - 提供资源路径的快捷访问。
     from albuswall.resources import theme, qss, icon_dir
     theme   -> Path('.../themes/default')          # 文件夹
     qss     -> Path('.../themes/default/main_window.qss')  # 文件
-    icon_dir -> Path('.../icon')                   # 强制获取文件夹（如果别名本身是文件则会报错）
+    icon_dir -> Path('.../cover')                   # 强制获取文件夹（如果别名本身是文件则会报错）
 """
 
 from .core import get, CURRENT_PATH, PATH_ALIASES

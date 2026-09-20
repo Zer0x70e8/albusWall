@@ -1,42 +1,41 @@
 #
-"""
-Configuration Unified Engine
+""""""
 
-configue: a lightweight configuration engine for static and dynamic sources.
+from typing import TYPE_CHECKING
 
-Instead of another `config` or `configure`, this one argues with environment
-variables, CLI args, and files — and unifies them under a single interface.
-
-The name says it: config + argue, and the UE stands for Unified Engine.
-"""
-
-# main
 from .configue import Configue
-from .bootstrap import build_configue, register_configue
-from .observable_value import ObservableValue
-from .required_conf_table import (TABLE, TYPE_MAP, UI as UI_ENUM,
-                                  UIConfig
-                                  )
+from .utils import (
+    Namespace, FrozenNamespace,
+    get_user_config_dir, get_user_data_dir,
+    parse_section_file,
+)
 
-# helpful
-from .utils import (create_parser, parse_args_to_config,
-                    parse_env_config, update_config_from_env,
-                    deep_merge,
-                    Namespace, FrozenNamespace,
-                    get_temp_dir, get_cache_dir,
-                    get_user_data_dir, get_user_config_dir,
-                    )
+if TYPE_CHECKING:
+    from .bootstrap import setup_config
+    from .declaration import ConfigDeclaration, ConfigField, ConfigMeta, get_config
 
-__all__ = ["Configue", "config",
-           "build_configue", "register_configue",
-           "ObservableValue",
-           "TABLE", "TYPE_MAP", "UI_ENUM",
-           "UIConfig",
-           "create_parser", "parse_args_to_config",
-           "parse_env_config", "update_config_from_env",
-           "deep_merge",
-           "Namespace", "FrozenNamespace",
-           "get_temp_dir", "get_cache_dir", "get_user_data_dir", "get_user_config_dir"
-           ]
+__all__ = [
+    "Configue", "Namespace", "FrozenNamespace", "get_user_config_dir",
+    "get_user_data_dir", "setup_config", "parse_section_file",
+    "ConfigDeclaration", "ConfigField", "ConfigMeta", "get_config",
+]
 
-config = Configue()
+
+def __getattr__(name):
+    if name == "setup_config":
+        from .bootstrap import setup_config
+        return setup_config
+    if name == "ConfigDeclaration":
+        from .declaration import ConfigDeclaration
+        return ConfigDeclaration
+    if name == "ConfigMeta":
+        from .declaration import ConfigMeta
+        return ConfigMeta
+    if name == "ConfigField":
+        from .declaration import ConfigField
+        return ConfigField
+    if name == "get_config":
+        from .declaration import get_config
+        return get_config
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

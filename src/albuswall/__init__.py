@@ -1,6 +1,6 @@
 #
 """
-PyHIGrid - Hyprland Image Gallery
+AlbusWall - Hyprland Image Gallery
 Say Hi to your memories, frame by frame.
 A HIG-like grid for the memories you held.
 

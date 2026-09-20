@@ -1,27 +1,29 @@
 #
 """"""
 
-from pathlib import Path
-from typing import TYPE_CHECKING
+from albuswall.core import Container
+from albuswall.configue import ConfigField
 
 from .connector import Connector
 
-if TYPE_CHECKING:
-    from albuswall.core import Container
-    from albuswall.configue import Configue
+
+class Config:
+    root = ConfigField("db", default={})
+    must_exist: bool = ConfigField("db", "must_exist", default=False)
+    db_file: str = ConfigField("files", "db", default="db.db")
+
+config = Config()
+
 
 def register_database(
         container  # type: Container
 ):
-    # db_file = lambda conf: (conf.static.path.confs / conf.static.file.album_db_file)
-    # db_file = lambda _: Path(r"E:\myCode\py\albuswall\assets\my_library.db")
-    db_file = lambda _: Path(r"/data/myCode/py/pyhigrid/assets/my_library.db")
-
     # noinspection PyTypeChecker
     container.register(
         "db", lambda: Connector(
-            db_file(
-                container.get("configue")  # type: Configue
-            )
+            container.get("configue").static.path.data / config.db_file,
+            must_exist=config.must_exist
         )
     )
+
+    container.final(lambda: container.get("db").close_all())

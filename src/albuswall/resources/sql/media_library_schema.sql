@@ -1,5 +1,5 @@
 -- =============================================================================
--- pyhigrid 媒体库初始建表脚本
+-- AlbusWall 媒体库初始建表脚本
 -- 创建表、索引、约束，保证数据完整性和查询性能
 -- =============================================================================
 
@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS ingest_source (
 
 -- trigger_config JSON 结构示例
 -- {
---   "update_mode": "scheduled_time",       // 可选值：scheduled_time、interval_time、manual
+--   "update_mode": "scheduled_time",
+-- // 可选值：scheduled_time、interval_time、device_trigger、manual
 --   "device_trigger": {
 --     "enabled": true
 --   },
@@ -56,8 +57,8 @@ CREATE TABLE IF NOT EXISTS ingest_source (
 CREATE TABLE IF NOT EXISTS assets (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid             TEXT    NOT NULL UNIQUE,
-    file_path        TEXT    NOT NULL,
-    source_id        INTEGER,             -- 关联导入源，可为空
+    file_path        TEXT    NOT NULL,    -- 相对路径，相对于源路径
+    source_id        INTEGER NOT NULL,    -- 关联导入源，为file_path的起始路径
     thumb_path       TEXT,
     thumb_small_path TEXT,
     thumb_medium_path TEXT,
@@ -87,6 +88,7 @@ CREATE TABLE IF NOT EXISTS albums (
     title          TEXT    NOT NULL,
     album_type     INTEGER NOT NULL DEFAULT 0,
     cover_asset_id INTEGER,
+    description    TEXT    NOT NULL DEFAULT '',
     sort_order     INTEGER NOT NULL DEFAULT 0,
     is_deleted     INTEGER NOT NULL DEFAULT 0,
     created_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
@@ -107,6 +109,34 @@ CREATE TABLE IF NOT EXISTS album_assets (
     FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE,
     FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
+
+
+-- -----------------------------------------------------------------------------
+-- 5. 资产候选缓存表（存放待二次处理的文件，处理完成后删除记录）
+--    注意：path 为相对路径，相对于 ingest_source.source_path
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS asset_candidate_cache (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid        TEXT    NOT NULL UNIQUE,                -- 候选资产唯一标识
+    path        TEXT    NOT NULL,                       -- 绝对路径
+    source_id   INTEGER NOT NULL,                       -- 所属导入源
+    created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+    mime_type   TEXT    NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'pending',
+    claimed_by  TEXT,
+    claimed_at  TEXT,
+    FOREIGN KEY (source_id) REFERENCES ingest_source(id) ON DELETE CASCADE
+);
+
+-- 候选缓存表索引
+CREATE INDEX IF NOT EXISTS idx_asset_candidate_cache_source ON asset_candidate_cache(source_id);
+-- uuid 字段已通过 UNIQUE 约束自动创建索引，无需额外显式索引
+-- statue
+--ALTER TABLE asset_candidate_cache ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';
+--
+-- 可选索引加速
+CREATE INDEX IF NOT EXISTS idx_asset_candidate_cache_source ON asset_candidate_cache(source_id);
+CREATE INDEX IF NOT EXISTS idx_candidate_pending ON asset_candidate_cache(status, source_id);
 
 -- =============================================================================
 -- 索引 —— 覆盖所有常用查询与排序，确保大数据量下的性能

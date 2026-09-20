@@ -8,6 +8,13 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+__all__ = [
+    "get_user_config_dir",
+    "get_temp_dir",
+    "get_cache_dir",
+    "get_user_data_dir"
+]
+
 
 def get_user_config_dir(app_name: str, app_author: Optional[str] = None) -> Path:
     """

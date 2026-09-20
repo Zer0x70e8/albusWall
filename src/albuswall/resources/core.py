@@ -10,6 +10,7 @@ PATH_ALIASES = {
     "theme": "themes/default",                     # 文件夹
     "sql": "sql",                                  # 文件夹
     "qss": "themes/default/main_window.qss",       # 文件
+    "schema": "sql/media_library_schema.sql",       # 文件
     # 可继续添加任意文件或文件夹
 }
 

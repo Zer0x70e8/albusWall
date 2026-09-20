@@ -7,22 +7,24 @@ import sqlite3
 import logging
 import threading
 from pathlib import Path
-from importlib import resources
+# from importlib import resources
 from typing import Optional
 
 import albuswall
-from albuswall.core.build_logger import TRACE
+from albuswall.log import TRACE, Logger
+from albuswall.resources import schema
 
 __all__ = [
     "DEFAULT_SCHEMA_FILE",
     "Connector"
 ]
 
-DEFAULT_SCHEMA_FILE = (
-    resources.files('albuswall.resources') /
-    'sql' /
-    'media_library_schema.sql'
-)
+# DEFAULT_SCHEMA_FILE = (
+#         resources.files('albuswall.resources') /
+#         'sql' /
+#         'media_library_schema.sql'
+# )
+DEFAULT_SCHEMA_FILE = schema
 
 MEMORY_DB_PATH = ":memory:"
 
@@ -51,11 +53,13 @@ class Connector:
         If True, and db_path points to a file that does not exist, the first connection attempt
         will raise FileNotFoundError. Defaults to False (allows automatic creation of new files).
 
-    Usage:
-        with db as conn:
-            conn.execute("...")
+     Usage:
+        with db as Conn:
+            conn.execute( "...")
     """
     logger = logging.getLogger(f"{albuswall.__name__}.{_package_name}")
+    logger: Logger
+    logger.trace = lambda msg, *args, **kwargs: Connector.logger.log(TRACE, msg, *args, **kwargs)
 
     def __init__(self, db_path: Optional[str] = None,
                  schema_file=None,
@@ -158,11 +162,34 @@ class Connector:
                         conn.executescript(self._schema_sql)
                         self.logger.info("Schema creation completed")
                     else:
-                        self.logger.debug("Database already exists; skipping table creation, performing idempotent index completion")
-                        conn.executescript(self._schema_sql)  # Statements contain IF NOT EXISTS
+                        self.logger.debug("Database already exists; applying idempotent schema updates")
+                        # 执行仅包含 CREATE TABLE IF NOT EXISTS 和 CREATE INDEX IF NOT EXISTS 的部分
+                        # 或者拆分 schema 文件，这里直接手动执行条件 ALTER
+                        self._add_column_if_not_exists(
+                            conn, 'asset_candidate_cache', 'status', "TEXT NOT NULL DEFAULT 'pending'"
+                        )
+                        self._add_column_if_not_exists(
+                            conn, 'asset_candidate_cache', 'claimed_by', "TEXT"
+                        )
+                        self._add_column_if_not_exists(
+                            conn, 'asset_candidate_cache', 'claimed_at', "TEXT"
+                        )
+                        # 执行索引创建（幂等）
+                        conn.executescript("""
+                            CREATE INDEX IF NOT EXISTS idx_asset_candidate_cache_source ON asset_candidate_cache(source_id);
+                            CREATE INDEX IF NOT EXISTS idx_candidate_pending ON asset_candidate_cache(status, source_id);
+                            -- 其他索引也可以加在这里，或者保留原有 schema 中的索引部分
+                        """)
                     self._initialized = True
 
         return conn
+
+    def _add_column_if_not_exists(self, conn, table, column_name, column_definition):
+        """Add a column to a table if it doesn't already exist."""
+        columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
+        if column_name not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_name} {column_definition}")
+            self.logger.debug("Added column %s to table %s", column_name, table)
 
     def close(self):
         """Close the current thread's connection."""
@@ -177,11 +204,22 @@ class Connector:
 
     def close_all(self):
         """Close all threads' database connections (typically called at program exit)."""
+        is_prompted = False # is has already been prompted
+
         with self._connections_lock:
             count = len(self._connections)
             for conn in list(self._connections):
                 try:
                     conn.close()
+                except sqlite3.ProgrammingError as e:
+                    # 仅对跨线程关闭错误进行降级处理
+                    if "SQLite objects created in a thread can only be used in that same thread" in str(e):
+                        if not is_prompted:
+                            is_prompted = True
+                            self.logger.debug("This is normal when closing, please ignore it.")
+                        self.logger.debug("Ignoring cross-thread close error: %s", e)
+                    else:
+                        self.logger.warning("Exception while closing connection: %s", e)
                 except Exception as e:
                     self.logger.warning("Exception while closing connection: %s", e)
             self._connections.clear()

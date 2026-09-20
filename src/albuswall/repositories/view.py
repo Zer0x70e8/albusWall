@@ -1,187 +1,156 @@
 #
-"""
-视图仓库 —— 提供侧边栏/视图列表的超集。
-视图包括系统内置虚拟相簿（BaseAlbum）和用户手动/智能相簿（albums表）。
-每个视图返回 ViewItem 实体，包含标题、封面缩略图、资产数量等。
-"""
+""""""
 
-from typing import List
-from albuswall.domain.entities import ViewItem
-from albuswall.domain.enums import AlbumType, BaseAlbum
+from pathlib import Path
+from typing import List, Optional
+from uuid import UUID
+
+from albuswall.dto.album import Album, AssetDTO
+
 from .base import BaseRepository
 
 
 class ViewRepository(BaseRepository):
-    """视图仓库，处理虚拟相簿和用户相簿的统一查询"""
+    """相簿（专辑）视图仓储。"""
 
-    # ---------- 公开方法 ----------
-    def get_views(self) -> List[ViewItem]:
-        """获取所有视图（虚拟相簿 + 用户相簿），按约定顺序排列"""
-        views = self._get_virtual_views()
-        views.extend(self._get_user_albums())
-        return views
+    _SCOPE_WHERE = {"active": "is_deleted = 0", "deleted": "is_deleted = 1"}
+    _SCOPE_ORDER = {
+        "active": "taken_at IS NULL, taken_at DESC, id DESC",
+        "deleted": "deleted_at IS NULL, deleted_at DESC, id DESC",
+    }
 
-    def get_view(self, view_id: str) -> ViewItem | None:
-        """根据视图ID获取单个视图信息，若不存在则返回None"""
-        # 先尝试虚拟相簿
-        base = BaseAlbum.from_uuid(view_id)
-        if base:
-            return self._get_single_virtual_view(base)
-        # 再尝试用户相簿
-        return self._get_single_user_album(view_id)
-
-    # ---------- 虚拟相簿 ----------
-    def _get_virtual_views(self) -> List[ViewItem]:
-        """生成5个系统内置虚拟相簿"""
-        virtual_defs = [
-            (BaseAlbum.ALL_PHOTOS, AlbumType.ALL_PHOTOS, 0),
-            (BaseAlbum.UNORGANIZED, AlbumType.UNORGANIZED, 1),
-            (BaseAlbum.FAVORITES, AlbumType.FAVORITES, 2),
-            (BaseAlbum.RECENTLY_DELETED, AlbumType.RECENTLY_DELETED, 3),
-            (BaseAlbum.VIDEOS, AlbumType.VIDEOS, 4),
-        ]
-        views = []
-        for album, album_type, sort_order in virtual_defs:
-            count = self._count_virtual_assets(album)
-            cover = self._cover_for_virtual(album)
-            views.append(ViewItem(
-                view_id=album.value,
-                title=album.label,
-                view_type=album_type,
-                cover_thumb=cover,
-                asset_count=count,
-                sort_order=sort_order,
-            ))
-        return views
-
-    def _get_single_virtual_view(self, base: BaseAlbum) -> ViewItem:
-        count = self._count_virtual_assets(base)
-        cover = self._cover_for_virtual(base)
-        sort_order = {
-            BaseAlbum.ALL_PHOTOS: 0,
-            BaseAlbum.UNORGANIZED: 1,
-            BaseAlbum.FAVORITES: 2,
-            BaseAlbum.RECENTLY_DELETED: 3,
-            BaseAlbum.VIDEOS: 4,
-        }[base]
-        return ViewItem(
-            view_id=base.value,
-            title=base.label,
-            view_type=base.album_type,
-            cover_thumb=cover,
-            asset_count=count,
-            sort_order=sort_order,
+    def get_cover_asset_by_scope(self, scope: str) -> Optional[AssetDTO]:
+        where = self._SCOPE_WHERE[scope]
+        order = self._SCOPE_ORDER[scope]
+        row = self._fetchone(
+            f"SELECT * FROM assets WHERE {where} ORDER BY {order} LIMIT 1"
         )
+        return AssetDTO.from_row(row) if row else None
 
-    def _count_virtual_assets(self, album: BaseAlbum) -> int:
-        """统计虚拟相簿中的资产数量"""
-        query = self._virtual_where(album, count_mode=True)
-        row = self._fetchone(query)
-        return row[0] if row else 0
+    def get_active_album_uuids(self) -> List[str]:
+        """获取所有未被软删除的相簿 uuid 列表。
 
-    def _cover_for_virtual(self, album: BaseAlbum) -> str:
-        """获取虚拟相簿的封面缩略图（最新一张）"""
-        thumb_expr = "COALESCE(thumb_medium_path, thumb_path, thumb_small_path)"
-        where = self._virtual_where(album, count_mode=False)
-        # 只需where条件，拼接成完整查询
-        query = f"SELECT {thumb_expr} FROM assets WHERE {where} ORDER BY taken_at DESC, created_at DESC LIMIT 1"
-        row = self._fetchone(query)
-        return row[0] if row and row[0] else ""
-
-    @staticmethod
-    def _virtual_where(album: BaseAlbum, count_mode: bool) -> str:
-        """生成虚拟相簿的WHERE条件；count_mode返回整句'SELECT COUNT(*)...'，否则仅返回条件字符串"""
-        if album == BaseAlbum.ALL_PHOTOS:
-            condition = "is_deleted = 0"
-        elif album == BaseAlbum.UNORGANIZED:
-            condition = """
-                is_deleted = 0 AND id NOT IN (
-                    SELECT aa.asset_id FROM album_assets aa
-                    JOIN albums al ON aa.album_id = al.id
-                    WHERE al.is_deleted = 0
-                )
+        Returns:
+            相簿 uuid 列表；若不存在则返回空列表。
+        """
+        sql = """
+                SELECT uuid
+                  FROM albums
+                 WHERE is_deleted = 0
+                 ORDER BY sort_order ASC, id ASC
             """
-        elif album == BaseAlbum.FAVORITES:
-            condition = "is_deleted = 0 AND is_favorite = 1"
-        elif album == BaseAlbum.RECENTLY_DELETED:
-            condition = "is_deleted = 1"
-        elif album == BaseAlbum.VIDEOS:
-            condition = "is_deleted = 0 AND mime_type LIKE 'video/%'"
-        else:
-            raise ValueError(f"Unknown virtual album: {album}")
-
-        if count_mode:
-            return f"SELECT COUNT(*) FROM assets WHERE {condition}"
-        return condition
-
-    # ---------- 用户相簿 ----------
-    def _get_user_albums(self) -> List[ViewItem]:
-        """查询所有未删除的用户相簿（manual/smart）"""
-        rows = self._fetchall(
-            "SELECT id, uuid, title, album_type, cover_asset_id, sort_order "
-            "FROM albums WHERE is_deleted = 0 AND album_type IN ('MANUAL', 'SMART') "
-            "ORDER BY sort_order, created_at"
-        )
-        views = []
+        self.logger.trace("before _fetchall, sql=%s", sql)
+        rows = self._fetchall(sql)
+        self.logger.trace("after _fetchall, type=%s, len=%s, repr=%r",
+                          type(rows).__name__, len(rows) if rows is not None else None, rows)
         if not rows:
-            # self.logger.debug("No user albums found.")
             return []
-        for row in rows:
-            album_id = row['id']
-            # 资产数量
-            count_row = self._fetchone(
-                "SELECT COUNT(*) FROM album_assets WHERE album_id = ?", (album_id,)
-            )
-            count = count_row[0] if count_row else 0
-            # 封面缩略图
-            cover = self._album_cover(album_id, row['cover_asset_id'])
-            views.append(ViewItem(
-                view_id=row['uuid'],
-                title=row['title'],
-                view_type=AlbumType(row['album_type']),
-                cover_thumb=cover,
-                asset_count=count,
-                sort_order=row['sort_order'],
-            ))
-        return views
+        return [row["uuid"] for row in rows]
 
-    def _get_single_user_album(self, album_uuid: str) -> ViewItem | None:
+    def get_album_by_uuid(self, album_uuid: str) -> Optional[Album]:
+        """根据 uuid 获取未被软删除的相簿 DTO。
+
+        Args:
+            album_uuid: 相簿 UUID（字符串形式）。
+
+        Returns:
+            对应的 Album DTO；若不存在或已被软删除则返回 None。
+        """
         row = self._fetchone(
-            "SELECT id, uuid, title, album_type, cover_asset_id, sort_order "
-            "FROM albums WHERE uuid = ? AND is_deleted = 0", (album_uuid,)
+            """
+            SELECT a.id,
+                   a.uuid,
+                   a.title,
+                   a.description,
+                   cover.uuid AS cover_uuid,
+                   a.album_type AS type,
+                   a.created_at,
+                   a.modified_at
+              FROM albums AS a
+              LEFT JOIN assets AS cover
+                     ON cover.id = a.cover_asset_id
+             WHERE a.uuid = ?
+               AND a.is_deleted = 0
+            """,
+            (album_uuid,),
         )
-        if not row:
+        if row is None:
             return None
-        album_id = row['id']
-        count_row = self._fetchone(
-            "SELECT COUNT(*) FROM album_assets WHERE album_id = ?", (album_id,)
-        )
-        count = count_row[0] if count_row else 0
-        cover = self._album_cover(album_id, row['cover_asset_id'])
-        return ViewItem(
-            view_id=row['uuid'],
-            title=row['title'],
-            view_type=AlbumType(row['album_type']),
-            cover_thumb=cover,
-            asset_count=count,
-            sort_order=row['sort_order'],
+        return Album(
+            id=row["id"],
+            uuid=UUID(row["uuid"]),
+            title=row["title"],
+            description=row["description"] or "",
+            cover=UUID(row["cover_uuid"]) if row["cover_uuid"] else None,
+            type=row["type"],
+            created_at=row["created_at"],
+            modified_at=row["modified_at"],
         )
 
-    def _album_cover(self, album_id: int, cover_asset_id: int | None) -> str:
-        """获取相簿封面缩略图：优先使用设定的封面，否则使用最新添加的资产"""
-        if cover_asset_id:
-            row = self._fetchone(
-                "SELECT COALESCE(thumb_medium_path, thumb_path, thumb_small_path) "
-                "FROM assets WHERE id = ?",
-                (cover_asset_id,)
-            )
-            if row and row[0]:
-                return row[0]
-        # 回退：最近添加的资产
+    def get_album_cover_by_uuid(self, album_uuid: str) -> Optional[AssetDTO]:
+        """根据相簿 uuid 获取其封面资产。
+
+        仅当相簿存在、未被软删除、且封面资产本身也未被软删除时才返回。
+
+        Args:
+            album_uuid: 相簿 UUID（字符串形式）。
+
+        Returns:
+            对应的 AssetDTO；若相簿不存在、已被软删除、未设置封面
+            或封面资产已被软删除，则返回 None。
+        """
         row = self._fetchone(
-            "SELECT COALESCE(a.thumb_medium_path, a.thumb_path, a.thumb_small_path) "
-            "FROM assets a JOIN album_assets aa ON a.id = aa.asset_id "
-            "WHERE aa.album_id = ? ORDER BY aa.added_at DESC LIMIT 1",
-            (album_id,)
+            """
+            SELECT asset.*
+              FROM albums AS a
+              JOIN assets AS asset
+                     ON asset.id = a.cover_asset_id
+             WHERE a.uuid = ?
+               AND a.is_deleted = 0
+               AND asset.is_deleted = 0
+            """,
+            (album_uuid,),
         )
-        return row[0] if row and row[0] else ""
+        if row is None:
+            return None
+        return AssetDTO.from_row(row)
+
+    def get_asset_full_path(self, asset_uuid: str) -> Optional[Path]:
+        """根据资产 uuid 获取其磁盘上的完整路径。
+
+        路径拼接规则：
+          - 若资产关联的导入源存在（source_path 非空），使用
+            ``Path(source_path) / file_path`` 拼接（file_path 为相对路径）。
+          - 若资产未关联导入源（source_id 为空或 source_path 为 NULL），
+            则 ``file_path`` 被视为绝对路径直接返回。
+          - 若资产本身不存在或已被软删除，返回 None。
+
+        Args:
+            asset_uuid: 资产 UUID（字符串形式）。
+
+        Returns:
+            资产完整路径（Path 对象）；若资产不存在或已被软删除则返回 None。
+        """
+        row = self._fetchone(
+            """
+            SELECT a.file_path     AS file_path,
+                   s.source_path   AS source_path
+              FROM assets AS a
+              LEFT JOIN ingest_source AS s
+                     ON s.id = a.source_id
+             WHERE a.uuid = ?
+               AND a.is_deleted = 0
+            """,
+            (asset_uuid,),
+        )
+        if row is None or not row["file_path"]:
+            return None
+
+        file_path = Path(row["file_path"])
+        source_path = row["source_path"]
+
+        # # file_path 已为绝对路径，或没有可用的源路径起点时，直接返回
+        # if file_path.is_absolute() or not source_path:
+        #     return str(file_path
+
+        return Path(source_path) / file_path

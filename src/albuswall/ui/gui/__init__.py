@@ -1,4 +1,0 @@
-#
-""""""
-
-from .application import Application

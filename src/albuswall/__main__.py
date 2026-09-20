@@ -1,88 +1,106 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+#
 """"""
 
-import sys
 import logging
-import traceback
-import gc
 
 import albuswall
-from albuswall.core import Application, Container
-from albuswall.core.build_logger import register_logger
-from albuswall.configue import register_configue
-from albuswall.infrastructure.database import register_database
-from albuswall.repositories import register_repository
+from albuswall.core import Application, Runtime
+from albuswall.plugin import discover_all
+from albuswall.configue import (
+    setup_config, ConfigField, parse_section_file,
+    get_user_config_dir, get_user_data_dir
+)
+from albuswall.log import setup_log
+from albuswall.infrastructure import register_database
+from albuswall.repositories import registry_repository
 from albuswall.services import register_service
-from albuswall.ui.bootstrap import register_ui
+from albuswall.ui import registry_ui
+from albuswall.log.handlers import MemoryCacheHandler
+
+CONFIG_FILE_PATH = get_user_config_dir(
+    albuswall.__title__, albuswall.__author__)
+DATA_FILE_PATH = get_user_data_dir(
+    albuswall.__title__, albuswall.__author__)
+CONFIG_FILE_NAME = "config.ini"
+
+logging.getLogger().setLevel(1)
+memory_handler = MemoryCacheHandler()
+_logger = logging.getLogger(albuswall.__name__)
+runtime = Runtime(memory_handler)
 
 
-# noinspection PyNoneFunctionAssignment
-def main_():
-    end_code = -1
+# noinspection bad-assignment
+class ConfV:
+    debug: bool = ConfigField("debug", default=False)
 
-    # container
-    container = Container()
 
-    # app
-    app: Application = Application()
-    app.container = container
+def _boot(app: Application) -> None:
+    container = app.container
 
-    container.on(lambda: (
-        container.get("logger"),
-        logging.getLogger(albuswall.__name__)
-        .info("Program starting."),
-    ))
+    discover_all(
+        builtin_package="albuswall.plugins",
+        user_dir=DATA_FILE_PATH / "plugins",
+    )
+    plugin_disables = parse_section_file(
+        CONFIG_FILE_PATH / CONFIG_FILE_NAME,
+        "plugin_disables",
+        required=False,
+    )
 
-    # conf
-    register_configue(container)  # configue
+    app.plugins.activate(container, disabled=plugin_disables)
 
-    # log
-    register_logger(container)  # logger
-
-    container.on(lambda: (
-        container.reg("ui_end_code", lambda: end_code)
-    ))
-
-    # db
-    register_database(container)  # db
-
-    # repo
-    register_repository(container)
-
-    # service
+    setup_config(container, CONFIG_FILE_PATH / CONFIG_FILE_NAME)
+    setup_log(container)
+    app.log_enable = True
+    register_database(container)
+    registry_repository(container)
     register_service(container)
+    registry_ui(container)
 
-    # gc
-    container.on(lambda: (
-        (collected := gc.collect()),
-        gc.freeze(),
-        container.get("logger").info(
-            f"Garbage collection freed {collected} objects, "
-            f"freeze triggered."
+    container.on_boot_insert(0, lambda: app.configue.static.path.data.mkdir(
+        parents=True, exist_ok=True))
+    container.final(lambda: _logger.debug("Program closed."))
+
+    # if container.get("config").static.debug:
+    if ConfV().debug:
+        _logger.info("Debugging is turned on, "
+                     "and debug information will be output. \n"
+                     "Note: This does not enable debug-level logging."
+                     )
+        _logger.debug("Container: %s\n", container)
+        _logger.debug("%s\n", app.config)
+        _logger.debug(app.plugins)
+        container.on_final_insert(0, lambda:
+        _logger.debug("The program is exiting gracefully."))
+        container.on_boot_insert(
+            -1, lambda: _logger.debug(f"{app.config.dynamic}")
         )
-    ))
 
-    # ui
-    register_ui(container)
+    container.on_boot_insert(-1, lambda: _logger.debug("Program boot finished."))
 
-    # exec
-    container.on( lambda:container.get("logger").info("Program ended."))
-    end_code = app.exec()
+    # # test
+    # from albuswall.dto.source import IngestSourceCreate
+    # container.get("ingest_source_service").create_source(IngestSourceCreate(
+    #     title = "my library",
+    #     source_path = "/data/myCode/py/albuswall/assets/thumbs",
+    # ))
 
-    return end_code
 
-def main():
-    # end_code = -1
-    # noinspection PyBroadException
-    try:
-        end_code = main_()
-    except KeyboardInterrupt:
-        end_code = 0
-    except Exception:
-        traceback.print_exc()
-        end_code = -1
-    return end_code
+def _main() -> int | str:
+    _logger.addHandler(memory_handler)
+    _logger.debug("Program start.")
 
-if __name__ == '__main__':
-    sys.exit(main())
+    app = Application()
+    app.container.reg("app", lambda: app)
+    runtime.install()
+    _boot(app)
+
+    return app.exec()
+
+
+def main() -> int | str:
+    return runtime.run(_main)
+
+
+if __name__ == "__main__":
+    exit(main())

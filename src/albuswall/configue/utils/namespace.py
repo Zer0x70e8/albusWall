@@ -37,6 +37,13 @@ class Namespace:
         """Delete an attribute."""
         super().__delattr__(key)
 
+    def __setitem__(self, key, value):
+        # self.__dict__[key] = value
+        setattr(self, key, value)
+
+    def __getitem__(self, key):
+        return self.__dict__[key]
+
     def __repr__(self) -> str:
         """Return a string showing the class name and attributes."""
         return f"{self.__class__.__name__}({self.__dict__})"
@@ -64,7 +71,11 @@ class Namespace:
         return key in self.__dict__
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Return the value for key, or default if not found."""
+        if not isinstance(self, Namespace):
+            raise TypeError(
+                f"get() called on {type(self).__name__!r}. "
+                "Expected a Namespace instance."
+            )
         return self.__dict__.get(key, default)
 
     def update(self, *args: Any, **kwargs: Any) -> None:
@@ -88,6 +99,22 @@ class Namespace:
         for key, value in kwargs.items():
             self.__setattr__(key, value)
 
+    def subtree(self, path: str) -> "Namespace":
+        node = self
+        for part in path.split("."):
+            nxt = node.get(part)
+            if not isinstance(nxt, self.__class__):
+                nxt = self.__class__()
+                # nxt._configue_ref = getattr(self, "_configue_ref", None)
+                # nxt._logger = getattr(self, "_logger", None)
+                setattr(node, part, nxt)
+            node = nxt
+        return node
+
+    def ensure(self, key: str, default: str):
+        if key not in self.keys():
+            setattr(self, key, default)
+
     def keys(self):
         """Return a view of the keys (attribute names)."""
         return self.__dict__.keys()
@@ -108,7 +135,7 @@ class Namespace:
 
     def copy(self) -> "Namespace":
         """Return a shallow copy (nested namespaces are shared)."""
-        cls = type(self)
+        cls = self.__class__
         new = cls.__new__(cls)
         new.__dict__.update(self.__dict__)
         return new
@@ -180,7 +207,7 @@ class FrozenNamespace(Namespace):
     # Copy and freezing
     def copy(self) -> "FrozenNamespace":
         """Shallow copy. The new instance is unfrozen, nested namespaces keep their state."""
-        cls = type(self)
+        cls = self.__class__
         new = cls.__new__(cls)
         # Copy all attributes except the frozen flag
         for key, value in self.__dict__.items():
@@ -195,3 +222,6 @@ class FrozenNamespace(Namespace):
         if getattr(self, self._FROZEN_FLAG, False):
             raise AttributeError("Namespace is already frozen")
         super().__setattr__(self._FROZEN_FLAG, True)
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({self.to_dict()})"

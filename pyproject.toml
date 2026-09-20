@@ -1,43 +1,18 @@
-#[build-system]
-#requires = ["setuptools>=61.0"]
-#build-backend = "setuptools.build_meta"
-
 [project]
 name = "albuswall"
 version = "0.1.0"
-description = "A HIG-like image grid tool to showcase your Hyprland ricing setups."
-readme = "README.md"
-authors = [
-    {name = "Zer0x70e8", email = "3791929822@qq.com"}
-]
-
-license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "Pillow>=10.0",  # EXIF reading is built-in, no extra extensions needed
-    "pyside6",
-    "shiboken6>=6.11.1",
-    "tinycss2>=1.5.1",
-    "apscheduler>=3.10.0",  # Timer
+    "psutil>=7.2.2",  # Viewing system resource information, used for resource allocation.
+    "apscheduler>=3.10.0",  # Scheduler, Timer.
+    "pillow>=12.3.0",
+    "pyside6>=6.11.2",
 ]
-
-maintainers = [
-    {name = "Zer0x70e8", email = "3791929822@qq.com"},
-]
-keywords = [
-    "hyprland", "ricing",
-    "image-grid", "gallery",
-    "screenshot", "unixporn", "hig-like",
-    "photo", "album", "image"
-]
-
-[project.scripts]
-albuswall = "albuswall.__main__:main"  # GUI (requires [gui] extra)
-albuswall-cli = "albuswall_cli.main:cli"  # CLI (no extra deps)
-
-[tool.setuptools.packages.find]
-where = ["src"]
 
 [project.optional-dependencies]
-gui = ["PySide6>=6.5"]  # Mandatory for the GUI; currently only PySide6 is supported
-cli = []  # CLI has no third-party dependencies
+ui = [
+    "pyside6>=6.11.2",  # Default UI.
+]
+all = [
+    "pyside6>=6.11.2",
+]

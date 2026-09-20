@@ -6,13 +6,15 @@ import weakref
 from itertools import chain
 from typing import Optional, cast
 
+import albuswall
+
 from .utils.namespace import Namespace, FrozenNamespace
 
 
 class _Configue:
     __slots__ = ("static", "dynamic")
 
-    logger = logging.getLogger("albuswall.configue")
+    logger = logging.getLogger(f"{albuswall.__name__}.configue")
 
     def __init__(self):
         self.static = StaticConfig()
@@ -107,7 +109,7 @@ class DynamicConfig(Namespace):
     def logger(self):
         if self._logger is not None:
             return self._logger
-        # 回退到 Configue
+            # 回退到 Configue
         # 显式解包弱引用
         if self._configue_ref is not None:
             parent = self._configue_ref()

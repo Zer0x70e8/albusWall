@@ -1,52 +1,93 @@
 #
 """"""
 
-import sys
-from typing import TYPE_CHECKING, Optional
+from logging import getLogger
+from typing import TYPE_CHECKING
+
+import albuswall
+from albuswall.core import Application
+from albuswall.configue import ConfigField
+from albuswall.plugin import PluginManager
+
+from .common import DEFAULT_THEME, DEFAULT_UI
+from .protocol import get_ui
 
 if TYPE_CHECKING:
-    # noinspection PyUnusedImports
-    from albuswall.ui.gui.application import Application as UIApplication
-
     from albuswall.core import Container
-    from albuswall.configue import Configue
 
-ui_app: Optional["UIApplication"] = None
+logger = getLogger(f"{albuswall.__title__}.ui")
 
-def register_ui(
-        container  # type: Container
-):
-    container.register(
-        "ui",
-        lambda : setup_ui(container)
+
+# noinspection bad-assignment
+class UIConfig:
+    theme_path: str = ConfigField("path", "theme", default=None)
+    main = ConfigField("ui", default={})
+    theme: str = ConfigField("ui", "theme", default=DEFAULT_THEME)
+    active: str = ConfigField("ui", "ui", default=DEFAULT_UI)
+    no_builtin: bool = ConfigField("ui", "no_builtin", default=False)
+
+
+# ui/bootstrap.py
+
+def registry_ui(container: "Container"):
+    confs = UIConfig()
+    logger.debug("UI(active=%s, theme=%s) registry now.",
+                 confs.active, confs.theme)
+
+    # ① 触发 UI 导入阶段
+    try:
+        PluginManager.activate_ui(container, confs.active.lower())
+    except KeyError:
+        logger.warning("UI loader(name=%s) not declared, "
+                       "can't registry UI.", confs.active)
+        return None
+
+    # ② 从 _REGISTRY 取类
+    try:
+        ui_cls = get_ui(confs.active.lower())
+    except RuntimeError:
+        logger.warning(
+            "Ui(name=%s) not registered; "
+            "may be disabled by plugin 'enabled' filter, "
+            "or its @ui_loader didn't import the implementation.",
+            confs.active,
+        )
+        return None
+
+    if container.get("config").static.debug:
+        # noinspection PyStringConversionWithoutDunderMethod
+        logger.debug(str(ui_cls))
+
+    _ui_instance = None   # 闭包持有实例，避免 teardown 误造
+
+    def create_ui():
+        nonlocal _ui_instance
+        _ui_instance = ui_cls()
+        _ui_instance.setup(container)
+        return _ui_instance
+
+    container.reg("ui", create_ui)
+
+    # ③ teardown：只在实例真正被创建过时才调用
+    def _teardown() -> None:
+        if _ui_instance is None:
+            return
+        # noinspection broad-exception
+        try:
+            # noinspection unresolved-references
+            _ui_instance.teardown()
+        except Exception:
+            logger.exception("ui teardown failed")
+
+    # 用 insert(0) 保证 teardown 早于其它 final 收尾动作
+    container.on_final_insert(0, _teardown)
+
+    container.on_boot(
+        lambda: setattr(
+            Application.instance(),
+            "main_loop",
+            container.get("ui").main_loop
+        )
     )
-    container.on(
-        lambda: (
-            container.reg(
-                "ui_end_code",
-                lambda: container.get("ui").exec()
-            ),
-            container.get("ui_end_code"),
-        )[1]
-    )
-    # def boot_ui():
-    #     # 这里才真正触发 UI 的创建
-    #     ui = container.get("ui")
-    #     ui.show()
-    #     exit_code = ui.exec()
-    #     container.reg("ui_end_code", exit_code)   # 保存退出码
-    #     return exit_code   # 如果需要返回值
-    #
-    # container.on(boot_ui)
 
-def setup_ui(
-        container  # type: container
-):
-    configue = container.get("configue")  # type: Configue
-    global ui_app
-    from albuswall.ui import import_ui
-    ui_cls = import_ui(configue.static.ui.ui)
-    ui_app = ui_cls(sys.argv)
-    ui_app.setup(container)
-    ui_app.show()
-    return ui_app
+    return ui_cls
