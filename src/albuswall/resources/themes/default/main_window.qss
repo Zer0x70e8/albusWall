@@ -1,0 +1,15 @@
+QStackedWidget#QStackedWidgetOverlayStackedWidget {
+    background: transparent;
+    border: none;
+}
+
+.BlurLabel {
+    background: transparent;
+    border: none;
+}
+
+#WindowContent {
+    background: transparent;
+    qproperty-placeholderColor: grey;
+    qproperty-border_radius: 16;
+}

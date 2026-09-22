@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+
+# IDE - PyCharm
+.idea/
+
+# Environment
+.env
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# my tool
+tree.py
+
+# archive
+test/archive/
+
+# assets
+assets/
+.venv/

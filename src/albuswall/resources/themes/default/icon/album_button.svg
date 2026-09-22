@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <!-- 淡灰色圆形背景 -->
+  <circle cx="12" cy="12" r="12" fill="#888" fill-opacity="0.2"/>
+
+  <g transform="translate(0.5, 0.5)" fill="none" stroke="#e0e0e0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 后层照片 -->
+    <rect x="6" y="3.5" width="16" height="17" rx="2" />
+    <!-- 前层照片 -->
+    <rect x="3.5" y="5.5" width="16" height="17" rx="2" />
+    <!-- 前层照片中的山景细节 -->
+    <path d="M7 16 L10 12 L12 14 L13.5 12 L16 16" />
+    <!-- 前层照片中的太阳 -->
+    <circle cx="9" cy="10" r="1.2" fill="#e0e0e0" stroke="none" />
+  </g>
+</svg>

@@ -1,0 +1,18 @@
+[project]
+name = "albuswall"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "psutil>=7.2.2",  # Viewing system resource information, used for resource allocation.
+    "apscheduler>=3.10.0",  # Scheduler, Timer.
+    "pillow>=12.3.0",
+    "pyside6>=6.11.2",
+]
+
+[project.optional-dependencies]
+ui = [
+    "pyside6>=6.11.2",  # Default UI.
+]
+all = [
+    "pyside6>=6.11.2",
+]
