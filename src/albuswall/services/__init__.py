@@ -79,4 +79,4 @@ def register_service(container: Container):
     # container.final(lambda: container.get("import_service").stop())
     container.final(lambda: container.get("trigger_service").stop())
     # container.final(lambda: container.get("source_service").stop())
-    container.final(lambda: container.get("task_service").shutdown)
+    container.final(lambda: container.get("task_service").shutdown())

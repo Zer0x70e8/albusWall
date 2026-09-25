@@ -24,12 +24,17 @@ class ThumbSpec(str, Enum):
 # 仓储返回结构
 # --------------------------------------------------------------------------- #
 
+
 @dataclass(frozen=True, slots=True)
 class ThumbnailPaths:
-    """一个资产的缩略图相对路径集合。
+    """一个资产的缩略图路径集合。
 
-    base 是缩略图主目录（相对 assets.thumb_path），其余三项是相对 base 的子路径。
-    完整路径 = base + "/" + spec 相对路径。
+    契约（与 schema 一致）：
+        base  —— assets.thumb_path 列的原始值，缩略图主目录的**绝对路径**
+        small/medium/large —— **相对 base** 的 spec 子路径
+
+    完整路径 = base.rstrip('/') + '/' + spec_rel
+    任一为空 → resolve() 返回 None。
     """
     base: Optional[str] = None
     small: Optional[str] = None
@@ -154,14 +159,6 @@ class ThumbnailTask:
     source_path: str  # Scanner 补齐
 
 
-@dataclass(frozen=True, slots=True)
-class ThumbnailResult:
-    ok: bool
-    asset_id: int
-    error: Optional[str] = None
-    duration_ms: int = 0
-
-
 # ---------------------------------------------------------------------- #
 # 服务层输入
 # ---------------------------------------------------------------------- #
@@ -196,12 +193,16 @@ class ThumbnailTaskInput:
 class ThumbnailResult:
     """_work_one() 的执行结果。
 
-    ok         —— 是否成功（源文件不存在等“无需重试”的场景返回 False 而不抛异常）
-    asset_id   —— 对应资产 id
-    error      —— 失败时的错误标记，形如 "render:UnidentifiedImageError"
-    duration_ms—— 成功时的耗时（毫秒）
+    ok          —— 是否成功
+    asset_id    —— 对应资产 id
+    error       —— 失败标记，形如 "render:UnidentifiedImageError"
+    duration_ms —— 成功耗时（毫秒）
+    retryable   —— False 表示重试没有意义（资产已删、源丢失、非法图片）；
+                   True 表示临时故障（IO、OOM、写盘失败），可有限重试。
+                   TaskService 应以此决定是否入重试队列。
     """
     ok: bool
     asset_id: int
     error: Optional[str] = None
     duration_ms: Optional[int] = None
+    retryable: bool = False

@@ -4,31 +4,29 @@ Unified Task Service: supports hybrid thread/process scheduling, priority queue,
 dynamic concurrency control, detailed logging and backpressure observability.
 """
 
+import inspect
 import itertools
 import multiprocessing
+import pickle
 import threading
 import queue
 import time
-from dataclasses import dataclass, field
-from logging import getLogger
-from traceback import format_exc
-from typing import Callable, Optional, TYPE_CHECKING, Any
-
 import psutil
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, Future
+from dataclasses import dataclass, field
+from traceback import format_exc
+from typing import Callable, Optional, Any
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    ProcessPoolExecutor,
+    Future,
+    InvalidStateError,
+)
 
-from albuswall.log import TRACE
+from albuswall.log import getLogger, Logger
 from albuswall.dto.task import ExecutorType
 from albuswall.common.exceptions import BackpressureError
 
-if TYPE_CHECKING:
-    from albuswall.log import Logger
-
-_logger = getLogger(__name__)
-# noinspection statement-effect
-_logger  # type: Logger
-# noinspection unresolved-references
-_logger.trace = lambda msg, *args, **kwargs: _logger.log(TRACE, msg, *args, **kwargs)
+_logger: Logger = getLogger(__name__)
 
 
 @dataclass(order=True)
@@ -53,6 +51,11 @@ class DynamicSemaphore:
       - `acquire` 会阻塞直到 `_current < _max`
       - `release` 只会递减 `_current`, 不会让 `_current` 超过 `_max`
       - `decrease_max` 之后, 新任务会真正等待, 直到在跑的任务数降到新上限以下
+
+    注意:
+      - `decrease_max()` 之后，`_current` 可能暂时大于 `_max`。
+        此时 `available` 返回 0，`acquire()` 会阻塞，直到有任务释放 permit，
+        使 `_current < _max`。这是刻意行为，不是 bug。
     """
 
     def __init__(self, initial: int,
@@ -154,8 +157,20 @@ class TaskService:
       - 其他情况: 保持不变
 
     背压:
-      - 队列满 (queue_full): submit / put_back 时抛出 BackpressureError
+      - 队列满 (queue_full): submit / put_back 时抛出或设置 BackpressureError
       - 阻塞式背压 (permit_wait): 等待 permit 超过阈值时记录
+
+    进程任务约束:
+      - `executor="process"` 的任务会被提交到 ProcessPoolExecutor(spawn)。
+      - fn、args、kwargs 必须可 pickle。
+      - 建议只使用模块顶层函数。
+      - 明确拒绝：lambda、局部函数、绑定方法。
+        （绑定方法如 ThumbnailService._work_one 请包装成顶层函数再提交。）
+
+    put_back 语义:
+      - 调度线程拿到任务后，如果因为 shutdown 或重新调度需要放回队列。
+      - 如果队列已满，任务会被丢弃，但对应 future 会被设置 BackpressureError。
+      - 调用方应通过 future.result() / future.exception() 感知。
     """
 
     def __init__(self,
@@ -325,6 +340,41 @@ class TaskService:
         with self._stats_lock:
             return dict(self._stats)
 
+    # ---------- Process Task Validation ----------
+    @staticmethod
+    def _validate_process_task(fn: Callable, args: tuple, kwargs: dict) -> None:
+        """
+        校验 process 任务是否适合进入 ProcessPoolExecutor(spawn)。
+
+        规则:
+          - fn 必须可调用
+          - 拒绝绑定方法、lambda、局部函数
+          - fn/args/kwargs 必须可 pickle
+
+        注意:
+          即使 pickle.dumps 通过，也不代表子进程一定能 import 到 fn。
+          最稳妥的用法是：fn 是模块顶层函数。
+        """
+        if not callable(fn):
+            raise TypeError("process task fn must be callable")
+
+        if inspect.ismethod(fn):
+            raise TypeError(
+                "process executor does not support bound methods; "
+                "wrap it as a top-level function"
+            )
+
+        if inspect.isfunction(fn):
+            if fn.__name__ == "<lambda>":
+                raise TypeError("process executor does not support lambda")
+            if "<locals>" in fn.__qualname__:
+                raise TypeError("process executor does not support local functions")
+
+        try:
+            pickle.dumps((fn, args, kwargs), protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception as exc:
+            raise TypeError(f"process task is not picklable: {exc}") from exc
+
     # ---------- Submit Task ----------
     def submit(self, fn: Callable, *args,
                executor: ExecutorType = "thread",
@@ -338,12 +388,16 @@ class TaskService:
         :param priority: 优先级, 数字越小优先级越高
         :return: Future 对象
         :raises RuntimeError: 服务已关闭
+        :raises TypeError: process 任务不可 pickle 或使用了不支持的函数形式
         :raises BackpressureError: 队列已满 (背压触发)
         """
         if self._shutdown.is_set():
             _logger.error("Attempt to submit task after service shutdown, function=%s",
                           getattr(fn, "__name__", type(fn).__name__))
             raise RuntimeError("TaskService is shut down, cannot submit new tasks")
+
+        if executor == "process":
+            self._validate_process_task(fn, args, kwargs)
 
         with self._stats_lock:
             self._stats["submitted"] += 1
@@ -455,7 +509,13 @@ class TaskService:
         return False
 
     def _put_back(self, task: _Task):
-        """关闭或需要重新调度时, 把任务放回队列。放不进去就丢弃并设置异常。"""
+        """
+        关闭或需要重新调度时, 把任务放回队列。
+        放不进去就丢弃任务, 并将 future 设置为 BackpressureError。
+
+        语义:
+          - 允许丢弃任务，但不会静默丢失；调用方通过 future 感知异常。
+        """
         if self._shutdown.is_set():
             if not task.future.done():
                 task.future.set_exception(RuntimeError("TaskService is shutting down"))
@@ -501,8 +561,8 @@ class TaskService:
     def _submit_process(self, task: _Task):
         seq = task.seq
         try:
-            # 动态展开 fn(*args, **kwargs)，ParamSpec 无法推断，显式忽略
-            fut = self._thread_executor.submit(
+            # 注意：这里必须提交到 _process_executor，而不是 _thread_executor
+            fut = self._process_executor.submit(
                 task.fn, *task.args, **task.kwargs,  # type: ignore[arg-type]
             )
         except Exception as exc:
@@ -601,9 +661,33 @@ class TaskService:
 
         _logger.trace("Resource monitor thread exited")
 
+    # ---------- Shutdown Helpers ----------
+    @staticmethod
+    def _fail_task(task: _Task, exc: BaseException):
+        if not task.future.done():
+            try:
+                task.future.set_exception(exc)
+            except InvalidStateError:
+                pass
+
+    def _drain_queue(self):
+        """关闭时清空队列，给未处理任务的 future 统一设置异常。"""
+        while True:
+            try:
+                task: _Task = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            self._fail_task(task, RuntimeError("TaskService is shutting down"))
+
     # ---------- Shutdown Service ----------
     def shutdown(self, wait: bool = True):
-        """Shut down the service: stop scheduler and monitor threads, close executors."""
+        """
+        关闭服务：
+          - 设置 shutdown 标志
+          - 等待调度线程退出
+          - 清空队列中剩余任务，并给 future 设置异常
+          - 关闭线程池 / 进程池
+        """
         if self._shutdown.is_set():
             return
         _logger.info("Starting TaskService shutdown, wait=%s", wait)
@@ -615,11 +699,14 @@ class TaskService:
                 _logger.warning("Scheduler thread %s did not exit cleanly", t.name)
         _logger.trace("Scheduler threads have all exited")
 
+        # 调度线程退出后，队列中剩余任务不会再被处理，统一失败。
+        self._drain_queue()
+
         self._monitor_thread.join(timeout=3)
         if self._monitor_thread.is_alive():
             _logger.warning("Resource monitor thread did not exit cleanly")
         else:
-            _logger.trace("Resource monitor thread exited")
+            _logger.trace("Resource monitor thread joined cleanly")
 
         _logger.trace("Closing thread pool and process pool...")
         self._thread_executor.shutdown(wait=wait)

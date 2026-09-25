@@ -10,4 +10,4 @@ class MemoryCacheHandler(BufferingHandler):
         self.stream = stream or sys.stdout  # 直接保存流对象，而不是 StreamHandler
 
     def flush(self):
-        pass
+        self.buffer.clear()

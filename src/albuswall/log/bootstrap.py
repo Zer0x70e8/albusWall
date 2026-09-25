@@ -13,6 +13,7 @@ from albuswall.configue import ConfigField
 from albuswall.configue.utils import get_user_config_dir
 
 from .common import TRACE
+from .handlers import MemoryCacheHandler
 
 if TYPE_CHECKING:
     from albuswall.configue import Configue
@@ -47,7 +48,13 @@ def setup_log(container: Container):
         log_conf_file = Path(get_user_config_dir(
             albuswall.__title__, albuswall.__author__)) / "log_config.ini"
 
-    buffer_handler = logging.getLogger(albuswall.__name__).handlers[0]
+    # 用类型查找，别用 handlers[0]
+    root_logger = logging.getLogger(albuswall.__name__)
+    buffer_handler = next(
+        (h for h in root_logger.handlers
+         if isinstance(h, MemoryCacheHandler)),
+        None,
+    )
 
     if log_conf_file.is_file():
         msg = f"Loaded log file: {log_conf_file}"
@@ -68,11 +75,14 @@ def setup_log(container: Container):
             # noinspection PyNoneFunctionAssignment
             [_logger.warning(l) for l in msg.split("\n")]
 
-    # clear buffer
-    config_logger = logging.getLogger(f"{albuswall.__name__}.configue")
-    if hasattr(buffer_handler, "buffer"):
-        for record in buffer_handler.buffer:
-            config_logger.handle(record)
+    # clear buffer 重放缓冲区（关键修复）
+    # handle() 不做级别过滤，必须自己用 isEnabledFor 检查
+    if buffer_handler is not None and hasattr(buffer_handler, "buffer"):
+        for record in list(buffer_handler.buffer):
+            source_logger = logging.getLogger(record.name)
+            if source_logger.isEnabledFor(record.levelno):
+                source_logger.handle(record)
+        buffer_handler.buffer.clear()
     # # print(config.static.files)
     # print(f"_logger.level = {_logger.level}")
     # print(f"_logger.propagate = {_logger.propagate}")

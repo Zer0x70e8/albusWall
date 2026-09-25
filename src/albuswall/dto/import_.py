@@ -54,7 +54,7 @@ class AssetCreateDTO:
 
     # 必填字段（无默认值）
     uuid: str  # 唯一标识
-    file_path: str  # 文件路径（相对或绝对，取决于 source_id）
+    file_path: str  # 文件路径（相对或绝对，取决于 source_id）语义见 media_library_schema.sql
     original_name: str  # 原始文件名
     mime_type: str  # MIME 类型
     file_hash: str  # 文件哈希值
@@ -64,9 +64,13 @@ class AssetCreateDTO:
     width: int = 0  # 图像宽度
     height: int = 0  # 图像高度
     source_id: Optional[int] = None  # 关联导入源 ID，手动导入可为空
-    thumb_path: Optional[str] = None
+
+    thumb_path: Optional[str] = None  # base
+    # relative base path
     thumb_small_path: Optional[str] = None
     thumb_medium_path: Optional[str] = None
+    thumb_large_path: Optional[str] = None
+
     taken_at: Optional[str] = None  # 拍摄时间（ISO 格式字符串）
     city: Optional[str] = None
     exif_json: Optional[str] = None  # EXIF 信息 JSON

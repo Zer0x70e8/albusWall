@@ -16,9 +16,20 @@ from ..utils.time import now_iso
 
 
 class IngestSourceRepository(BaseRepository):
-    """Ingest source repository."""
+    """Ingest source repository.
 
-    _CANDIDATE_COLUMNS = """
+    依赖：
+
+    * ``assets.source_id`` 上的外键约束 **必须为 RESTRICT**，且每个连接
+      都执行过 ``PRAGMA foreign_keys = ON``（SQLite 默认关闭）。
+      本仓库的 ``delete`` 会先做一次显式 ``count_assets`` 预检查以获得
+      友好错误信息，但真正的并发兜底仍由 FK 完成（TOCTOU）。
+    """
+
+    # 同步候选列集合。
+    # 注意：DB 列名是 `target_path`，DTO 字段是 `target`，二者映射
+    # 由 `IngestSourceSyncCandidate.from_row` 负责，此处不得改名。
+    _SYNC_CANDIDATE_COLUMNS = """
         id, source_path, target_path, mount_point,
         auto_mount, file_type_check, file_types,
         subfolder_recursion, subfolder_recursion_depth,
@@ -29,12 +40,6 @@ class IngestSourceRepository(BaseRepository):
         auto_mount, file_type_check, file_types, tags,
         subfolder_recursion, subfolder_recursion_depth,
         trigger_config, created_at, modified_at
-    """
-    _SYNC_CANDIDATE_COLUMNS = """
-        id, source_path, target_path, mount_point,
-        auto_mount, file_type_check, file_types,
-        subfolder_recursion, subfolder_recursion_depth,
-        trigger_config
     """
     _UPDATE_SERIALIZERS: Final[dict[str, Callable[[Any], Any]]] = {
         "title": lambda v: v,
@@ -51,29 +56,72 @@ class IngestSourceRepository(BaseRepository):
         "trigger_config": lambda v: json.dumps(v, ensure_ascii=False),
     }
 
+    # ------------------------------------------------------------------
+    # 触发配置解析策略（统一在此声明，避免各处语义漂移）
+    #
+    #  * 批量 / 单源读取：解析失败 → WARNING 日志 + 跳过该条
+    #    （等价于"该源没有触发配置"），**不向上抛异常**；
+    #    目的是单条脏数据不能拖垮整个调度器。
+    #  * 调用方若需要严格语义（比如"必须拿到配置否则拒绝操作"），
+    #    请使用 `get_trigger_config` 并显式判断 None，
+    #    此时 None 既表示"无配置"也表示"解析失败"，
+    #    需结合日志侧判断。
+    # ------------------------------------------------------------------
+    _TRIGGER_PARSE_POLICY = "warn-and-skip"
+
+    # ==================================================================
+    # 查询：同步候选（批量 / 单源）
+    # ==================================================================
+
     def get_source_candidates(self) -> List[IngestSourceSyncCandidate]:
-        """
-        获取所有需要自动同步的导入源候选。
-        """
+        """获取所有需要自动同步的导入源候选（排除 id=0 虚拟根）。"""
         query = f"""
-                SELECT {self._SYNC_CANDIDATE_COLUMNS}
-                FROM ingest_source
-                WHERE id != 0
-            """
+            SELECT {self._SYNC_CANDIDATE_COLUMNS}
+            FROM ingest_source
+            WHERE id != 0
+            ORDER BY id ASC
+        """
         rows = self._fetchall(query)
         if not rows:
             return []
         return [IngestSourceSyncCandidate.from_row(row) for row in rows]
 
-    def get_all_trigger_configs(self) -> List[TriggerConfig]:
+    def get_sync_candidate(
+            self, source_id: int
+    ) -> Optional[IngestSourceSyncCandidate]:
+        if source_id == MANUAL_SOURCE_ID:
+            return None
+        query = f"""
+            SELECT {self._SYNC_CANDIDATE_COLUMNS}
+            FROM ingest_source
+            WHERE id = ?
         """
-        获取全部导入源的 trigger_config，解析为 TriggerConfig 对象列表。
+        row = self._fetchone(query, (source_id,))
+        if row is None:
+            return None
+        return IngestSourceSyncCandidate.from_row(row)
 
-        解析成功后，会将所属导入源的主键 id 赋值给 TriggerConfig.id 字段，
-        确保每个配置对象都能直接关联到具体的导入源。
-        忽略 trigger_config 为 NULL、空字符串或解析失败的记录。
+    # ==================================================================
+    # 查询：触发配置
+    # ==================================================================
+
+    def get_all_trigger_configs(self) -> List[TriggerConfig]:
+        """获取全部**存在** trigger_config 的导入源的强类型配置列表。
+
+        与老实现的区别：
+
+        * SQL 层直接过滤掉 ``NULL`` / 空串，避免把"无触发配置"的源也
+          带进内存（调度侧再做一次全量过滤是浪费）；
+        * 单条解析失败 → WARNING 并跳过（见 ``_TRIGGER_PARSE_POLICY``）；
+        * 解析成功后自动把外部导入源 id 注入 ``config.id``。
         """
-        query = "SELECT id, trigger_config FROM ingest_source"
+        query = """
+            SELECT id, trigger_config
+            FROM ingest_source
+            WHERE trigger_config IS NOT NULL
+              AND TRIM(trigger_config) != ''
+            ORDER BY id ASC
+        """
         rows = self._fetchall(query)
         if not rows:
             return []
@@ -82,27 +130,60 @@ class IngestSourceRepository(BaseRepository):
         for row in rows:
             source_id = row["id"]
             raw_config = row["trigger_config"]
-            if not raw_config:
-                continue
             try:
                 config = TriggerConfig.from_json(raw_config)
-                if config is not None:
-                    # 将外部导入源 ID 注入到配置对象中，
-                    # 覆盖可能从 JSON 内部解析出的 id（通常 JSON 中不包含此字段）
-                    config.id = source_id
-                    configs.append(config)
             except (ValueError, json.JSONDecodeError) as e:
                 self.logger.warning(
                     "解析 trigger_config 失败 (source_id=%s): %s",
-                    source_id, e
+                    source_id, e,
                 )
+                continue
+            if config is None:
+                continue
+            # 覆盖 JSON 内部可能出现的 id，保证与 DB 主键一致
+            config.id = source_id
+            configs.append(config)
         return configs
 
+    def get_trigger_config(self, source_id: int) -> Optional[TriggerConfig]:
+        """单源 trigger_config 强类型读取。
+
+        返回 ``None`` 覆盖三种语义（调用方需自行结合日志判断）：
+        - 源不存在；
+        - ``trigger_config`` 为 NULL / 空串；
+        - 解析失败（此时会打 WARNING，遵循 ``_TRIGGER_PARSE_POLICY``）。
+        """
+        query = "SELECT id, trigger_config FROM ingest_source WHERE id = ?"
+        row = self._fetchone(query, (source_id,))
+        if row is None:
+            return None
+
+        raw_config = row["trigger_config"]
+        if not raw_config:
+            return None
+
+        try:
+            config = TriggerConfig.from_json(raw_config)
+        except (ValueError, json.JSONDecodeError) as e:
+            self.logger.warning(
+                "解析 trigger_config 失败 (source_id=%s): %s",
+                source_id, e,
+            )
+            return None
+        if config is None:
+            return None
+        config.id = row["id"]
+        return config
+
     def get_id_list(self) -> List[int]:
-        rows = self._fetchall("SELECT id FROM ingest_source")
+        rows = self._fetchall("SELECT id FROM ingest_source ORDER BY id ASC")
         if not rows:
             return []
         return [row["id"] for row in rows]
+
+    # ==================================================================
+    # 写入：创建 / 更新
+    # ==================================================================
 
     def create(self, source: IngestSourceCreate) -> int:
         """创建新的导入源，返回新记录的 ID。"""
@@ -156,38 +237,16 @@ class IngestSourceRepository(BaseRepository):
         return [IngestSourceViewDTO.from_row(row) for row in rows]
 
     def get_view_dto(self, source_id: int) -> Optional[IngestSourceViewDTO]:
-        """
-        单条查询导入源.
-        :return : 不存在返回 None
-        """
+        """单条查询导入源；不存在返回 None。"""
         query = f"""
             SELECT {self._VIEW_COLUMNS}
             FROM ingest_source
             WHERE id = ?
         """
-        rows = self._fetchall(query, (source_id,))
-        if not rows:
+        row = self._fetchone(query, (source_id,))
+        if row is None:
             return None
-        return IngestSourceViewDTO.from_row(rows[0])
-
-    # ==================================================================
-    # 查询：同步候选（单源）
-    # ==================================================================
-
-    def get_sync_candidate(
-            self, source_id: int
-    ) -> Optional[IngestSourceSyncCandidate]:
-        if source_id == MANUAL_SOURCE_ID:
-            return None
-        query = f"""
-            SELECT {self._SYNC_CANDIDATE_COLUMNS}
-            FROM ingest_source
-            WHERE id = ?
-        """
-        rows = self._fetchall(query, (source_id,))
-        if not rows:
-            return None
-        return IngestSourceSyncCandidate.from_row(rows[0])
+        return IngestSourceViewDTO.from_row(row)
 
     # ==================================================================
     # 查询：存在性 / 引用计数
@@ -195,37 +254,28 @@ class IngestSourceRepository(BaseRepository):
 
     def exists(self, source_id: int) -> bool:
         """判断指定 id 的导入源是否存在。"""
-        rows = self._fetchall(
+        row = self._fetchone(
             "SELECT 1 FROM ingest_source WHERE id = ? LIMIT 1",
             (source_id,),
         )
-        return bool(rows)
+        return row is not None
 
     # alias：语义更贴近调用方
     def has_source(self, source_id: int) -> bool:
         return self.exists(source_id)
 
     def count_assets(self, source_id: int) -> int:
-        """统计该源关联的 assets 数量（删除前置检查用）。
-
-        依赖 ``assets.source_id`` 上的外键约束（RESTRICT）：若计数 > 0，
-        数据库层会拒绝 ``DELETE FROM ingest_source``。
-        """
-        # TODO TOCTOU 改 FK RESTRICT
-
-        rows = self._fetchall(
+        """统计该源关联的 assets 数量（删除前置检查用）。"""
+        row = self._fetchone(
             "SELECT COUNT(*) AS cnt FROM assets WHERE source_id = ?",
             (source_id,),
         )
-        # if not rows:
-        #     return 0
-        # row = rows[0]
-        # try:
-        #     return int(row["cnt"])
-        # except (KeyError, TypeError, IndexError):
-        #     # 兼容 tuple-like row
-        #     return int(row[0]) if row else 0
-        return int(rows[0]["cnt"]) if rows else 0
+        if row is None:
+            return 0
+        try:
+            return int(row["cnt"])
+        except (KeyError, TypeError):
+            return 0
 
     # ==================================================================
     # 写入：删除
@@ -234,16 +284,30 @@ class IngestSourceRepository(BaseRepository):
     def delete(self, source_id: int) -> bool:
         """硬删除指定导入源。
 
-        - 拒绝删除虚拟根 / 手动导入源（``MANUAL_SOURCE_ID``），抛 ``ValueError``；
-        - 若 ``assets.source_id`` 存在外键 RESTRICT 引用，由 DB 抛错；
-        - 返回是否实际删除（``rowcount > 0``）。
+        行为：
+
+        * ``MANUAL_SOURCE_ID`` → ``ValueError``；
+        * 若仍有 assets 引用 → ``ValueError``（显式预检查，给出可读信息）；
+          并发窗口内由 ``assets.source_id`` 的 FK RESTRICT 兜底；
+        * 返回是否实际删除（``rowcount > 0``）。
+
+        注意：显式预检查存在 TOCTOU，因此 **DB 侧 FK RESTRICT 与
+        PRAGMA foreign_keys=ON 是必需的**，二者缺一不可。
         """
-        # TODO 软删除功能以后加
         if source_id == MANUAL_SOURCE_ID:
             raise ValueError(
                 f"Cannot delete manual/virtual source "
                 f"(id={MANUAL_SOURCE_ID})"
             )
+
+        # 显式预检查：给出可读错误，避免只依赖底层 FK 抛错
+        asset_count = self.count_assets(source_id)
+        if asset_count > 0:
+            raise ValueError(
+                f"Cannot delete ingest source {source_id}: "
+                f"{asset_count} asset(s) still reference it"
+            )
+
         cursor = self._execute(
             "DELETE FROM ingest_source WHERE id = ?",
             (source_id,),

@@ -36,7 +36,7 @@ class ScheduledTrigger:
         """解析如 '12h'、'30m'、'1d' 的字符串为 timedelta"""
         if not self.interval:
             raise ValueError("间隔时间未设置")
-        match = re.match(r"(\d+)([hmd])", self.interval)
+        match = re.match(r"(\d+)([shmd])", self.interval)
         if not match:
             raise ValueError(f"无效的间隔格式: {self.interval}")
         value = int(match.group(1))
@@ -47,6 +47,8 @@ class ScheduledTrigger:
             return datetime.timedelta(minutes=value)
         elif unit == 'd':
             return datetime.timedelta(days=value)
+        elif unit == 's':
+            return datetime.timedelta(seconds=value)
         raise ValueError(f"不支持的时间单位: {unit}")
 
     def to_cron_trigger_kwargs(self) -> Dict[str, Any]:

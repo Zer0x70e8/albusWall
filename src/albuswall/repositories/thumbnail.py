@@ -4,18 +4,24 @@
 数据模型
 --------
 assets 表里与缩略图相关的列：
-    thumb_path        —— 缩略图主目录（相对路径），所有 spec 文件的父目录
-    thumb_small_path  —— small  缩略图相对 thumb_path 的相对路径
-    thumb_medium_path —— medium 缩略图相对 thumb_path 的相对路径
-    thumb_large_path  —— large  缩略图相对 thumb_path 的相对路径
+    thumb_path        —— 缩略图主目录，**绝对路径**
+    thumb_small_path  —— small  缩略图，**相对 thumb_path**
+    thumb_medium_path —— medium 缩略图，**相对 thumb_path**
+    thumb_large_path  —— large  缩略图，**相对 thumb_path**
 
-完整路径 = os.path.join(thumb_path, thumb_<spec>_path)
+完整路径 = thumb_path.rstrip('/') + '/' + thumb_<spec>_path
+
+契约要点：
+  - base_dir 是绝对路径；spec 路径永远是相对 base 的短路径。
+  - 仓储层不做文件系统 IO；purge() 只清库并返回被清的路径，文件删除由调用方负责。
+  - get_task_input* 带 is_deleted=0，仅供生成侧使用；
+    读接口（含回收站场景）请用 get_paths / get_paths_bulk。
 """
 
-import logging
 from typing import Iterable, Mapping, Optional, Sequence
 
-from albuswall.log import TRACE, Logger
+from albuswall.log import getLogger
+from albuswall.dto.sentinel import UnsetType, UNSET
 from albuswall.dto.thumbnail import (
     MissingThumbnailRow,
     ThumbnailHashRow,
@@ -26,8 +32,7 @@ from albuswall.dto.thumbnail import (
 
 from .base import BaseRepository
 
-logger: Logger = logging.getLogger(__name__)  # albuswall.database.thumbnail  # noqa
-logger.trace = lambda msg, *args: logger.log(TRACE, msg, *args)
+logger = getLogger(__name__)  # albuswall.database.thumbnail
 
 # spec 名 → assets 列名
 SPEC_TO_COLUMN: dict[str, str] = {
@@ -43,8 +48,8 @@ ALL_SPECS: tuple[str, ...] = ("small", "medium", "large")
 # 缩略图主目录列，独立于 spec
 BASE_COLUMN: str = "thumb_path"
 
-# 哨兵：区分 “不更新 base” 与 “把 base 置 NULL”
-_UNSET: object = object()
+# 接近但小于 SQLite 默认 SQLITE_MAX_VARIABLE_NUMBER，兼顾旧版
+_IN_CLAUSE_CHUNK = 900
 
 
 class ThumbnailRepository(BaseRepository):
@@ -68,7 +73,7 @@ class ThumbnailRepository(BaseRepository):
             asset_id: int,
             paths: Mapping[str, Optional[str]],
             *,
-            base_dir: object = _UNSET,
+            base_dir: str | UnsetType | None = UNSET,
     ) -> int:
         """更新单个资产的缩略图路径。
 
@@ -96,7 +101,7 @@ class ThumbnailRepository(BaseRepository):
             uuid: str,
             paths: Mapping[str, Optional[str]],
             *,
-            base_dir: object = _UNSET,
+            base_dir: UnsetType = UNSET,
     ) -> int:
         """同 update_paths，但用 uuid 定位。"""
         sets, params = self._build_update_sets(
@@ -110,22 +115,37 @@ class ThumbnailRepository(BaseRepository):
 
     def bulk_update_paths(
             self,
-            rows: Iterable[tuple[int, Mapping[str, Optional[str]]]],
+            rows: Iterable[
+                tuple[int, Mapping[str, Optional[str]]]
+                | tuple[int, Mapping[str, Optional[str]], object]
+                ],
     ) -> int:
-        """批量更新 spec 相对路径，单事务提交。
+        """批量更新缩略图路径，单事务提交。
 
         Args:
-            rows: 可迭代的 (asset_id, {spec: rel_path})。
-                  如果同时要更新 base_dir，请改用 update_paths 逐条调用。
+            rows: 可迭代的
+                  · (asset_id, {spec: rel_path})          —— 只更 spec
+                  · (asset_id, {spec: rel_path}, base_dir) —— 同时更 base
+                  base_dir 传 None 表示清空；不传则保持原值。
 
         Returns:
-            成功更新的资产数。
+            成功更新的资产数（累加 rowcount）。
         """
         updated = 0
         with self._transaction() as conn:
-            for asset_id, paths in rows:
+            for item in rows:
+                if len(item) == 3:
+                    asset_id, paths, base_dir = item
+                elif len(item) == 2:
+                    asset_id, paths = item
+                    base_dir = UNSET
+                else:
+                    raise ValueError(
+                        f"bulk_update_paths row must be 2- or 3-tuple, got {len(item)}"
+                    )
+
                 sets, params = self._build_update_sets(
-                    paths, context=f"asset_id={asset_id}"
+                    paths, base_dir=base_dir, context=f"asset_id={asset_id}"
                 )
                 if not sets:
                     continue
@@ -150,18 +170,24 @@ class ThumbnailRepository(BaseRepository):
             :param clear_base: 是否同时清空 thumb_path 主目录。
         """
         paths = {s: None for s in specs}
-        base_dir = None if clear_base else _UNSET
+        base_dir = None if clear_base else UNSET
         return self.update_paths(asset_id, paths, base_dir=base_dir)
 
     def clear_all_for_missing_base(self, base_prefix: str) -> int:
         """缓存主目录被删/迁移后调用：清空所有以 base_prefix 开头的缩略图记录。
 
-        由于 spec 路径现在是相对路径，版本前缀只出现在 thumb_path 上，
-        这里只需要按 thumb_path 做前缀匹配即可。
+        契约：
+          - base_prefix 是 **assets.thumb_path 的绝对路径前缀**
+            （如 "/home/skyline/.cache/albuswall/thumbs/v1/"），
+            不是相对前缀 "v1/"。因 thumb_path 现在存的是绝对路径，
+            LIKE 匹配必须基于绝对路径前缀。
+          - 尾部是否带 "/" 由调用方决定：
+            · "…/v1/"   → 只命中该版本目录下的资产（推荐）
+            · "…/v1"    → 会命中 "…/v10/"、"…/v1x/" 等
+          - 本方法只清库；磁盘文件删除由调用方按 base_prefix 自行 rmtree。
 
         Args:
-            base_prefix: thumb_path 的路径前缀（如 "v1/"）。
-                         调用方负责传对（切换 SPEC_VERSION 时传 "v0/"）。
+            base_prefix: thumb_path 的绝对路径前缀（非空）。
 
         Raises:
             ValueError: base_prefix 为空。
@@ -315,7 +341,12 @@ class ThumbnailRepository(BaseRepository):
     # 任务输入
     # ------------------------------------------------------------------ #
     def get_task_input(self, asset_id: int) -> Optional[ThumbnailTaskInput]:
-        """取渲染缩略图所需的上下文（join ingest_source 拿 source_path）。"""
+        """取渲染缩略图所需的上下文（join ingest_source 拿 source_path）。
+
+        仅供**生成侧**调用：带 is_deleted = 0，已删除资产返回 None。
+        读取场景（含 Trash）请改用 get_paths / get_paths_bulk，
+        它们不过滤 is_deleted，能正确读到回收站里资产的缩略图。
+        """
         row = self._fetchone(
             """
             SELECT a.id            AS id,
@@ -364,17 +395,17 @@ class ThumbnailRepository(BaseRepository):
     def _build_update_sets(
             paths: Mapping[str, Optional[str]],
             *,
-            base_dir: object = _UNSET,
+            base_dir: str | UnsetType | None = UNSET,
             context: str = "",
     ) -> tuple[list[str], list]:
         """构造 SET 子句；未知 spec 记录 warning 并跳过。
 
-        base_dir 用 _UNSET 哨兵区分“不更新”与“置 NULL”。
+        base_dir 用 UNSET 哨兵区分“不更新”与“置 NULL”。
         """
         sets: list[str] = []
         params: list = []
 
-        if base_dir is not _UNSET:
+        if base_dir is not UNSET:
             sets.append(f"{BASE_COLUMN} = ?")
             params.append(base_dir)
 
@@ -397,3 +428,80 @@ class ThumbnailRepository(BaseRepository):
         if row is None:
             return None
         return ThumbnailPaths.from_row(row)
+
+    def get_paths_bulk(
+            self, asset_ids: Sequence[int]
+    ) -> dict[int, ThumbnailPaths]:
+        """批量读缩略图路径。
+
+        不区分 is_deleted：读取侧（含回收站）都走这里。
+        返回 {asset_id: ThumbnailPaths}，缺失的 id 不在结果里。
+        """
+        if not asset_ids:
+            return {}
+
+        result: dict[int, ThumbnailPaths] = {}
+        # 去重但保序无所谓，只影响 IN 子句大小
+        ids = list(asset_ids)
+        for start in range(0, len(ids), _IN_CLAUSE_CHUNK):
+            chunk = ids[start:start + _IN_CLAUSE_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            rows = self._fetchall(
+                f"""
+                SELECT id,
+                       thumb_path,
+                       thumb_small_path, thumb_medium_path, thumb_large_path
+                  FROM assets
+                 WHERE id IN ({placeholders})
+                """,
+                chunk,
+            ) or []
+            for r in rows:
+                result[r["id"]] = ThumbnailPaths.from_row(r)
+        return result
+
+    def purge(self, asset_id: int) -> Optional[ThumbnailPaths]:
+        """永久删除时调用：清空该资产所有缩略图列，返回清空前的路径快照。
+
+        仓储不触碰文件系统；调用方拿到返回值后按 paths.as_dict() 里的
+        base + spec 组合自行 unlink 文件。返回 None 表示 asset_id 不存在。
+
+        与 clear_paths 的区别：
+          - clear_paths 是「重建前置空」，粒度可只挑若干 spec；
+          - purge 是「资产销毁」，四个列一起清，返回快照供删文件。
+        """
+        snapshot = self.get_paths(asset_id)
+        if snapshot is None:
+            return None
+
+        self.clear_paths(asset_id, clear_base=True)
+        logger.info(
+            "purged thumbnail paths asset_id=%d base=%r",
+            asset_id, snapshot.base,
+        )
+        return snapshot
+
+    def purge_bulk(self, asset_ids: Sequence[int]) -> dict[int, ThumbnailPaths]:
+        """批量 purge；返回 {asset_id: 清空前的路径快照}。
+
+        用于 Trash 批量清空。仓储只清库；文件删除由调用方遍历返回值执行。
+        """
+        snapshots = self.get_paths_bulk(asset_ids)
+        if not snapshots:
+            return {}
+
+        with self._transaction() as conn:
+            for aid in snapshots:
+                conn.execute(
+                    """
+                    UPDATE assets
+                       SET thumb_path        = NULL,
+                           thumb_small_path  = NULL,
+                           thumb_medium_path = NULL,
+                           thumb_large_path  = NULL
+                     WHERE id = ?
+                    """,
+                    (aid,),
+                )
+        logger.info("purged thumbnail paths: %d assets", len(snapshots))
+        return snapshots

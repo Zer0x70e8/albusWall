@@ -4,24 +4,20 @@ Trigger facade service: centrally manages scheduled triggers and device triggers
 loads configuration from the data repository, and distributes it to underlying services.
 """
 
-import logging
 import pprint
-from typing import Dict, Optional, Callable, TYPE_CHECKING
+from typing import Dict, Optional, Callable
 
 from albuswall.dto.trigger import TriggerConfig
 from albuswall.repositories.source import IngestSourceRepository
 from .scheduler import SchedulerService
-from .device import DeviceService
+
+from albuswall.log import getLogger
+
 from ..common.enums import UpdateMode
 
-if TYPE_CHECKING:
-    from albuswall.log import Logger
+from .device import DeviceService
 
-_logger = logging.getLogger(__name__)
-# noinspection statement-effect
-_logger  # type: Logger
-# noinspection unresolved-references
-_logger.trace = lambda msg, *args, **kwargs: _logger.log(TRACE, msg, *args, **kwargs)
+_logger = getLogger(__name__)
 
 
 class TriggerFacadeService:
@@ -39,39 +35,67 @@ class TriggerFacadeService:
         self.repository = repository
         self.update_callback = update_callback
 
+        self._started = False
+        self._configs: Dict[int, TriggerConfig] = {}
+
         # Initialize underlying services
         self._scheduler_service = SchedulerService(update_callback, _logger)
-        self._device_service = DeviceService(update_callback, _logger)
 
-        # Cache currently active configurations (source_id -> TriggerConfig)
-        self._configs: Dict[int, TriggerConfig] = {}
+        self._device_service = DeviceService(update_callback, _logger)
 
     def start(self) -> None:
         """Load all configurations and start the underlying services."""
+        if self._started:
+            _logger.warning("Trigger facade service is already started")
+            return
+
         _logger.info("Starting trigger facade service...")
-        configs = self._load_valid_configs()
+        try:
+            configs = self._load_valid_configs()
+        except Exception as e:
+            _logger.error("Failed to load trigger configurations: %s", e, exc_info=True)
+            raise
+
         self._configs = configs
 
         # Distribute configurations to the two underlying services
         scheduler_configs = self._filter_scheduler_configs()
-        device_configs = self._filter_device_configs()
-
         self._scheduler_service.start(scheduler_configs)
+
+        device_configs = self._filter_device_configs()
         self._device_service.start(device_configs)
+
+        self._started = True
         _logger.info("Trigger facade service started")
 
     def stop(self) -> None:
         """Stop all underlying services."""
+        if not self._started:
+            _logger.warning("Trigger facade service is not started")
+            return
+
         _logger.info("Stopping trigger facade service...")
         self._scheduler_service.stop()
-        self._device_service.stop()
+        if self._device_service is not None:
+            self._device_service.stop()
         self._configs.clear()
+        self._started = False
         _logger.info("Trigger facade service stopped")
 
     def reload(self) -> None:
         """Reload configurations from the repository and update underlying services (for dynamic refresh)."""
         _logger.info("Reloading trigger configurations...")
-        new_configs = self._load_valid_configs()
+        try:
+            new_configs = self._load_valid_configs()
+        except Exception as e:
+            _logger.error("Failed to reload trigger configurations, keeping old configs: %s", e, exc_info=True)
+            return
+
+        if not self._started:
+            # Not started: only update cache
+            self._configs = new_configs
+            _logger.info("Configuration reloaded (service not started), %d valid sources", len(new_configs))
+            return
 
         old_ids = set(self._configs.keys())
         new_ids = set(new_configs.keys())
@@ -79,16 +103,19 @@ class TriggerFacadeService:
         # Remove deleted sources
         for source_id in old_ids - new_ids:
             self._scheduler_service.remove_source(source_id)
-            self._device_service.remove_source(source_id)
+            if self._device_service is not None:
+                self._device_service.remove_source(source_id)
 
         # Add new sources or update existing sources
         for source_id, config in new_configs.items():
             if source_id in old_ids:
                 self._scheduler_service.update_source(source_id, config)
-                self._device_service.update_source(source_id, config)
+                if self._device_service is not None:
+                    self._device_service.update_source(source_id, config)
             else:
                 self._scheduler_service.add_source(source_id, config)
-                self._device_service.add_source(source_id, config)
+                if self._device_service is not None:
+                    self._device_service.add_source(source_id, config)
 
         self._configs = new_configs
         _logger.info("Configuration reload completed, %d valid sources in total", len(new_configs))
@@ -99,15 +126,20 @@ class TriggerFacadeService:
         if config is None or config.is_void():
             _logger.debug("Configuration for source %d is empty or invalid, skipping", source_id)
             return
+
         self._configs[source_id] = config
-        self._scheduler_service.add_source(source_id, config)
-        self._device_service.add_source(source_id, config)
+        if self._started:
+            self._scheduler_service.add_source(source_id, config)
+            if self._device_service is not None:
+                self._device_service.add_source(source_id, config)
 
     def remove_source(self, source_id: int) -> None:
         """Manually remove the trigger configuration for the specified source."""
         self._configs.pop(source_id, None)
-        self._scheduler_service.remove_source(source_id)
-        self._device_service.remove_source(source_id)
+        if self._started:
+            self._scheduler_service.remove_source(source_id)
+            if self._device_service is not None:
+                self._device_service.remove_source(source_id)
 
     def update_source(self, source_id: int) -> None:
         """Manually update the trigger configuration for the specified source (re-read from repository)."""
@@ -116,9 +148,12 @@ class TriggerFacadeService:
             # Configuration does not exist or is invalid; remove it
             self.remove_source(source_id)
             return
+
         self._configs[source_id] = config
-        self._scheduler_service.update_source(source_id, config)
-        self._device_service.update_source(source_id, config)
+        if self._started:
+            self._scheduler_service.update_source(source_id, config)
+            if self._device_service is not None:
+                self._device_service.update_source(source_id, config)
 
     # Internal helper methods
     def _load_valid_configs(self) -> Dict[int, TriggerConfig]:
@@ -137,13 +172,12 @@ class TriggerFacadeService:
         return configs
 
     def _get_config(self, source_id: int) -> Optional[TriggerConfig]:
-        """Read the trigger configuration for a single source from
-        the repository (implemented by filtering all configurations)."""
-        all_configs = self.repository.get_all_trigger_configs()
-        for config in all_configs:
-            if config.id == source_id:
-                return config
-        return None
+        """Read the trigger configuration for a single source from the repository."""
+        try:
+            return self.repository.get_trigger_config(source_id)
+        except Exception as e:
+            _logger.error("Failed to get trigger config for source %d: %s", source_id, e, exc_info=True)
+            return None
 
     def _filter_scheduler_configs(self) -> Dict[int, TriggerConfig]:
         """Return the subset of configurations that only need the scheduler trigger."""

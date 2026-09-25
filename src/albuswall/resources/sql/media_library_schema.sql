@@ -14,7 +14,9 @@
 --       · source_id = 0：POSIX 相对 '/'，如 "home/user/a.jpg"
 --                        Windows 带盘符，如 "C:/Users/a.jpg"
 --       · 其他 source_id：相对 ingest_source.source_path
---   - assets.thumb_*_path      ：缩略图相对路径，语义同 file_path
+--   - assets.thumb_path        ：缩略图主目录的**绝对路径**（服务层落盘时拼出的 thumb_root/uuid/version）
+--   - assets.thumb_*_path      ：**相对 thumb_path** 的 spec 文件名/子路径
+--       完整路径 = thumb_path.rstrip('/') + '/' + thumb_<spec>_path
 --   - asset_candidate_cache.path：相对路径，相对 ingest_source.source_path
 -- =============================================================================
 
@@ -97,11 +99,11 @@ CREATE TABLE IF NOT EXISTS assets (
     file_path        TEXT    NOT NULL,                 -- 相对路径，语义见文件头
     source_id        INTEGER NOT NULL DEFAULT 0,       -- 关联导入源；0 为特殊源，见 ingest_source
 
-    -- 缩略图：四档尺寸，均为相对路径（语义同 file_path）
-    thumb_path        TEXT,                            -- 原始/默认缩略图
-    thumb_small_path  TEXT,                            -- 小尺寸
-    thumb_medium_path TEXT,                            -- 中尺寸
-    thumb_large_path  TEXT,                            -- 大尺寸
+    -- 缩略图：base 为绝对主目录，spec 为相对 base 的子路径
+    thumb_path        TEXT,                            -- 缩略图主目录，绝对路径
+    thumb_small_path  TEXT,                            -- 相对 thumb_path
+    thumb_medium_path TEXT,                            -- 相对 thumb_path
+    thumb_large_path  TEXT,                            -- 相对 thumb_path
 
     original_name    TEXT    NOT NULL,                 -- 原始文件名（含扩展名）
     mime_type        TEXT    NOT NULL,                 -- MIME 类型，如 image/jpeg
