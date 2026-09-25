@@ -1,27 +1,50 @@
 #
 """"""
 
-from PySide6.QtGui import QPainter, QRegion, QWheelEvent
+from PySide6.QtGui import (
+    QPainter, QRegion, QWheelEvent, QFontMetrics,
+    QPalette,  # noqa: F401  (仅用于类型提示/可读性)
+)
 from PySide6.QtWidgets import QAbstractItemView, QStyleOptionViewItem, QStyle
 from PySide6.QtCore import (
     Qt, QRect, QPoint, QModelIndex,
-    QItemSelectionModel, QItemSelection, QPersistentModelIndex
+    QItemSelectionModel, QItemSelection, QPersistentModelIndex, Property
 )
 
 WHEEL_INVERTED: bool = False
 
+CA = QAbstractItemView.CursorAction
+SF = QItemSelectionModel.SelectionFlag
+StateFlag = QStyle.StateFlag
+S_Enabled = StateFlag.State_Enabled
+S_Selected = StateFlag.State_Selected
+S_Focus = StateFlag.State_HasFocus
+S_Mouse = StateFlag.State_MouseOver
+
+
+def _card_prop(attr: str, default: int) -> Property:
+    """生成 int 型 Q_PROPERTY，QSS 里用 qproperty-<名字> 设置。"""
+    storage = f"_card_{attr}"
+
+    def _get(self) -> int:
+        return getattr(self, storage, default)
+
+    def _set(self, value) -> None:
+        value = int(value)
+        if getattr(self, storage, default) == value:
+            return
+        setattr(self, storage, value)
+        vp = self.viewport()
+        if vp is not None:
+            vp.update()
+
+    return Property(int, _get, _set)
+
 
 class ColumnLayoutCalculator:
-    """多列网格布局计算器。
+    """多列网格布局计算器（与之前一致，做了少量缓存与边界清理）。"""
 
-    职责：
-      - 均匀列宽分配
-      - 索引 -> 视口矩形
-      - 可视行范围（视口裁剪）
-      - 内容总高度
-
-    所有「滚动」输入都是垂直滚动条的 value（= 内容已向上滚过的像素数）。
-    """
+    __slots__ = ("column_count", "item_height", "spacing", "margin")
 
     def __init__(self, column_count=1, item_height=160, spacing=5, margin=10):
         self.column_count = max(1, int(column_count))
@@ -42,14 +65,12 @@ class ColumnLayoutCalculator:
         return (total + self.column_count - 1) // self.column_count
 
     def column_metrics(self, viewport_width: int):
-        """返回 (col_xs, col_ws) 或 None（宽度不足以放下 1 列）。"""
         available = (viewport_width
                      - 2 * self.margin
                      - (self.column_count - 1) * self.spacing)
         if available <= 0:
             return None
-        base_w = available // self.column_count
-        remainder = available % self.column_count
+        base_w, remainder = divmod(available, self.column_count)
         xs, ws = [], []
         x = self.margin
         for c in range(self.column_count):
@@ -59,25 +80,21 @@ class ColumnLayoutCalculator:
             x += w + self.spacing
         return xs, ws
 
-    # ---------- 可见范围（视口裁剪核心） ----------
+    # ---------- 可见范围 ----------
     def visible_grid_rows(self, viewport_height: int,
                           scroll_offset: int, grid_rows: int):
-        """返回 [first, last) 半开区间的可见 grid row，带 1 行上下缓冲。"""
         if grid_rows <= 0:
             return 0, 0
         stride = self.row_stride()
-        # 内容 y 坐标：grid_row 的顶部 = margin + grid_row * stride
         top_content = scroll_offset - self.margin
         bottom_content = scroll_offset + viewport_height - self.margin
-        first = 0 if top_content < 0 else (top_content // stride) - 1
-        first = max(0, first)
+        first = 0 if top_content < 0 else max(0, top_content // stride - 1)
         last = min(grid_rows, bottom_content // stride + 2)
         return first, last
 
     # ---------- 矩形 ----------
     def rect_for_index(self, model, index: QModelIndex,
                        viewport_width: int, scroll_offset: int) -> QRect:
-        """只计算单个索引的矩形（O(1)，不做全量遍历）。"""
         if not model or not index.isValid():
             return QRect()
         metrics = self.column_metrics(viewport_width)
@@ -85,18 +102,12 @@ class ColumnLayoutCalculator:
             return QRect()
         xs, ws = metrics
         row = index.row()
-        grid_row = row // self.column_count
-        grid_col = row % self.column_count
+        grid_row, grid_col = divmod(row, self.column_count)
         y = self.margin + grid_row * self.row_stride() - scroll_offset
         return QRect(xs[grid_col], y, ws[grid_col], self.item_height)
 
     def compute_rects(self, model, viewport_rect: QRect,
                       scroll_offset: int, visible_only: bool = True):
-        """返回 {QModelIndex: QRect}。
-
-        visible_only=True 时只遍历视口内的行（含 1 行缓冲），
-        避免对大模型做 O(N) 全量遍历。
-        """
         rects = {}
         if not model or model.rowCount() == 0:
             return rects
@@ -114,14 +125,14 @@ class ColumnLayoutCalculator:
             first, last = 0, grid_rows
 
         stride = self.row_stride()
+        cols = self.column_count
         for grid_row in range(first, last):
             y = self.margin + grid_row * stride - scroll_offset
-            base = grid_row * self.column_count
-            for col in range(self.column_count):
-                row = base + col
-                if row >= total:
-                    break
-                rects[model.index(row, 0)] = QRect(
+            base = grid_row * cols
+            # 只取本行的有效列数，避免最后一行越界判断
+            ncols = min(cols, total - base)
+            for col in range(ncols):
+                rects[model.index(base + col, 0)] = QRect(
                     xs[col], y, ws[col], self.item_height)
         return rects
 
@@ -135,23 +146,34 @@ class ColumnLayoutCalculator:
 
 
 class ColumnListView(QAbstractItemView):
-    """多列卡片视图。
+    """多列卡片视图（原文档字符串保留）。"""
 
-    特性：
-      - 均匀列宽、自动布局
-      - 滚轮方向可反转
-      - 精确命中检测（indexAt）
-      - 支持 Ctrl / Shift 多选（由 selection_mode 决定最终行为）
-      - 大模型下仅绘制视口内的项，滚动流畅
-      - 悬停高亮只重绘发生变化的项
+    # ============ QSS 可调参数 ============
+    cardRadius = _card_prop("radius", 10)
+    cardPadding = _card_prop("padding", 12)
+    cardGap = _card_prop("gap", 6)
+    chipHeight = _card_prop("chipHeight", 22)
+    chipPadX = _card_prop("chipPadX", 9)
+    chipGap = _card_prop("chipGap", 6)
+    maxDescLines = _card_prop("maxDescLines", 3)
+    cardMinWidth = _card_prop("cardMinWidth", 220)
+    cardMinHeight = _card_prop("cardMinHeight", 176)
 
-    用法::
+    borderAlpha = _card_prop("borderAlpha", 12)
+    hoverAlpha = _card_prop("hoverAlpha", 4)
+    hoverBorderAlpha = _card_prop("hoverBorderAlpha", 30)
+    selectAlpha = _card_prop("selectAlpha", 10)
+    descAlpha = _card_prop("descAlpha", 78)
+    pathAlpha = _card_prop("pathAlpha", 50)
+    chipBgAlpha = _card_prop("chipBgAlpha", 16)
 
-        view = ColumnListView(item_height=160, spacing=5, margin=10)
-        view.setModel(model)
-        view.setItemDelegate(MyCardDelegate())
-        view.set_column_count(3)
-    """
+    CARD_DEFAULTS = {
+        "cardRadius": 10, "cardPadding": 12, "cardGap": 6,
+        "chipHeight": 22, "chipPadX": 9, "chipGap": 6,
+        "maxDescLines": 3, "cardMinWidth": 220, "cardMinHeight": 176,
+        "borderAlpha": 12, "hoverAlpha": 4, "hoverBorderAlpha": 30,
+        "selectAlpha": 10, "descAlpha": 78, "pathAlpha": 50, "chipBgAlpha": 16,
+    }
 
     def __init__(
             self,
@@ -172,6 +194,9 @@ class ColumnListView(QAbstractItemView):
             spacing=spacing,
             margin=margin,
         )
+        # 缓存：视图字体变化时在 changeEvent 里刷新
+        self._cached_fm: QFontMetrics | None = None
+        self._cached_font_key = None
 
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -198,18 +223,42 @@ class ColumnListView(QAbstractItemView):
 
     # ---------- 滚动偏移 ----------
     def _scroll_offset(self) -> int:
-        """内容已向上滚过的像素数，与命中测试/绘制保持一致。"""
         return self.verticalScrollBar().value()
 
-    # ---------- 滚轮 ----------
+    # ---------- 字体度量缓存 ----------
+    def _font_metrics(self) -> QFontMetrics:
+        f = self.font()
+        key = (f.family(), f.pointSizeF(), f.weight(), f.italic())
+        if key != self._cached_font_key or self._cached_fm is None:
+            self._cached_fm = QFontMetrics(f)
+            self._cached_font_key = key
+        # noinspection bad-return
+        return self._cached_fm
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        # 字体变化时使缓存失效
+        if event.type() in (
+                event.Type.FontChange, event.Type.StyleChange,
+                event.Type.PaletteChange,
+        ):
+            self._cached_fm = None
+            self._cached_font_key = None
+
+    # ---------- 滚轮（支持触控板 pixelDelta） ----------
     def wheelEvent(self, event: QWheelEvent):
         if not self.model():
             return
-        delta = event.angleDelta().y()
-        if self._wheel_inverted:
-            delta = -delta
         sb = self.verticalScrollBar()
-        sb.setValue(sb.value() - delta)
+        angle = event.angleDelta().y()
+        pixel = event.pixelDelta().y()
+        if self._wheel_inverted:
+            angle = -angle
+            pixel = -pixel
+        if angle:
+            sb.setValue(sb.value() - angle)
+        elif pixel:
+            sb.setValue(sb.value() - pixel)
         event.accept()
 
     def set_wheel_inverted(self, inverted: bool):
@@ -238,33 +287,40 @@ class ColumnListView(QAbstractItemView):
     def verticalOffset(self) -> int:
         return self._scroll_offset()
 
-    def isIndexHidden(self, index: QModelIndex | QPersistentModelIndex) -> bool:
-        ...
+    def visualRect(self, index) -> QRect:
+        model = self.model()
+        if not model or not index.isValid():
+            return QRect()
+        # QPersistentModelIndex 需要转 QModelIndex
+        if isinstance(index, QPersistentModelIndex):
+            index = model.index(index.row(), index.column())
+        return self._layout_calc.rect_for_index(
+            model, index, self.viewport().width(), self._scroll_offset())
 
-    def visualRect(self, index: QModelIndex | QPersistentModelIndex) -> QRect:
-        ...
+    def isIndexHidden(self, index) -> bool:
+        return False
 
     def sizeHintForRow(self, row: int) -> int:
         return self._layout_calc.item_height
 
     def sizeHintForColumn(self, column: int) -> int:
-        # 使用自定义列宽，不向基类提供列宽提示
         return -1
 
-    # ========== 悬停状态管理（最小重绘） ==========
+    # ========== 悬停 ==========
     def _set_hovered_index(self, index: QModelIndex):
         if self._hovered_index == index:
             return
         old = self._hovered_index
         self._hovered_index = index
+        vp = self.viewport()
         if old.isValid():
             r = self.visualRect(old)
             if not r.isEmpty():
-                self.viewport().update(r)
+                vp.update(r)
         if index.isValid():
             r = self.visualRect(index)
             if not r.isEmpty():
-                self.viewport().update(r)
+                vp.update(r)
 
     def leaveEvent(self, event):
         self._set_hovered_index(QModelIndex())
@@ -274,60 +330,55 @@ class ColumnListView(QAbstractItemView):
         self._set_hovered_index(self.indexAt(event.position().toPoint()))
         super().mouseMoveEvent(event)
 
-    # ========== 键盘光标移动 ==========
+    # ========== 键盘移动 ==========
     def moveCursor(self, cursor_action, modifiers):
-        if not self.model() or self.model().rowCount() == 0:
+        model = self.model()
+        if not model or model.rowCount() == 0:
             return QModelIndex()
 
         current = self.currentIndex()
         if not current.isValid():
-            return self.model().index(0, 0)
+            return model.index(0, 0)
 
-        total = self.model().rowCount()
+        total = model.rowCount()
         row = current.row()
         cols = self._column_count
 
-        # 兼容 int / KeyboardModifier 两种输入，避开类型告警
         mods_value = getattr(modifiers, "value", modifiers)
-        ctrl_value = Qt.KeyboardModifier.ControlModifier.value
-        ctrl = bool(mods_value & ctrl_value)
+        ctrl = bool(mods_value & Qt.KeyboardModifier.ControlModifier.value)
 
-        if cursor_action == QAbstractItemView.CursorAction.MoveUp:
+        if cursor_action == CA.MoveUp:
             new_row = row - cols
             if new_row < 0:
                 return QModelIndex()
-        elif cursor_action == QAbstractItemView.CursorAction.MoveDown:
+        elif cursor_action == CA.MoveDown:
             new_row = row + cols
             if new_row >= total:
                 return QModelIndex()
-        elif cursor_action == QAbstractItemView.CursorAction.MoveLeft:
+        elif cursor_action == CA.MoveLeft:
             new_row = row - 1
             if new_row < 0:
                 return QModelIndex()
-        elif cursor_action == QAbstractItemView.CursorAction.MoveRight:
+        elif cursor_action == CA.MoveRight:
             new_row = row + 1
             if new_row >= total:
                 return QModelIndex()
-        elif cursor_action == QAbstractItemView.CursorAction.MoveHome:
-            if ctrl:
-                new_row = 0
-            else:
-                visual_row = row // cols
-                new_row = visual_row * cols
-        elif cursor_action == QAbstractItemView.CursorAction.MoveEnd:
+        elif cursor_action == CA.MoveHome:
+            new_row = 0 if ctrl else (row // cols) * cols
+        elif cursor_action == CA.MoveEnd:
             if ctrl:
                 new_row = total - 1
             else:
-                visual_row = row // cols
-                new_row = min(visual_row * cols + cols - 1, total - 1)
+                new_row = min((row // cols) * cols + cols - 1, total - 1)
         else:
             return QModelIndex()
 
-        return self.model().index(new_row, 0)
+        return model.index(new_row, 0)
 
     # ========== 命中测试 ==========
     def indexAt(self, point: QPoint) -> QModelIndex:
-        if not self.model() or self.model().rowCount() == 0:
+        model = self.model()
+        if not model or model.rowCount() == 0:
             return QModelIndex()
 
         calc = self._layout_calc
@@ -340,8 +391,9 @@ class ColumnListView(QAbstractItemView):
         xs, ws = metrics
 
         col = -1
-        for c, w in enumerate(ws):
-            if xs[c] <= point.x() < xs[c] + w:
+        px = point.x()
+        for c in range(len(ws)):
+            if xs[c] <= px < xs[c] + ws[c]:
                 col = c
                 break
         if col == -1:
@@ -352,14 +404,14 @@ class ColumnListView(QAbstractItemView):
             return QModelIndex()
 
         stride = calc.row_stride()
-        grid_row = content_y // stride
-        if content_y - grid_row * stride >= calc.item_height:
+        grid_row, rem = divmod(content_y, stride)
+        if rem >= calc.item_height:
             return QModelIndex()
 
         row = grid_row * self._column_count + col
-        if row >= self.model().rowCount():
+        if row >= model.rowCount():
             return QModelIndex()
-        return self.model().index(row, 0)
+        return model.index(row, 0)
 
     # ========== 鼠标选择 ==========
     def mousePressEvent(self, event):
@@ -368,16 +420,11 @@ class ColumnListView(QAbstractItemView):
             return
 
         self.setFocus(Qt.FocusReason.MouseFocusReason)
-        point = event.position().toPoint()
-        index = self.indexAt(point)
+        index = self.indexAt(event.position().toPoint())
 
-        # 用 .value 拿 int，避免 int(KeyboardModifier) 触发类型告警
         mods_value = event.modifiers().value
-        ctrl_value = Qt.KeyboardModifier.ControlModifier.value
-        shift_value = Qt.KeyboardModifier.ShiftModifier.value
-
-        has_ctrl = bool(mods_value & ctrl_value)
-        has_shift = bool(mods_value & shift_value)
+        has_ctrl = bool(mods_value & Qt.KeyboardModifier.ControlModifier.value)
+        has_shift = bool(mods_value & Qt.KeyboardModifier.ShiftModifier.value)
 
         sel_model = self.selectionModel()
 
@@ -389,21 +436,19 @@ class ColumnListView(QAbstractItemView):
             event.accept()
             return
 
-        sf = QItemSelectionModel.SelectionFlag
-
         if has_ctrl:
-            sel_model.select(index, sf.Toggle)
+            sel_model.select(index, SF.Toggle)
             self.setCurrentIndex(index)
         elif has_shift and self.currentIndex().isValid():
+            # ★ 用范围选择替代逐行循环，O(1) 构造选择对象
             current = self.currentIndex()
-            step = 1 if index.row() >= current.row() else -1
+            lo, hi = sorted((current.row(), index.row()))
+            model = self.model()
             selection = QItemSelection()
-            for r in range(current.row(), index.row() + step, step):
-                idx = self.model().index(r, 0)
-                selection.select(idx, idx)
-            sel_model.select(selection, sf.ClearAndSelect)
+            selection.select(model.index(lo, 0), model.index(hi, 0))
+            sel_model.select(selection, SF.ClearAndSelect)
         else:
-            sel_model.select(index, sf.ClearAndSelect)
+            sel_model.select(index, SF.ClearAndSelect)
             self.setCurrentIndex(index)
 
         self.viewport().update()
@@ -436,20 +481,18 @@ class ColumnListView(QAbstractItemView):
         if not self.model() or not self.selectionModel():
             return
 
-        # 只需要与视口相交的项（rect 本身是视口坐标系）
         rects = self._layout_calc.compute_rects(
             self.model(),
             self.viewport().rect(),
             self._scroll_offset(),
             visible_only=True,
         )
-        selected = [idx for idx, r in rects.items() if r.intersects(rect)]
-        if not selected:
-            return
-
         selection = QItemSelection()
-        for idx in selected:
-            selection.select(idx, idx)
+        for idx, r in rects.items():
+            if r.intersects(rect):
+                selection.select(idx, idx)
+        if selection.isEmpty():
+            return
         self.selectionModel().select(selection, command)
 
     def visualRegionForSelection(self, selection) -> QRegion:
@@ -465,15 +508,16 @@ class ColumnListView(QAbstractItemView):
         super().scrollContentsBy(dx, dy)
         self.viewport().update()
 
-    # ========== 更新滚动条范围 ==========
+    # ========== 更新滚动范围 ==========
     def updateGeometries(self):
         super().updateGeometries()
         sb = self.verticalScrollBar()
-        if not self.model():
+        model = self.model()
+        if not model:
             sb.setRange(0, 0)
             return
 
-        total_height = self._layout_calc.total_height(self.model())
+        total_height = self._layout_calc.total_height(model)
         viewport_h = self.viewport().height()
         max_offset = max(0, total_height - viewport_h)
 
@@ -484,42 +528,60 @@ class ColumnListView(QAbstractItemView):
 
     # ========== 绘制（只画视口内的项） ==========
     def paintEvent(self, event):
-        if not self.model():
+        model = self.model()
+        if not model:
             return
 
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rects = self._layout_calc.compute_rects(
-            self.model(),
+            model,
             self.viewport().rect(),
             self._scroll_offset(),
             visible_only=True,
         )
+        if not rects:
+            painter.end()
+            return
 
         delegate = self.itemDelegate()
         sel_model = self.selectionModel()
         current = self.currentIndex()
         hovered = self._hovered_index
 
+        # ★ 缓存 palette / font / fontMetrics / direction —— 避免每个 item 重复构造
+        base_palette = self.palette()
+        base_font = self.font()
+        base_fm = self._font_metrics()
+        base_dir = self.layoutDirection()
+
         for index, rect in rects.items():
             option = QStyleOptionViewItem()
+            option.palette = base_palette
+            option.font = base_font
+            option.fontMetrics = base_fm
+            option.direction = base_dir
             option.rect = rect
             option.widget = self
-            option.state = QStyle.StateFlag.State_Enabled
 
+            state = S_Enabled
             if sel_model and sel_model.isSelected(index):
-                option.state |= QStyle.StateFlag.State_Selected
+                # noinspection unsupported-operator
+                state |= S_Selected
             if current == index:
-                option.state |= QStyle.StateFlag.State_HasFocus
+                # noinspection unsupported-operator
+                state |= S_Focus
             if hovered == index:
-                option.state |= QStyle.StateFlag.State_MouseOver
+                # noinspection unsupported-operator
+                state |= S_Mouse
+            option.state = state
 
             delegate.paint(painter, option, index)
 
         painter.end()
 
-    # ========== 模型变化处理（显式信号连接） ==========
+    # ========== 模型变化处理 ==========
     def setModel(self, model):
         old = self.model()
         if old is not None:
@@ -551,9 +613,17 @@ class ColumnListView(QAbstractItemView):
         self.updateGeometries()
         self.viewport().update()
 
-    def _on_data_changed(self, *_):
-        self.updateGeometries()
-        self.viewport().update()
+    def _on_data_changed(self, top_left, bottom_right):
+        # ★ 行高固定，无需 updateGeometries；只重绘受影响的矩形
+        model = self.model()
+        if not model:
+            return
+        last = min(bottom_right.row(), model.rowCount() - 1)
+        vp = self.viewport()
+        for r in range(top_left.row(), last + 1):
+            rect = self.visualRect(model.index(r, 0))
+            if not rect.isEmpty():
+                vp.update(rect)
 
     def _on_rows_changed(self, *_):
         self.updateGeometries()

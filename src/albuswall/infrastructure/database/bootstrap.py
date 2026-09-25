@@ -7,6 +7,7 @@ from albuswall.configue import ConfigField
 from .connector import Connector
 
 
+# noinspection bad-assignment
 class Config:
     root = ConfigField("db", default={})
     must_exist: bool = ConfigField("db", "must_exist", default=False)
@@ -23,7 +24,8 @@ def register_database(
         "db", lambda: Connector(
             container.get("configue").static.path.data / config.db_file,
             must_exist=config.must_exist
-        )
+        ),
+        returns=Container
     )
 
     container.final(lambda: container.get("db").close_all())

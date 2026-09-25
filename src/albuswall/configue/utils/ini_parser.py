@@ -1,9 +1,26 @@
 #
-""""""
+"""INI parsing and type conversion primitives for albuswall.configue.
+
+This module is *internal*: it knows about albuswall's INI conventions
+(section names, __default__ handling, TRACE logging) and should not be
+treated as a general-purpose INI library.
+
+Two pipelines coexist:
+
+1. Legacy (kept for reference / fallback):
+   TypedConfigParser + DictInterpolation
+
+2. Current (see albuswall.configue.resolver):
+   RawINIParser -> Resolver
+
+Both share `_convert`, which is the only truly self-contained piece here
+and is imported by the resolver.
+"""
 
 import re
 import warnings
 import logging
+import io
 from pathlib import Path
 from pprint import pformat
 from typing import Optional, Dict, Callable, Any, Union, get_origin, get_args
@@ -25,7 +42,43 @@ except ImportError:
 interpolation_pattern = re.compile(r'\$([^}]+)')  # r'\$\{([^}]+)\}'
 MISSING_SECTION_HEAD = "__default__"
 logger = logging.getLogger(f"{albuswall.__name__}.configue")
+# noinspection unresolved-references
 logger.trace = lambda msg: logger.log(TRACE, msg)
+
+
+def _needs_default_section(content: str) -> bool:
+    """第一行有效内容不是节头时返回 True。"""
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";")):
+            continue
+        return not stripped.startswith("[")
+    return False
+
+
+class RawINIParser(ConfigParser):
+    def __init__(self, *args, missing_section_head="__default__", **kwargs):
+        kwargs.setdefault("interpolation", None)
+        super().__init__(*args, **kwargs)
+        self._missing_section_head = missing_section_head
+
+    # ── 唯一需要覆盖的入口 ─────────────────────────────
+    def read_file(self, f, source=None):
+        content = f.read()
+        if _needs_default_section(content):
+            content = f"[{self._missing_section_head}]\n" + content
+        super().read_file(io.StringIO(content), source)
+
+    # read_string 不要覆盖！
+    # configparser 自己的 read_string 会走 self.read_file，
+    # 也就是上面的版本，节头会被自动补上。
+
+    def to_raw_dict(self) -> dict[tuple[str, str], str]:
+        out = {}
+        for section in self.sections():
+            for key, value in self.items(section):
+                out[(section, key)] = value
+        return out
 
 
 # noinspection PyStringConversionWithoutDunderMethod
@@ -245,6 +298,7 @@ def _convert(
         converter: Any,
         custom_converters: Optional[Dict[Any, Callable[[str], Any]]] = None
 ) -> Any:
+    # noinspection string-conversion-without-dunder-method
     [logger.trace(l) for l in
      f"[_convert] Input: raw={raw!r}, \n\t"
      f"converter={converter}, \n\t"

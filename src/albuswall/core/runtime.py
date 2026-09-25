@@ -95,7 +95,12 @@ class Runtime:
     # ---------- 顶层异常 → 退出码 ----------
     def run(self, body: Callable[[], int | str]) -> int | str:
         try:
-            return body()
+            result = body()
+            # loop = getattr(self._app, "main_loop", None)
+            # code = getattr(loop, "code", None)
+            # if code not in (None, 0, "0", -1):
+            #     return code
+            return result
         except SystemExit as e:
             if e.code not in (0, "0", None):
                 self._close_handlers()

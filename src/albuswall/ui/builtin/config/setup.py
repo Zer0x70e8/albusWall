@@ -6,6 +6,7 @@ from pathlib import Path
 from logging import getLogger
 from typing import TYPE_CHECKING
 
+from albuswall.configue.utils.ini_parser import _needs_default_section
 from albuswall.log import TRACE, Logger
 
 from .registory import PreferenceDeclaration
@@ -41,10 +42,10 @@ def setup(config: "Configue"):
         dynamic.preference  →  等价于 config.static
     """
     # 延迟导入，避免与 bootstrap 循环依赖
-    from albuswall.configue.bootstrap import (
-        _build_type_map_and_defaults,
-        _needs_default_section,
-        _promote_default_section,
+    from albuswall.configue.declaration import (
+        build_type_map_and_defaults,
+        promote_default_section,
+        needs_default_section,
     )
     from albuswall.configue.utils.ini_parser import (
         TypedConfigParser, DictInterpolation,
@@ -59,7 +60,7 @@ def setup(config: "Configue"):
     declaration = PreferenceDeclaration()
 
     # 2) 从注册表构建 type_map / defaults —— 与静态完全同一个函数
-    type_map, defaults = _build_type_map_and_defaults(declaration)
+    type_map, defaults = build_type_map_and_defaults(declaration)
     _logger.trace(
         "Preference type_map=%s, defaults=%s",
         list(type_map.keys()), list(defaults.keys()))
@@ -76,8 +77,8 @@ def setup(config: "Configue"):
             "Preference file not found, using defaults: %s",
             str(preference_file))
         parser.read_string("", source=str(preference_file))
-    elif _needs_default_section(preference_file):
-        with preference_file.open("r", encoding="utf-8") as f:
+    elif _needs_default_section(str(preference_file)):
+        with preference_file.open("r", encoding="utf-8-sig") as f:
             parser.read_file(
                 chain(["[__default__]\n"], f), source=str(preference_file))
     else:
@@ -85,7 +86,7 @@ def setup(config: "Configue"):
             parser.read_file(f, source=str(preference_file))
 
     # 4) 取回结构化的 dict，__default__ 提升到顶层（静态同款处理）
-    config_dict = _promote_default_section(parser.load())
+    config_dict = promote_default_section(parser.load())
 
     # 5) 写入 dynamic.preference
     node = PreferenceDeclaration._get_config_namespace()

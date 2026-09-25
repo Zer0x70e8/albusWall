@@ -2,62 +2,68 @@
 """"""
 
 import json
-from typing import List
+from typing import List, Optional, Final, Callable, Any
 
 from albuswall.dto.source import (
-    IngestSourceSyncCandidate, IngestSourceCreate, IngestSourceUpdate)
+    IngestSourceSyncCandidate, IngestSourceCreate,
+    IngestSourceUpdate, MANUAL_SOURCE_ID, IngestSourceViewDTO
+)
 from albuswall.dto.trigger import TriggerConfig
-from albuswall.common.enums import FileTypeCheckMode
 
 from .base import BaseRepository
+from ..dto import UNSET
 from ..utils.time import now_iso
 
 
 class IngestSourceRepository(BaseRepository):
     """Ingest source repository."""
 
+    _CANDIDATE_COLUMNS = """
+        id, source_path, target_path, mount_point,
+        auto_mount, file_type_check, file_types,
+        subfolder_recursion, subfolder_recursion_depth,
+        trigger_config
+    """
+    _VIEW_COLUMNS = """
+        id, title, description, source_path, target_path, mount_point,
+        auto_mount, file_type_check, file_types, tags,
+        subfolder_recursion, subfolder_recursion_depth,
+        trigger_config, created_at, modified_at
+    """
+    _SYNC_CANDIDATE_COLUMNS = """
+        id, source_path, target_path, mount_point,
+        auto_mount, file_type_check, file_types,
+        subfolder_recursion, subfolder_recursion_depth,
+        trigger_config
+    """
+    _UPDATE_SERIALIZERS: Final[dict[str, Callable[[Any], Any]]] = {
+        "title": lambda v: v,
+        "description": lambda v: v,
+        "source_path": lambda v: v,
+        "target_path": lambda v: v,
+        "mount_point": lambda v: v,
+        "auto_mount": int,
+        "file_type_check": lambda m: m.value,
+        "file_types": lambda v: json.dumps(v, ensure_ascii=False),
+        "tags": lambda v: json.dumps(v, ensure_ascii=False),
+        "subfolder_recursion": int,
+        "subfolder_recursion_depth": lambda v: v,
+        "trigger_config": lambda v: json.dumps(v, ensure_ascii=False),
+    }
+
     def get_source_candidates(self) -> List[IngestSourceSyncCandidate]:
         """
         获取所有需要自动同步的导入源候选。
         """
-        query = """
-            SELECT id, source_path, target_path, mount_point,
-                   auto_mount, file_type_check, file_types, 
-                   subfolder_recursion, subfolder_recursion_depth,
-                   trigger_config
-            FROM ingest_source
-        """
+        query = f"""
+                SELECT {self._SYNC_CANDIDATE_COLUMNS}
+                FROM ingest_source
+                WHERE id != 0
+            """
         rows = self._fetchall(query)
         if not rows:
             return []
-
-        candidates = []
-        for row in rows:
-            # 解析 JSON 字段，异常时使用安全默认值
-            try:
-                file_types = json.loads(row["file_types"]) \
-                    if row["file_types"] else []
-            except (json.JSONDecodeError, TypeError):
-                file_types = []
-            try:
-                trigger_config = json.loads(row["trigger_config"]) \
-                    if row["trigger_config"] else None
-            except (json.JSONDecodeError, TypeError):
-                trigger_config = None
-
-            candidates.append(IngestSourceSyncCandidate(
-                id=row["id"],
-                source_path=row["source_path"],
-                target=row["target_path"],
-                mount_point=row["mount_point"],
-                auto_mount=bool(row["auto_mount"]),
-                file_type_check=FileTypeCheckMode(row["file_type_check"]),
-                file_types=file_types,
-                subfolder_recursion=bool(row["subfolder_recursion"]),
-                subfolder_recursion_depth=row["subfolder_recursion_depth"],
-                trigger_config=trigger_config,
-            ))
-        return candidates
+        return [IngestSourceSyncCandidate.from_row(row) for row in rows]
 
     def get_all_trigger_configs(self) -> List[TriggerConfig]:
         """
@@ -99,14 +105,7 @@ class IngestSourceRepository(BaseRepository):
         return [row["id"] for row in rows]
 
     def create(self, source: IngestSourceCreate) -> int:
-        """
-        创建新的导入源，返回新记录的 ID。
-        """
-        # 序列化 JSON 字段
-        file_types_json = json.dumps(source.file_types or [])
-        tags_json = json.dumps(source.tags or [])
-        trigger_config_json = json.dumps(source.trigger_config) if source.trigger_config else None
-
+        """创建新的导入源，返回新记录的 ID。"""
         query = """
             INSERT INTO ingest_source (
                 title, description, source_path, target_path, mount_point,
@@ -114,79 +113,139 @@ class IngestSourceRepository(BaseRepository):
                 subfolder_recursion, subfolder_recursion_depth, trigger_config
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
-        params = (
-            source.title,
-            source.description,
-            source.source_path,
-            source.target_path,
-            source.mount_point,
-            int(source.auto_mount),  # bool -> 0/1
-            source.file_type_check.value,  # 枚举转字符串
-            file_types_json,
-            tags_json,
-            int(source.subfolder_recursion),
-            source.subfolder_recursion_depth,
-            trigger_config_json,
-        )
-        cursor = self._execute(query, params)
+        cursor = self._execute(query, source.to_row_params())
         return cursor.lastrowid  # type: ignore
 
     def update(self, source_id: int, source: IngestSourceUpdate) -> bool:
-        """
-        更新导入源信息，仅更新 DTO 中非 None 的字段。
-        返回是否成功（影响行数 > 0）。
-        """
-        # 构建 SET 子句和参数列表
-        set_parts = []
-        params = []
+        set_parts: list[str] = []
+        params: list[Any] = []
 
-        if source.title is not None:
-            set_parts.append("title = ?")
-            params.append(source.title)
-        if source.description is not None:
-            set_parts.append("description = ?")
-            params.append(source.description)
-        if source.source_path is not None:
-            set_parts.append("source_path = ?")
-            params.append(source.source_path)
-        if source.target_path is not None:
-            set_parts.append("target_path = ?")
-            params.append(source.target_path)
-        if source.mount_point is not None:
-            set_parts.append("mount_point = ?")
-            params.append(source.mount_point)
-        if source.auto_mount is not None:
-            set_parts.append("auto_mount = ?")
-            params.append(int(source.auto_mount))
-        if source.file_type_check is not None:
-            set_parts.append("file_type_check = ?")
-            params.append(source.file_type_check.value)
-        if source.file_types is not None:
-            set_parts.append("file_types = ?")
-            params.append(json.dumps(source.file_types))
-        if source.tags is not None:
-            set_parts.append("tags = ?")
-            params.append(json.dumps(source.tags))
-        if source.subfolder_recursion is not None:
-            set_parts.append("subfolder_recursion = ?")
-            params.append(int(source.subfolder_recursion))
-        if source.subfolder_recursion_depth is not None:
-            set_parts.append("subfolder_recursion_depth = ?")
-            params.append(source.subfolder_recursion_depth)
-        if source.trigger_config is not None:
-            set_parts.append("trigger_config = ?")
-            params.append(json.dumps(source.trigger_config))
+        for name, serialize in self._UPDATE_SERIALIZERS.items():
+            value = getattr(source, name)
+            if value is UNSET:  # PATCH 语义：UNSET 表示不更新
+                continue
+            set_parts.append(f"{name} = ?")
+            params.append(None if value is None else serialize(value))
 
         if not set_parts:
-            # 没有需要更新的字段
             return False
 
         # 始终更新 modified_at
         set_parts.append("modified_at = ?")
-        params.append(now_iso())  # 可定义辅助函数生成当前时间戳
-
-        query = f"UPDATE ingest_source SET {', '.join(set_parts)} WHERE id = ?"
+        params.append(now_iso())
         params.append(source_id)
 
+        query = f"UPDATE ingest_source SET {', '.join(set_parts)} WHERE id = ?"
         cursor = self._execute(query, params)
+        return cursor.rowcount > 0
+
+    # ==================================================================
+    # 查询：视图 DTO
+    # ==================================================================
+
+    def list_view_dtos(self) -> List[IngestSourceViewDTO]:
+        """列出所有导入源（含 id=0 的虚拟根 / 手动导入源），按 id 升序。"""
+        query = f"""
+            SELECT {self._VIEW_COLUMNS}
+            FROM ingest_source
+            ORDER BY id ASC
+        """
+        rows = self._fetchall(query)
+        if not rows:
+            return []
+        return [IngestSourceViewDTO.from_row(row) for row in rows]
+
+    def get_view_dto(self, source_id: int) -> Optional[IngestSourceViewDTO]:
+        """
+        单条查询导入源.
+        :return : 不存在返回 None
+        """
+        query = f"""
+            SELECT {self._VIEW_COLUMNS}
+            FROM ingest_source
+            WHERE id = ?
+        """
+        rows = self._fetchall(query, (source_id,))
+        if not rows:
+            return None
+        return IngestSourceViewDTO.from_row(rows[0])
+
+    # ==================================================================
+    # 查询：同步候选（单源）
+    # ==================================================================
+
+    def get_sync_candidate(
+            self, source_id: int
+    ) -> Optional[IngestSourceSyncCandidate]:
+        if source_id == MANUAL_SOURCE_ID:
+            return None
+        query = f"""
+            SELECT {self._SYNC_CANDIDATE_COLUMNS}
+            FROM ingest_source
+            WHERE id = ?
+        """
+        rows = self._fetchall(query, (source_id,))
+        if not rows:
+            return None
+        return IngestSourceSyncCandidate.from_row(rows[0])
+
+    # ==================================================================
+    # 查询：存在性 / 引用计数
+    # ==================================================================
+
+    def exists(self, source_id: int) -> bool:
+        """判断指定 id 的导入源是否存在。"""
+        rows = self._fetchall(
+            "SELECT 1 FROM ingest_source WHERE id = ? LIMIT 1",
+            (source_id,),
+        )
+        return bool(rows)
+
+    # alias：语义更贴近调用方
+    def has_source(self, source_id: int) -> bool:
+        return self.exists(source_id)
+
+    def count_assets(self, source_id: int) -> int:
+        """统计该源关联的 assets 数量（删除前置检查用）。
+
+        依赖 ``assets.source_id`` 上的外键约束（RESTRICT）：若计数 > 0，
+        数据库层会拒绝 ``DELETE FROM ingest_source``。
+        """
+        # TODO TOCTOU 改 FK RESTRICT
+
+        rows = self._fetchall(
+            "SELECT COUNT(*) AS cnt FROM assets WHERE source_id = ?",
+            (source_id,),
+        )
+        # if not rows:
+        #     return 0
+        # row = rows[0]
+        # try:
+        #     return int(row["cnt"])
+        # except (KeyError, TypeError, IndexError):
+        #     # 兼容 tuple-like row
+        #     return int(row[0]) if row else 0
+        return int(rows[0]["cnt"]) if rows else 0
+
+    # ==================================================================
+    # 写入：删除
+    # ==================================================================
+
+    def delete(self, source_id: int) -> bool:
+        """硬删除指定导入源。
+
+        - 拒绝删除虚拟根 / 手动导入源（``MANUAL_SOURCE_ID``），抛 ``ValueError``；
+        - 若 ``assets.source_id`` 存在外键 RESTRICT 引用，由 DB 抛错；
+        - 返回是否实际删除（``rowcount > 0``）。
+        """
+        # TODO 软删除功能以后加
+        if source_id == MANUAL_SOURCE_ID:
+            raise ValueError(
+                f"Cannot delete manual/virtual source "
+                f"(id={MANUAL_SOURCE_ID})"
+            )
+        cursor = self._execute(
+            "DELETE FROM ingest_source WHERE id = ?",
+            (source_id,),
+        )
         return cursor.rowcount > 0

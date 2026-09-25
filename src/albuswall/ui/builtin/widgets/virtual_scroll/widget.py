@@ -1,14 +1,17 @@
 #
 """"""
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 
 try:
     from .style import StyledVirtualScrollWidget
 except ImportError:
     from style import StyledVirtualScrollWidget
 
+
 class VirtualScrollWidget(StyledVirtualScrollWidget):
+    unit_pressed = Signal(int)
+    unit_right_clicked = Signal(int)
 
     # event
     def wheelEvent(self, event) -> None:
@@ -19,19 +22,12 @@ class VirtualScrollWidget(StyledVirtualScrollWidget):
                 event.ignore()
                 return
 
-            # 放大（向上滚）→ 减少列数；缩小（向下滚）→ 增加列数
             if delta > 0:
-                new_cols = max(1, self.single_row_num - 1)  # 最少 1 列
+                new_cols = max(1, self.single_row_num - 1)
             else:
-                new_cols = min(12, self.single_row_num + 1)  # 最多 12 列（可按需调整）
+                new_cols = min(12, self.single_row_num + 1)
 
-            if new_cols != self.single_row_num:
-                self.single_row_num = new_cols
-                self._update_total_height()
-                # 让滚动位置保持合法（可能因总高度变化而需要钳位）
-                self.set_scroll_y(self._scroll_y)
-                self.update()
-                self._emit_visible_range_if_changed()
+            self.set_column_count(new_cols)
             event.accept()
             return
 
@@ -40,6 +36,7 @@ class VirtualScrollWidget(StyledVirtualScrollWidget):
         if delta == 0:
             event.ignore()
             return
+
         step = self._wheel_pixel_step
         new_y = self._scroll_y - delta / 120.0 * step
         self.set_scroll_y(new_y)
@@ -48,22 +45,17 @@ class VirtualScrollWidget(StyledVirtualScrollWidget):
     def mousePressEvent(self, event) -> None:
         """鼠标点击事件，用于识别点击了哪个网格项。"""
         if event.button() == Qt.MouseButton.LeftButton:
-            pos = event.position().toPoint()
-            cell_sz = self._get_cell_size()
-            if cell_sz <= 0:
-                return
-
-            # 计算点击位置对应的行列
-            col = pos.x() // cell_sz
-            row = int((pos.y() + self._scroll_y) // cell_sz)
-
-            if col >= self.single_row_num or row >= self._total_rows:
-                return
-
-            idx = self._row_col_to_index(row, col)
-            # 图像区域发射信号（总是发射）
-            if idx <= self._max_item_index:
+            idx = self._index_at_pos(event.position().toPoint())
+            if idx >= 0:
+                self.unit_pressed.emit(idx)
                 self.unit_clicked.emit(idx)
+
+        elif event.button() == Qt.MouseButton.RightButton:
+            idx = self._index_at_pos(event.position().toPoint())
+            if idx >= 0:
+                self.unit_right_clicked.emit(idx)
+            event.accept()
+            return
 
         super().mousePressEvent(event)
 
@@ -86,6 +78,31 @@ class VirtualScrollWidget(StyledVirtualScrollWidget):
         new_y = self._scroll_y + delta_y
         self.set_scroll_y(new_y)
         event.accept()
+
+    #
+    def _index_at_pos(self, pos) -> int:
+        cell_sz = self._get_cell_size()
+        if cell_sz <= 0:
+            return -1
+
+        col = pos.x() // cell_sz
+        row = int((pos.y() + self._scroll_y) // cell_sz)
+
+        if col < 0 or col >= self.single_row_num:
+            return -1
+        if row < 0 or row >= self._total_rows:
+            return -1
+
+        idx = self._row_col_to_index(row, col)
+        if idx < 0 or idx > self._max_item_index:
+            return -1
+
+        return idx
+
+    def set_column_count(self, n: int) -> None:
+        n = max(1, min(12, int(n)))
+        self._apply_column_count(n)
+
 
 if __name__ == '__main__':
     import sys
@@ -130,6 +147,7 @@ if __name__ == '__main__':
         painter.drawText(img.rect(), Qt.AlignmentFlag.AlignCenter, text)
         painter.end()
         return img
+
 
     # ── 1. 顶层窗口：模拟 Window 的设置 ──
     container = QWidget()

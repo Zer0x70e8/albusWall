@@ -6,6 +6,9 @@ import os
 from pathlib import Path
 from typing import Iterator, Optional, Union
 
+_SPEC_SUFFIX: dict[str, str] = {}   # 留空，后缀由 fmt 参数决定
+
+
 
 def is_valid_mount_point(mount_point: str) -> bool:
     """检查挂载点字符串是否为合法格式（不检查是否已挂载或目录存在）"""
@@ -90,3 +93,72 @@ def iter_files_depth_first(
 
     # 从根目录开始，深度为 0
     yield from _walk(root, 0)
+
+def resolve_asset_source(
+    *,
+    source_id: Optional[int],
+    source_path: Optional[str],
+    file_path: str,
+) -> Path:
+    """把 (source_id / source_path, file_path) 解析为绝对文件路径。
+
+    约定：
+      - source_path 是源根目录（sources 表里的 path 列，绝对路径）
+      - file_path   是相对根目录的路径
+      - 若 file_path 本身已是绝对路径，直接返回
+      - 若 source_path 为空，返回 file_path（交给调用方判断是否 is_file）
+
+    source_id 目前只用于日志/未来扩展；保留参数以便将来在多源场景下
+    按 id 查注册表替换 source_path。
+    """
+    if not file_path:
+        # 让上层拿到一个一定 not is_file() 的值
+        return Path(os.devnull)
+
+    p = Path(file_path)
+    if p.is_absolute():
+        return p
+
+    if not source_path:
+        # 没有根目录：视作相对当前工作目录，交由上层 is_file 判定
+        return p
+
+    return Path(source_path) / p
+
+
+def build_thumb_paths(
+    *,
+    uuid: str,
+    version: int | str,
+    fmt: str,
+) -> tuple[str, dict[str, str]]:
+    """构造缩略图相对路径。
+
+    Returns:
+        (base_rel, spec_rels)
+
+        base_rel  —— 形如 "v1/ab/<uuid>"，spec 文件的父目录（相对 thumb_root）
+        spec_rels —— {"small": "small.webp", "medium": "medium.webp", ...}
+
+    布局设计：
+        <thumb_root>/v1/ab/<uuid>/small.webp
+        <thumb_root>/v1/ab/<uuid>/medium.webp
+        <thumb_root>/v1/ab/<uuid>/large.webp
+    用 uuid 的前两位做一级散列，避免单目录塞太多文件。
+    """
+    if not uuid:
+        raise ValueError("uuid must be non-empty")
+
+    v = f"v{version}" if isinstance(version, int) else str(version)
+    shard = uuid[:2].lower()
+    base_rel = f"{v}/{shard}/{uuid}"
+
+    ext = (fmt or "webp").lower().lstrip(".")
+    if ext == "jpg":
+        ext = "jpeg"
+
+    spec_rels = {
+        spec: f"{spec}.{ext}"
+        for spec in ("small", "medium", "large")
+    }
+    return base_rel, spec_rels

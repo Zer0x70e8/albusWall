@@ -10,6 +10,7 @@ from .task import TaskService
 from .trigger import TriggerService
 from .import_ import ImportService
 from .view import ViewService
+from .thumbnail import ThumbnailService
 
 
 class Services(TypedDict):
@@ -18,6 +19,7 @@ class Services(TypedDict):
     trigger_service: TriggerService
     import_service: ImportService
     view_service: ViewService
+    thumbnail_service: ThumbnailService
 
 
 # Mapping of required args initialization cls.
@@ -39,6 +41,11 @@ _ARG_MAP: Dict[str, Callable[[Any, Container], Any]] = {
     "view_service": lambda cls, c: cls(
         c.get("view_repo"),
     ),
+    "thumbnail_service": lambda cls, c: cls(
+        c.get("task_service"),
+        c.get("thumbnail_repo"),
+        c.get("ingest_source_repo"),
+    )
 }
 
 
@@ -52,14 +59,24 @@ def _check(name, expected, value):
 def register_service(container: Container):
     for name, service_type in Services.__annotations__.items():
         if name in _ARG_MAP:
-            container.reg(name, lambda n_=name, st=service_type:
-            # _check(n_, st, _ARG_MAP[n_](st, container)))
-            _ARG_MAP[n_](st, container))
+            container.reg(
+                name,
+                lambda n_=name, st=service_type: _ARG_MAP[n_](st, container),
+                    # _check(n_, st, _ARG_MAP[n_](st, container)))
+                returns=service_type
+            )
         else:
-            container.reg(name, lambda t=service_type: t())
+            container.reg(name, lambda t=service_type: t(), returns=service_type)
 
+    # 启动回调
     container.on(lambda: container.get("source_service").start())
+    container.on(lambda: container.get("task_service"))  # 只是 get 一下，确保构造
     container.on(lambda: container.get("trigger_service").start())
     container.on(lambda: container.get("import_service").start())
+    container.on(lambda: container.get("thumbnail_service").start())
 
+    # 关闭回调（顺序和启动相反更安全）
+    # container.final(lambda: container.get("import_service").stop())
     container.final(lambda: container.get("trigger_service").stop())
+    # container.final(lambda: container.get("source_service").stop())
+    container.final(lambda: container.get("task_service").shutdown)

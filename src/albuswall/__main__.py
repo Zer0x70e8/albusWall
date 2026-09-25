@@ -1,7 +1,7 @@
 #
 """"""
 
-import logging
+from logging import getLogger
 
 import albuswall
 from albuswall.core import Application, Runtime
@@ -23,9 +23,9 @@ DATA_FILE_PATH = get_user_data_dir(
     albuswall.__title__, albuswall.__author__)
 CONFIG_FILE_NAME = "config.ini"
 
-logging.getLogger().setLevel(1)
+getLogger().setLevel(1)
 memory_handler = MemoryCacheHandler()
-_logger = logging.getLogger(albuswall.__name__)
+_logger = getLogger(albuswall.__name__)
 runtime = Runtime(memory_handler)
 
 
@@ -85,9 +85,18 @@ def _boot(app: Application) -> None:
 
     # # test
     # from albuswall.dto.source import IngestSourceCreate
-    # container.get("ingest_source_service").create_source(IngestSourceCreate(
+    # # from albuswall.dto.trigger import ScheduledTrigger
+    # container.get("source_service").create_source(IngestSourceCreate(
     #     title = "my library",
     #     source_path = "/data/myCode/py/albuswall/assets/thumbs",
+    #     file_types=[".jpg", ".jpeg", ".png"],
+    #     trigger_config={
+    #         "update_mode": ["interval_time"],
+    #         "scheduled": {
+    #             "enabled": True,
+    #             "interval": "1m",
+    #         },
+    #     }
     # ))
 
 
@@ -96,7 +105,11 @@ def _main() -> int | str:
     _logger.debug("Program start.")
 
     app = Application()
-    app.container.reg("app", lambda: app)
+    app.container.reg(
+        "app",
+        lambda: app,
+        returns=Application
+    )
     runtime.install()
     _boot(app)
 

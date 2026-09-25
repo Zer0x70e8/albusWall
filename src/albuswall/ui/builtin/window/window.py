@@ -12,6 +12,7 @@ from .content import Content
 from .album import Album
 from .menu import Menu
 from .source import IngestSource
+from .detail import Detail
 from ..setting import Setting, StackStation as SettingStation
 
 from ..widgets.passthrough_stack_widget import PassthroughStack
@@ -21,6 +22,7 @@ class Window(QWidget):
     main_layout: QVBoxLayout
 
     back_ground: BlurLabel
+    back_ground_screen_area: QWidget  # objname: #WindowTarget
 
     title_bar: TitleBar
     content: Content
@@ -29,10 +31,12 @@ class Window(QWidget):
     source: IngestSource
     menu: Menu
     setting: Setting
+    detail: Detail
     setting_station: SettingStation
 
     def __init__(self, parent=None):
         super().__init__(parent)
+
         self.setup()
         self.setup_ui()
         auto_set_object_names(
@@ -47,6 +51,7 @@ class Window(QWidget):
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop, True)
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -56,7 +61,9 @@ class Window(QWidget):
 
         #
         self.back_ground = BlurLabel(self)
+        self.back_ground_screen_area = QWidget(self)
 
+        self.back_ground.target_widget = self.back_ground_screen_area
         self.back_ground.setAttribute(
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
         )
@@ -73,11 +80,11 @@ class Window(QWidget):
         #
         self.content = Content(self)
         self.content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.back_ground.target_widget = self.content
+        self.title_bar.set_passthrough_target(self.content)
 
         #
         self.overlay = PassthroughStack(self)
-        self.album = Album(self, self.overlay)
+        self.album = Album(target=self, parent=self.overlay)
         self.overlay.addWidget(self.album)
 
         #
@@ -86,11 +93,17 @@ class Window(QWidget):
         self.title_bar.extra_button.setMenu(self.menu)
 
         #
-        self.source = IngestSource(self)
+        self.source = IngestSource(parent=self, target=self)
         self.overlay.addWidget(self.source)
 
+        #
+        self.detail = Detail(self)
+        self.detail.target_widget = self
+        self.overlay.addWidget(self.detail)
+
         # setting
-        self.setting = Setting(None)
+        # self.setting = Setting(None)
+        self.setting = Setting(parent=self, target=self)
         self.setting.enable_close_button = True
         # self.setting_station = SettingStation(self)
         # self.setting_station.set_widget(self.setting, self.tr("setting"))
@@ -115,6 +128,7 @@ class Window(QWidget):
 
     def resizeEvent(self, event):
         self.back_ground.setGeometry(self.rect())
+        self.back_ground_screen_area.setGeometry(self.rect())
         self.content.setGeometry(self.rect())
         self._update_overlay_geometry()
         super().resizeEvent(event)

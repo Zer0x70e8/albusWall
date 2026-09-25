@@ -66,16 +66,16 @@ def registry_ui(container: "Container"):
         _ui_instance.setup(container)
         return _ui_instance
 
-    container.reg("ui", create_ui)
+    container.reg("ui", create_ui, returns=ui_cls)
 
     # ③ teardown：只在实例真正被创建过时才调用
     def _teardown() -> None:
         if _ui_instance is None:
             return
-        # noinspection broad-exception
+        # noinspection broad-exception,PyBroadException
         try:
-            # noinspection unresolved-references
-            _ui_instance.teardown()
+            # noinspection unresolved-references,PyUnresolvedReferences
+            _ui_instance.teardown()  # 我也不知道为什么要有两种检查抑制方法
         except Exception:
             logger.exception("ui teardown failed")
 

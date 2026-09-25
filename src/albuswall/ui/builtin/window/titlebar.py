@@ -4,10 +4,10 @@
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon  # , QPixmap
+from PySide6.QtCore import Qt, QPoint, QEvent, QPointF
+from PySide6.QtGui import QIcon, QMouseEvent, QWheelEvent  # , QPixmap
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
+    QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget, QAbstractButton, QApplication)
 
 from ..utils.qt_objectname_utils import auto_set_object_names
 from ..widgets.action_buttons import (
@@ -51,6 +51,8 @@ class TitleBar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+
+        self._passthrough_target = None
 
         self._vo: TitleBarVO = TitleBarVO()
         self._default_texts: dict[str, str] = {
@@ -301,3 +303,122 @@ class TitleBar(QWidget):
 
         has_content = (not button.icon().isNull()) or bool(button.text())
         button.setVisible(has_content)
+
+    def set_passthrough_target(self, target: QWidget | None) -> None:
+        """设置空白区域鼠标 / 滚轮事件的接收者（通常是 Content）。"""
+        self._passthrough_target = target
+
+    def _is_interactive_at(self, pos: QPoint) -> bool:
+        """判断 pos 是否落在真正可交互的控件上（按钮 / 搜索栏等）。"""
+        w = self.childAt(pos)
+        while w is not None and w is not self:
+            if isinstance(w, QAbstractButton):
+                return True
+            if isinstance(w, FloatingSearchBar):
+                return True
+            if w is None:
+                return True
+            w = w.parentWidget()
+        return False
+
+    def _forward_event(self, event) -> bool:
+        """如果是空白区域，就转发给目标；返回 True 表示已处理。"""
+        target = self._passthrough_target
+        if target is None or not target.isVisible():
+            return False
+
+        pos = event.position().toPoint()
+        if not self.rect().contains(pos):
+            return False
+        if self._is_interactive_at(pos):
+            return False  # 落在按钮上，走正常流程
+
+        # target_pos = target.mapFrom(self, pos)
+        target_pos = target.mapFromGlobal(self.mapToGlobal(pos))
+        forwarded = self._clone_event(event, target_pos)
+        if forwarded is None:
+            return False
+        QApplication.sendEvent(target, forwarded)
+        return True
+
+    @staticmethod
+    def _clone_event(event, pos: QPoint | QPointF):
+        et = event.type()
+        if et in (QEvent.Type.MouseButtonPress,
+                  QEvent.Type.MouseButtonRelease,
+                  QEvent.Type.MouseButtonDblClick):
+            return QMouseEvent(
+                et, pos, event.globalPosition(),
+                event.button(), event.buttons(), event.modifiers(),
+            )
+        if et == QEvent.Type.MouseMove:
+            return QMouseEvent(
+                et, pos, event.globalPosition(),
+                Qt.MouseButton.NoButton, event.buttons(), event.modifiers(),
+            )
+        if et == QEvent.Type.Wheel:
+            return QWheelEvent(
+                pos, event.globalPosition(),
+                event.pixelDelta(), event.angleDelta(),
+                event.buttons(), event.modifiers(),
+                event.phase(), event.inverted(),
+            )
+        return None
+
+    # ---------- 重写事件：空白区域转发 ----------
+    def mousePressEvent(self, event):
+        if not self._forward_event(event):
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not self._forward_event(event):
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if not self._forward_event(event):
+            super().mouseReleaseEvent(event)
+
+    def wheelEvent(self, event):
+        if not self._forward_event(event):
+            super().wheelEvent(event)
+
+    def set_passthrough_target(self, target) -> None:
+        """设置空白区域事件的接收者（通常是 Content）。"""
+        self._passthrough_target = target
+        # 给自身和覆盖整块区域的容器都装过滤器
+        for w in (self, self.action_bar, self.tool_bar, self.tool_bar_holder):
+            w.installEventFilter(self)
+
+    def _hits_interactive(self, pos) -> bool:
+        """pos 是否落在真正需要交互的控件上。"""
+        w = self.childAt(pos)
+        while w is not None and w is not self:
+            if isinstance(w, (QAbstractButton, FloatingSearchBar)):
+                return True
+            w = w.parentWidget()
+        return False
+
+    def eventFilter(self, obj, event):
+        if (event.type() == QEvent.Type.Wheel
+                and getattr(self, "_passthrough_target", None) is not None):
+            gp = event.globalPosition().toPoint()
+            local = self.mapFromGlobal(gp)
+
+            # 1) 必须在标题栏范围内
+            # 2) 不能落在按钮 / 搜索栏上
+            if self.rect().contains(local) and not self._hits_interactive(local):
+                target = self._passthrough_target
+                new_event = QWheelEvent(
+                    target.mapFromGlobal(gp),
+                    event.globalPosition(),
+                    event.pixelDelta(),
+                    event.angleDelta(),
+                    event.buttons(),
+                    event.modifiers(),
+                    event.phase(),
+                    event.inverted(),
+                )
+                QApplication.sendEvent(target, new_event)
+                return True  # 拦截掉，避免 tool_bar 再处理
+
+        return super().eventFilter(obj, event)

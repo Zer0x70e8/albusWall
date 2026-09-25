@@ -154,9 +154,12 @@ class ViewService:
                 # noinspection string-conversion-without-dunder-method
                 return self._repo.get_asset_full_path(str(cover_uuid))
             # 若 DTO 未携带 cover，则回退到按 uuid 再查一次
+            # return self._repo.get_asset_full_path(
+            #     self._as_uuid_str(album.uuid)
+            # ) if False else self._get_cover_path_by_album_uuid(album.uuid)
             return self._repo.get_asset_full_path(
                 self._as_uuid_str(album.uuid)
-            ) if False else self._get_cover_path_by_album_uuid(album.uuid)
+            )
 
         return self._get_cover_path_by_album_uuid(album)
 
@@ -172,6 +175,22 @@ class ViewService:
         # noinspection string-conversion-without-dunder-method
         return self._repo.get_asset_full_path(str(cover_uuid))
 
+    def get_asset_ids(self, album: Union[Album, UUID, str]) -> list[int]:
+        """按相册列出可见的 asset 整数 id（供 ThumbnailGridPresenter 使用）。
+
+        虚拟相册走 scope（active / deleted），物理相册走 uuid。
+        返回 [] 表示无 asset。
+        """
+        uuid = album.uuid if isinstance(album, Album) else album
+        spec = self._spec(uuid)
+        if spec is None:
+            return self._repo.list_asset_ids_by_album(self._as_uuid_str(uuid)) or []
+        return self._repo.list_asset_ids_by_scope(spec.scope) or []
+
+    def get_asset_full_path_by_id(self, asset_id: int) -> Optional[Path]:
+        """按 asset 整数主键取磁盘完整路径（供 ThumbnailGridPresenter 的 item_activated 消费）。"""
+        return self._repo.get_asset_full_path_by_id(int(asset_id))
+
     def __str__(self) -> str:
         return "\n".join((
             f"{type(self).__name__} (",
@@ -186,3 +205,4 @@ class ViewService:
 
     get_album_cover_full_path = get_cover_full_path
     get_cover_full_path_by_album_uuid = get_cover_full_path
+    get_asset_full_path_by_asset_id = get_asset_full_path_by_id

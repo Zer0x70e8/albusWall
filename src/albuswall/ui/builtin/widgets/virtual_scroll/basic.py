@@ -3,7 +3,7 @@
 
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QRect
+from PySide6.QtCore import Qt, Signal, QRect, Property
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import QWidget
 
@@ -24,6 +24,7 @@ class VirtualScrollWidget(QWidget):
     """
     scroll_changed = Signal(int)
     unit_clicked = Signal(int)
+    cache_cleared = Signal()
     visible_range_changed = Signal(int, int, int)  # start, end, request_id
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -46,13 +47,37 @@ class VirtualScrollWidget(QWidget):
 
         # cache (LRU)
         self._max_cache_size = CACHE_POOL_MAX_ITEM_NUMBER
-        self._pixmap_cache = LRUCache(self._max_cache_size)
+        self._pixmap_cache: LRUCache[int, QPixmap] = LRUCache(self._max_cache_size)
         # 用于防抖，避免重复发射相同范围
         self._last_emitted_start = -1
         self._last_emitted_end = -1
 
         # #
         # self._update_total_height()
+
+    @Property(int)
+    def max_item_index(self) -> int:
+        return int(self._max_item_index)
+
+    @max_item_index.setter
+    def max_item_index(self, value: int) -> None:
+        self.update_max_item_index(value)
+
+    @Property(int)
+    def scroll_y(self) -> int:
+        return int(self._scroll_y)
+
+    @scroll_y.setter
+    def scroll_y(self, value: int) -> None:
+        self.set_scroll_y(value)
+
+    @Property(int)
+    def column_count(self) -> int:
+        return int(self.single_row_num)
+
+    @column_count.setter
+    def column_count(self, value: int) -> None:
+        self._apply_column_count(value)
 
     # interface
     def set_pixmap(self, index: int, pixmap: QPixmap) -> None:
@@ -78,15 +103,36 @@ class VirtualScrollWidget(QWidget):
         finally:
             self.update()
 
-    def update_max_item_index(self, index: int) -> None:
+    def has_pixmap(self, index: int) -> bool:
+        """返回该索引当前是否在 LRU 缓存中（只读探测，不改变访问顺序）。
+
+        注意：LRU 会静默淘汰，任何外部维护的"已加载"集合都会失真，
+        必须以本方法为准。
+        """
+        return index in self._pixmap_cache
+
+    def update_max_item_index(self, index: int, *, force: bool = False) -> None:
+        index = max(-1, int(index))
+
+        if not force and index == self._max_item_index:
+            return
+
         self._max_item_index = index
         self._update_total_height()
+
+        if force:
+            self._last_emitted_start = -1
+            self._last_emitted_end = -1
+
+        # 总高度变化后可能需要对 scroll_y 重新钳位
+        self.set_scroll_y(self._scroll_y)
         self.update()
         self._emit_visible_range_if_changed()
 
     def clear_cache(self) -> None:
         self._pixmap_cache.clear()
         self.update()
+        self.cache_cleared.emit()
 
     def set_scroll_y(self, y: float) -> None:
         max_scroll = self._total_content_height - self.contentsRect().height()
@@ -101,6 +147,35 @@ class VirtualScrollWidget(QWidget):
             self.scroll_changed.emit(int(self._scroll_y))
             self.update()
             self._emit_visible_range_if_changed()
+
+    #
+    def reset_source(self, max_item_index: int) -> None:
+        """重置数据源：清空缓存、设置最大索引、滚动回顶部。"""
+        self.clear_cache()
+        self._max_item_index = max(-1, int(max_item_index))
+        self._last_emitted_start = -1
+        self._last_emitted_end = -1
+        self._update_total_height()
+        self.set_scroll_y(0)
+        self.update()
+        self._emit_visible_range_if_changed()
+
+    def refresh_visible_range(self) -> None:
+        """强制重新计算并发射可见范围，忽略防抖。"""
+        self._last_emitted_start = -1
+        self._last_emitted_end = -1
+        self._emit_visible_range_if_changed()
+
+    def _apply_column_count(self, n: int) -> None:
+        n = max(1, int(n))
+        if n == self.single_row_num:
+            return
+
+        self.single_row_num = n
+        self._update_total_height()
+        self.set_scroll_y(self._scroll_y)
+        self.update()
+        self.refresh_visible_range()
 
     # calc
     def _get_cell_size(self) -> int:

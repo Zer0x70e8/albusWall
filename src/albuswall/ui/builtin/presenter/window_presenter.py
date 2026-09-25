@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtCore import QObject, QTimer
+from PySide6.QtGui import QPixmap
 
 from ..widgets import blur_overlay_label
 from ..config import WindowPresenterConfs
@@ -23,7 +24,11 @@ _logger = getLogger(__name__)
 class Presenter(QObject):
     _service: "ViewService"
 
-    def __init__(self, target: "Window", parent=None):
+    def __init__(
+            self,
+            target: "Window",
+            parent=None
+    ):
         super().__init__(parent)
         self._target = target
         self.confs = WindowPresenterConfs()
@@ -40,6 +45,7 @@ class Presenter(QObject):
         self._apply_style_sheet(config)
 
         # noinspection none-function-assignment
+        # noinspection PyNoneFunctionAssignment
         QTimer.singleShot(0, lambda: (setattr(
             self.window_resizer, "title_bar_height",
             self._target.title_bar.action_bar_bottom_y_in_parent)))
@@ -64,6 +70,12 @@ class Presenter(QObject):
         self._connector(
             self._target.source.close_button.clicked,
             self._target.overlay.show_blank
+        )
+
+        # #
+        self._connector(
+            self._target.detail.close_button.clicked,
+            self._target.overlay.show_blank,
         )
 
         self._connector(
@@ -100,15 +112,9 @@ class Presenter(QObject):
         #     lambda: self._target.overlay.setCurrentWidget(self._target.setting_station),
         # )
 
-    def _apply_style_sheet(self, config: "Configue") -> None:
-        """解析 QSS 路径并应用到目标 widget。
-
-        路径解析优先走 WindowPresenterConfs._resolve_style_sheet，
-        它会依次尝试：
-            1. ui.style_sheet（显式指定）
-            2. path.theme / ui.theme / files.qss（回退）
-        """
-        qss: Optional[Path] = self.confs.resolve_style_sheet(config)
+    def _apply_style_sheet(self, _: "Configue") -> None:
+        """解析 QSS 路径并应用到目标 window。"""
+        qss: Optional[Path | str] = self.confs.qss
 
         if qss is None:
             _logger.info(
@@ -116,6 +122,7 @@ class Presenter(QObject):
                 "path.theme is missing); skip stylesheet."
             )
             return
+        qss: Path = Path(qss)
 
         if not qss.is_file():
             _logger.warning("QSS file is not available: %s", qss)
@@ -151,6 +158,20 @@ class Presenter(QObject):
     #         dock.setFloating(False)
     #
     #     self._target.overlay.setCurrentWidget(station)
+
+    def show_detail(self, asset_id: int) -> None:
+        path = self._service.get_asset_full_path_by_id(asset_id)
+        if path is None or not path.is_file():
+            _logger.warning("detail: no full path for asset=%d", asset_id)
+            return
+
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            _logger.warning("detail: QPixmap load failed: %s", path)
+            return
+
+        self._target.overlay.setCurrentWidget(self._target.detail)
+        self._target.detail.set_image(str(path))
 
 
 WindowPresenter = Presenter

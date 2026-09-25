@@ -10,6 +10,8 @@ from ..widgets.blur_overlay_label import BlurLabel
 from ..widgets.square_grid import SquareGridView
 from ..utils.qt_objectname_utils import auto_set_object_names
 
+from .utils import install_close_button
+
 
 class Album(BlurLabel):
     main_layout: QVBoxLayout
@@ -41,7 +43,7 @@ class Album(BlurLabel):
         layout = QVBoxLayout(self)
         self.main_layout = layout
 
-        self.close_button = QPushButton("\u2715", self)
+        self.close_button = install_close_button(self)
 
         self.close_button.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)

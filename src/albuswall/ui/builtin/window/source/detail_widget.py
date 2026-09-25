@@ -1,13 +1,19 @@
 #
 """"""
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, QStringListModel
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QLabel, QLineEdit, QPushButton,
     QCheckBox, QSpinBox, QRadioButton, QComboBox,
-    QWidget, QApplication, QListView, QSizePolicy
+    QWidget, QApplication, QListView, QSizePolicy,
+    QFileDialog
 )
+
+from albuswall.dto.source import IngestSourceFormData
+from albuswall.common.enums import FileTypeCheckMode
+
+from ...utils import auto_set_object_names
 
 
 class IngestSourceDetailWidget(QFrame):
@@ -107,8 +113,20 @@ class IngestSourceDetailWidget(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._tags_model = QStringListModel(self)
+        self._file_types_model = QStringListModel(self)
+
         self.setup_ui()
+        self._wire_internal_signals()
         self.setup_object_names()
+        self._apply_default_state()
+        auto_set_object_names(
+            self,
+            class_name_source=self,
+            separator="",
+            overwrite=True,
+            camel_case=True
+        )
 
     def setup_ui(self):
         """创建所有控件并设置布局"""
@@ -151,7 +169,6 @@ class IngestSourceDetailWidget(QFrame):
         self.grp_meta_layout.addRow(self.title_label, self.title_layout)
         self.grp_meta_layout.addRow(self.description_label, self.description_layout)
         self.grp_meta_layout.addRow(self.tags_label, self.tags_layout)
-
 
         # ========== 摄入源分组 ==========
         self.grp_source = QGroupBox(self.tr("Ingest Source"))
@@ -307,9 +324,161 @@ class IngestSourceDetailWidget(QFrame):
                 obj_name = f"{prefix}{camel_name}"
                 value.setObjectName(obj_name)
 
+    # ------------------------------------------------------------ 内部连线
+    def _wire_internal_signals(self):
+        self.tags_view.setModel(self._tags_model)
+        self.file_type_list_view.setModel(self._file_types_model)
+
+        self.tags_button.clicked.connect(self._on_add_tag)
+        self.tags_line_edit.returnPressed.connect(self._on_add_tag)
+        self.file_type_add_button.clicked.connect(self._on_add_file_type)
+        self.file_type_line_edit.returnPressed.connect(self._on_add_file_type)
+
+        self.source_path_browser_button.clicked.connect(self._on_browse_source_path)
+        self.update_mode_combo.currentIndexChanged.connect(self._on_update_mode_changed)
+        self.subfolder_recursion_depth_check_box.toggled.connect(
+            lambda checked: self.subfolder_recursion_depth_spin_box.setEnabled(not checked)
+        )
+
+    def _apply_default_state(self):
+        self.file_type_check_s_radio_button.setChecked(True)
+        self.subfolder_recursion_check_box.setChecked(False)
+        self.subfolder_recursion_depth_check_box.setChecked(True)
+        self.subfolder_recursion_depth_spin_box.setEnabled(False)
+        self.update_mode_combo.setCurrentIndex(0)
+        self._on_update_mode_changed(0)
+
+    # ------------------------------------------------------------ 小交互
+    def _on_add_tag(self):
+        text = self.tags_line_edit.text().strip()
+        if not text:
+            return
+        tags = self._tags_model.stringList()
+        if text not in tags:
+            tags.append(text)
+            self._tags_model.setStringList(tags)
+        self.tags_line_edit.clear()
+
+    def _on_add_file_type(self):
+        text = self.file_type_line_edit.text().strip()
+        if not text:
+            return
+        if not text.startswith("."):
+            text = "." + text
+        types = self._file_types_model.stringList()
+        if text not in types:
+            types.append(text)
+            self._file_types_model.setStringList(types)
+        self.file_type_line_edit.clear()
+
+    def _on_browse_source_path(self):
+        path = QFileDialog.getExistingDirectory(
+            self, self.tr("选择源目录"),
+            self.source_path_line_edit.text() or "",
+        )
+        if path:
+            self.source_path_line_edit.setText(path)
+
+    def _on_update_mode_changed(self, idx: int):
+        is_interval = (idx == 1)
+        self.scheduled_time_edit.setVisible(not is_interval)
+        self.scheduled_time_label.setVisible(not is_interval)
+        self.interval_time_edit.setVisible(is_interval)
+        self.interval_time_label.setVisible(is_interval)
+
+    # ============================================================
+    # ★ Presenter 依赖的两个接口（+ 一个清空接口）
+    # ============================================================
+    def set_form_data(self, form: IngestSourceFormData) -> None:
+        """把 form 快照刷到所有控件。"""
+        # ---- meta ----
+        self.title_line_edit.setText(form.title or "")
+        self.description_line_edit.setText(form.description or "")
+        self._tags_model.setStringList(list(form.tags))
+
+        # ---- source ----
+        self.source_path_line_edit.setText(form.source_path or "")
+        self._file_types_model.setStringList(list(form.file_types))
+
+        if form.file_type_check is FileTypeCheckMode.MAGIC:
+            self.file_type_check_mg_radio_button.setChecked(True)
+        else:
+            self.file_type_check_s_radio_button.setChecked(True)
+
+        self.subfolder_recursion_check_box.setChecked(bool(form.subfolder_recursion))
+        if form.subfolder_recursion_depth is None:
+            self.subfolder_recursion_depth_check_box.setChecked(True)
+            self.subfolder_recursion_depth_spin_box.setEnabled(False)
+        else:
+            self.subfolder_recursion_depth_check_box.setChecked(False)
+            self.subfolder_recursion_depth_spin_box.setEnabled(True)
+            self.subfolder_recursion_depth_spin_box.setValue(
+                int(form.subfolder_recursion_depth)
+            )
+
+        # ---- 定时触发器 ----
+        self.grp_scheduled.setChecked(bool(form.scheduled_enabled))
+        if form.update_mode == "interval_time":
+            self.update_mode_combo.setCurrentIndex(1)
+        else:
+            self.update_mode_combo.setCurrentIndex(0)
+        self.scheduled_time_edit.setText(form.scheduled_time or "")
+        self.interval_time_edit.setText(form.scheduled_interval or "")
+
+        # ---- 设备插入触发器 ----
+        self.grp_device_insertion_trigger.setChecked(bool(form.device_trigger_enabled))
+        if form.target_path:
+            idx = self.target_combo.findText(form.target_path)
+            if idx < 0:
+                self.target_combo.addItem(form.target_path)
+                idx = self.target_combo.findText(form.target_path)
+            self.target_combo.setCurrentIndex(idx)
+        self.auto_mount_checkbox.setChecked(bool(form.auto_mount))
+        self.mount_point_edit.setText(form.mount_point or "")
+
+        # 保证可见性状态与 combo 同步
+        self._on_update_mode_changed(self.update_mode_combo.currentIndex())
+
+    def get_form_data(self) -> IngestSourceFormData:
+        """从控件读回 form 快照。"""
+        no_depth_limit = self.subfolder_recursion_depth_check_box.isChecked()
+        return IngestSourceFormData(
+            title=self.title_line_edit.text().strip(),
+            description=self.description_line_edit.text().strip(),
+            tags=list(self._tags_model.stringList()),
+            source_path=self.source_path_line_edit.text().strip(),
+            target_path=self.target_combo.currentText() or None,
+            file_types=list(self._file_types_model.stringList()),
+            file_type_check=(
+                FileTypeCheckMode.MAGIC
+                if self.file_type_check_mg_radio_button.isChecked()
+                else FileTypeCheckMode.SUFFIX
+            ),
+            subfolder_recursion=self.subfolder_recursion_check_box.isChecked(),
+            subfolder_recursion_depth=(
+                None if no_depth_limit
+                else self.subfolder_recursion_depth_spin_box.value()
+            ),
+            scheduled_enabled=self.grp_scheduled.isChecked(),
+            update_mode=(
+                "interval_time"
+                if self.update_mode_combo.currentIndex() == 1
+                else "scheduled_time"
+            ),
+            scheduled_time=self.scheduled_time_edit.text().strip() or None,
+            scheduled_interval=self.interval_time_edit.text().strip() or None,
+            device_trigger_enabled=self.grp_device_insertion_trigger.isChecked(),
+            auto_mount=self.auto_mount_checkbox.isChecked(),
+            mount_point=self.mount_point_edit.text().strip() or None,
+        )
+
+    def clear(self) -> None:
+        """复位到默认空表单。"""
+        self.set_form_data(IngestSourceFormData())
 
 if __name__ == "__main__":
     import sys
+
     app = QApplication(sys.argv)
 
     window = QWidget()

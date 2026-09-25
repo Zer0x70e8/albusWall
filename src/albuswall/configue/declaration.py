@@ -1,6 +1,9 @@
 #
-""""""
+"""ConfigDeclaration and ConfigField."""
 
+import typing
+import warnings
+from pathlib import Path
 from typing import (
     Tuple, Sequence, TypedDict,
     Any, Optional, Union, Dict,
@@ -8,8 +11,6 @@ from typing import (
     TYPE_CHECKING, Generic,
     cast,
 )
-
-from albuswall.configue.utils import Namespace
 
 if TYPE_CHECKING:
     from albuswall.configue import Configue
@@ -19,12 +20,42 @@ _Missing = object()
 T = TypeVar("T")
 
 
+# noinspection bad-return
 def get_config() -> "Configue":
     global _config
     from albuswall.core import Application
     if _config is None:
         _config = Application.instance().configure
-    return _config  # type: ignore
+    return _config
+
+
+# ── 从 bootstrap.py 搬过来 ─────────────────────────────
+def _resolve_annotation(ann: Any) -> Any:
+    """将字符串注解解析为类型对象，失败时回退为 str。"""
+    if not isinstance(ann, str):
+        return ann
+
+    import builtins
+    namespace: dict[str, Any] = {}
+    namespace.update(vars(builtins))
+    namespace.update(vars(typing))
+    namespace.update({
+        "Path": Path,
+        "Any": Any,
+        "Optional": typing.Optional,
+        "List": typing.List,
+        "Tuple": typing.Tuple,
+        "Dict": typing.Dict,
+        "Union": typing.Union,
+    })
+    try:
+        return eval(ann, namespace)
+    except Exception as e:
+        warnings.warn(
+            f"Failed to resolve annotation string '{ann}': {e}, "
+            f"falling back to str"
+        )
+        return str
 
 
 class ConfigMeta(TypedDict):
@@ -34,44 +65,36 @@ class ConfigMeta(TypedDict):
 
 
 class ConfigDeclaration:
-    _registered: Dict[str, ConfigMeta] = {}
     _registry: Dict[str, ConfigMeta] = {}
-    _failed: Dict[str, ConfigMeta] = {}
 
     _config_getter = staticmethod(get_config)
 
-    def __init__(self):
-        type(self).load()
+    # ── __init__ 删掉（不再自动 load，因为 load 需要 resolver） ──
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        cls._registered = {}
         cls._registry = {}
-        cls._failed = {}
+        cls._config_declaration = cls  # 反向写入
 
     @property
-    def registered(self):
-        return self._registered
-
-    @property
-    def registry(self):
+    def registry(self) -> Dict[str, ConfigMeta]:
         return self._registry
 
     @classmethod
-    def _get_config_namespace(cls) -> Namespace:
-        """
-        默认返回 Configue.static。
-        派生类可覆盖它，或只覆盖 _config_getter。
-        """
-        return cls._config_getter().static
-
-    @classmethod
-    def load(cls):
+    def load(cls, resolver) -> None:
+        """把 registry 里的声明注册到 Resolver：类型 + 缺失时注入默认值。"""
         for key, meta in cls._registry.items():
-            if cls.ensure_config_path(meta["path"], meta["default"]):
-                cls._registered[key] = meta
+            path = meta["path"]
+            if len(path) == 2:
+                section, field = path[0], path[1]
             else:
-                cls._failed[key] = meta
+                section, field = "__default__", path[0]
+
+            converter = _resolve_annotation(meta["type"])
+            resolver.register_type(section, field, converter)
+
+            if meta["default"] is not _Missing and (section, field) not in resolver:
+                resolver.inject_raw(section, field, meta["default"])
 
     @classmethod
     def register(cls, owner_cls, attr_name, config_value, annotation):
@@ -86,41 +109,11 @@ class ConfigDeclaration:
             "type": annotation,
         }
 
-    @classmethod
-    def ensure_config_path(
-            cls,
-            path: Sequence[str],
-            default: Any = _Missing,
-    ) -> bool:
-        if not path:
-            return False
-
-        current: Namespace = cls._get_config_namespace()
-
-        for part in path[:-1]:
-            if not isinstance(current, Namespace):
-                return False
-            if current.get(part, _Missing) is _Missing:
-                current[part] = Namespace()
-            current = current.get(part, _Missing)
-
-        leaf = path[-1]
-        if not isinstance(current, Namespace):
-            return False
-        if current.get(leaf, _Missing) is not _Missing:
-            return True
-        if default is not _Missing:
-            current[leaf] = default
-            return True
-        return False
-
-    # alias
     reg = register
 
 
 # noinspection SpellCheckingInspection
 class ConfigField(Generic[T]):
-    # 明确用 type[ConfigDeclaration]，避免 "type 上无该属性"
     _declaration_cls: Type[ConfigDeclaration] = ConfigDeclaration
 
     def __init__(self, *path: str, default=_Missing):
@@ -129,79 +122,50 @@ class ConfigField(Generic[T]):
         self._cached_value = _Missing
         self._cached_exception: Optional[Exception] = None
 
-    # ----- 配置根解析：优先拥有类，其次 Field 自身 -----
-
-    def _resolve_declaration(
-            self, owner: Optional[type] = None
-    ) -> Type[ConfigDeclaration]:
+    def _resolve_declaration(self, owner=None) -> Type[ConfigDeclaration]:
         if owner is not None:
             decl_cls = getattr(owner, "_config_declaration", None)
-            # isinstance + issubclass 收窄，TypeVar 也就对上了
             if isinstance(decl_cls, type) and issubclass(decl_cls, ConfigDeclaration):
                 return decl_cls
         return self._declaration_cls
 
-    def _get_namespace(self, owner: Optional[type] = None) -> Namespace:
-        decl_cls = self._resolve_declaration(owner)
-        # noinspection PyProtectedMember
-        return decl_cls._get_config_namespace()  # noqa: SLF001,protected-member
-
     def __get__(self, instance, owner) -> T:
         if instance is None:
             return cast(T, self)
-
         if self._cached_exception is not None:
             raise self._cached_exception
-
         if self._cached_value is not _Missing:
             return self._cached_value
 
-        value = self._get_namespace(owner)
-        for part in self._path:
-            if not isinstance(value, Namespace):
-                exc = self._build_error()
-                self._cached_exception = exc
-                raise exc
-            value = value.get(part, _Missing)
-            if value is _Missing:
-                if self._default is not _Missing:
-                    return self._default
-                exc = self._build_error()
-                self._cached_exception = exc
-                raise exc
+        resolver = get_config().resolver
+        section, key = self._split_path()
+        try:
+            value = resolver.get_typed(section, key)
+        except KeyError:
+            if self._default is not _Missing:
+                return self._default
+            exc = self._build_error()
+            self._cached_exception = exc
+            raise exc
 
         self._cached_value = value
         return value
 
     def __set__(self, instance, value):
-        owner = type(instance) if instance is not None else None
-        current: Namespace = self._get_namespace(owner)
-
-        for part in self._path[:-1]:
-            if not isinstance(current, Namespace):
-                raise TypeError(
-                    f"Cannot set config value at path {self._path}: "
-                    f"intermediate node '{part}' is not a Namespace"
-                )
-            if current.get(part, _Missing) is _Missing:
-                current[part] = Namespace()
-            current = current[part]
-
-        leaf = self._path[-1]
-        if not isinstance(current, Namespace):
-            raise TypeError(
-                f"Cannot set config value at path {self._path}: "
-                f"leaf parent is not a Namespace"
-            )
-        current[leaf] = value
-
+        resolver = get_config().resolver
+        section, key = self._split_path()
+        resolver.set(section, key, value)
         self._cached_value = _Missing
         self._cached_exception = None
+
+    def _split_path(self) -> tuple[str, str]:
+        if len(self._path) == 2:
+            return self._path[0], self._path[1]
+        return "__default__", self._path[0]
 
     def __set_name__(self, owner: type, name: str):
         annotation = owner.__annotations__.get(name, None)
         decl_cls = self._resolve_declaration(owner)
-        # noinspection PyProtectedMember  # noqa: SLF001
         decl_cls.register(owner, name, self, annotation)
 
     @property
@@ -222,11 +186,72 @@ class ConfigField(Generic[T]):
             raise ValueError(f"name '{path_str}' is not defined")
         return self._default
 
-# # 类装饰器
-# def register_config(cls):
-#     annotations = cls.__dict__.get('__annotations__', {})
-#     for attr_name, value in cls.__dict__.items():
-#         if isinstance(value, ConfigValue):
-#             annotation = annotations.get(attr_name, None)
-#             ConfigService.register(cls, attr_name, value, annotation)
-#     return cls
+
+def build_type_map_and_defaults(declaration) -> tuple[dict, dict]:
+    """从 Declaration.registry 构建 type_map / defaults。
+
+    静态配置已改走 Resolver，不再用它。
+    动态 preference 仍走 TypedConfigParser，用它准备 parser 输入。
+    """
+    from albuswall.configue.utils.deep_merge import deep_merge_dicts
+
+    type_map: dict[str, dict] = {}
+    defaults: dict[str, dict] = {}
+
+    for meta in declaration.registry.values():
+        path = meta["path"]
+        if len(path) != 2:
+            continue
+        section, field = path
+        converter = _resolve_annotation(meta["type"])  # 本模块函数
+        type_map.setdefault(section, {})[field] = converter
+        if meta["default"] is not _Missing:  # 本模块 _Missing
+            defaults.setdefault(section, {})[field] = meta["default"]
+
+    for meta in declaration.registry.values():
+        path = meta["path"]
+        if len(path) != 1:
+            continue
+        field = path[0]
+        converter = _resolve_annotation(meta["type"])
+        default = meta["default"]
+
+        is_dict_type = (
+                converter is dict
+                or (hasattr(converter, "__origin__") and converter.__origin__ is dict)
+                or isinstance(default, dict)
+        )
+        if is_dict_type:
+            section = field
+            if default is not _Missing and isinstance(default, dict):
+                existing = defaults.get(section, {})
+                defaults[section] = deep_merge_dicts(default, existing)
+            continue
+
+        type_map.setdefault("__default__", {})[field] = converter
+        if default is not _Missing:
+            defaults.setdefault("__default__", {})[field] = default
+
+    return type_map, defaults
+
+
+def promote_default_section(config_dict: dict) -> dict:
+    """把 __default__ 节提升到顶层。"""
+    from albuswall.configue.utils.deep_merge import deep_merge_dicts
+    if "__default__" in config_dict:
+        default_section = config_dict.pop("__default__")
+        return deep_merge_dicts(config_dict, default_section)
+    return config_dict
+
+
+def needs_default_section(file: Path) -> bool:
+    """文件第一个有效行不是节头时返回 True。"""
+    if not file.exists():
+        return False
+    with file.open("r", encoding="utf-8-sig") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", ";")):
+                continue
+            return not stripped.startswith("[")
+    return False

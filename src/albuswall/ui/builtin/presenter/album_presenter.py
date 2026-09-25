@@ -8,6 +8,8 @@ from logging import getLogger
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from PySide6.QtCore import QObject, Signal
+
 import albuswall
 from albuswall.log import TRACE, Logger
 from albuswall.dto.album import Album
@@ -195,14 +197,17 @@ class PreferenceConfig:
         return self._resolve(self.search_icon)
 
 
-class AlbumPresenter:
+class AlbumPresenter(QObject):
     """负责将 Album DTO 的数据呈现在标题栏上。"""
+    album_changed = Signal(Album)
 
     def __init__(
             self,
             title_bar: "TitleBar",
-            view_service: "ViewService"
+            view_service: "ViewService",
+            parent=None
     ):
+        super().__init__(parent=parent)
         self._title_bar = title_bar
         self._view_service = view_service
         self._config = PreferenceConfig()
@@ -213,6 +218,7 @@ class AlbumPresenter:
     def setup(self, container):
         self._load_default_album()
         self.refresh()
+        self.album_changed.emit(self._current_album)
         _logger.debug(
             "view_service=%r module=%s",
             self._view_service, type(self._view_service).__module__)
@@ -227,6 +233,7 @@ class AlbumPresenter:
     def set_album(self, album: Album) -> None:
         self._current_album = album
         self._title_bar.set_vo(self._build_vo(album))
+        self.album_changed.emit(album)
 
     def _load_default_album(self) -> None:
         """决定初始展示的专辑。

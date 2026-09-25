@@ -30,6 +30,7 @@ class HeadlessMainLoop(MainLoop):
     def __init__(self) -> None:
         self._stop = threading.Event()
         self._signals_installed = False
+        self._exit_code: int = 0
 
     def _install_signals(self) -> None:
         if self._signals_installed:
@@ -43,8 +44,10 @@ class HeadlessMainLoop(MainLoop):
             except (ValueError, OSError):
                 pass
 
-    def _on_signal(self, signum, frame) -> None:  # noqa: ARG002
+    def _on_signal(self, signum, frame) -> None:
         logger.debug("HeadlessMainLoop received signal %s", signum)
+        # 128 + signum 是 Unix shell 约定：SIGINT=2 -> 130, SIGTERM=15 -> 143
+        self._exit_code = 128 + signum
         self._stop.set()
 
     def run(self) -> int:
@@ -52,7 +55,7 @@ class HeadlessMainLoop(MainLoop):
         logger.debug("HeadlessMainLoop entering wait().")
         self._stop.wait()
         logger.debug("HeadlessMainLoop exited.")
-        return 0
+        return self._exit_code
 
     def quit(self) -> None:
         self._stop.set()

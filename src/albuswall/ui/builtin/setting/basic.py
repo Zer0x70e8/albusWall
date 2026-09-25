@@ -38,12 +38,14 @@ class Setting(QWidget):
 
     def __init__(self,
                  parent=None,
+                 target=None,
                  auto_setup=True,
                  as_independent=False
                  ):
         super().__init__(parent)
         self._as_independent = as_independent
         self._enable_close_button = False
+        self._blur_target = target
 
         self._setup(parent)
         auto_set_object_names(
@@ -93,7 +95,8 @@ class Setting(QWidget):
         self.close_button = QPushButton("\u2715", self)
 
         # 背景
-        self.background = BlurLabel(self)
+        self.background = BlurLabel(
+            parent=self, target=self._blur_target)
 
         # 分割器
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -101,8 +104,10 @@ class Setting(QWidget):
         # ---- 左侧导航区域 ----
         self.nav_scroll = QScrollArea()
         self.nav_scroll.setWidgetResizable(True)
-        self.nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.nav_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.nav_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         # 左侧内部容器（将来放置跳转按钮）
         self.nav_widget = QWidget()

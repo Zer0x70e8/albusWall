@@ -1,15 +1,1026 @@
-QStackedWidget#QStackedWidgetOverlayStackedWidget {
+/* ============================================================================
+ *  AlbusWall Builtin UI  ·  Qt Style Sheet
+ * ============================================================================
+ *  设计语言：Big Capsule（大胶囊）
+ *    —— 所有可交互控件统一为「胶囊 / 圆形」轮廓，圆角恒等于高度的一半。
+ *
+ *  尺寸阶梯（Pill Scale）
+ *    ┌  XS   24px   圆角 12px   ── 窗口动作按钮
+ *    ├  S    32px   圆角 16px   ── 页面内按钮 / 导航按钮 / 折叠分组
+ *    └  L    48px   圆角 24px   ── 标题栏工具按钮 / 搜索栏
+ *
+ *  字号阶梯
+ *    —— 一律 1em，由 QWidget 基准继承，禁止在子组件里硬写 px 字号。
+ * ============================================================================ */
+
+
+/* ============================================================================
+ *  0. GLOBAL BASE  ·  全局基准
+ * ============================================================================ */
+
+QWidget {
+    font-size: 1em;                            /* 全局字号基准，子组件统一继承 */
+    color: rgba(240, 240, 240, 0.92);
+    selection-background-color: rgba(0, 122, 255, 0.45);
+    selection-color: #FFFFFF;
+}
+
+
+/* ============================================================================
+ *  1. REUSABLE COMPONENTS  ·  通用组件（所有界面共享）
+ * ============================================================================ */
+
+/* ---- 1.1 BlurLabel ---- */
+BlurLabel {
+    background: transparent;
+    border: none;
+    qproperty-blur_radius: 30.0;
+}
+
+/* ---- 1.2 CollapsibleGroupBox：可折叠胶囊卡片 ---- */
+CollapsibleGroupBox {
+    background: rgba(96, 96, 96, 0.22);
+    border: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 16px;
+    margin-top: 1.6em;
+    padding: 8px 4px 4px 4px;
+    font-weight: bold;
+
+    qproperty-simble_on_extend: "↓";
+    qproperty-simble_on_collapsible: "→";
+}
+
+CollapsibleGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 20px;
+    top: 0.6em;
+    background: rgba(40, 40, 40, 0.0);
+    padding: 0 8px;
+}
+
+CollapsibleGroupBox[collapsed="true"] {
+    background: transparent;
+    border: none;
+    border-top: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 0;
+    margin-top: 1.6em;
+    margin-left: 16px;
+    margin-right: 16px;
+    padding: 0;
+}
+
+CollapsibleGroupBox[collapsed="true"]::title {
+    background: palette(window);
+    padding: 0 8px;
+}
+
+
+/* ============================================================================
+ *  2. MAIN WINDOW  ·  主窗口
+ * ============================================================================ */
+
+Window {
+    border-radius: 12px;
+}
+
+#WindowBackground {
+    qproperty-blur_radius: 100.0;
+}
+
+#WindowTarget {
+    background: transparent;
+}
+
+#Content {
+    background: transparent;                   /* 不加这个会看不到背景 */
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.1  Window Action Buttons  ·  窗口动作按钮（XS · 24px）
+ * --------------------------------------------------------------------------- */
+
+.CloseButton,
+.MinimizeButton,
+.MaximizeButton,
+.PinButton,
+.FoldButton {
+    min-width:  24px;  max-width:  24px;
+    min-height: 24px;  max-height: 24px;
+
+    padding: 0;
+    border: none;
+    border-radius: 12px;                       /* 24 / 2 = 12 → 正圆 */
+
+    font-size: 1em;
+    color: transparent;                        /* 默认隐藏符号，hover 时浮出 */
+    background-color: #C8C8CC;
+}
+
+/* —— 关闭：macOS 红 —— */
+.CloseButton {
+    background-color: #FF5F57;
+}
+.CloseButton:hover {
+    background-color: #FF7B74;
+    color: #7A1310;
+}
+.CloseButton:pressed {
+    background-color: #DC443C;
+    color: #5C0E0B;
+}
+
+/* —— 最小化：macOS 黄 —— */
+.MinimizeButton {
+    background-color: #FEBC2E;
+}
+.MinimizeButton:hover {
+    background-color: #FFCB57;
+    color: #7A5606;
+}
+.MinimizeButton:pressed {
+    background-color: #D89E1C;
+    color: #5C4004;
+}
+
+/* —— 最大化：macOS 绿 —— */
+.MaximizeButton {
+    background-color: #28C840;
+}
+.MaximizeButton:hover {
+    background-color: #4ED65F;
+    color: #0A5A17;
+}
+.MaximizeButton:pressed {
+    background-color: #1EA532;
+    color: #07420F;
+}
+
+/* —— 固定：Apple Blue —— */
+.PinButton {
+    background-color: #007AFF;
+}
+.PinButton:hover {
+    background-color: #3395FF;
+    color: #002A57;
+}
+.PinButton:pressed {
+    background-color: #0062CC;
+    color: #001F3F;
+}
+.PinButton:checked {
+    background-color: #0A84FF;
+    color: #FFFFFF;
+}
+.PinButton:checked:hover {
+    background-color: #3D9BFF;
+}
+
+/* —— 折叠：Apple Gray —— */
+.FoldButton {
+    background-color: #8E8E93;
+}
+.FoldButton:hover {
+    background-color: #A5A5AA;
+    color: #2C2C2E;
+}
+.FoldButton:pressed {
+    background-color: #6E6E73;
+    color: #1C1C1E;
+}
+
+/* —— 键盘焦点：统一外发光 —— */
+.CloseButton:focus,
+.MinimizeButton:focus,
+.MaximizeButton:focus,
+.PinButton:focus,
+.FoldButton:focus {
+    outline: none;
+    border: 2px solid rgba(0, 122, 255, 0.65);
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.2  Window Menu  ·  窗口菜单
+ * --------------------------------------------------------------------------- */
+
+#WindowMenu {
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(128, 128, 128, 0.80),
+        stop:0.8  rgba(192, 192, 192, 0.50),
+        stop:1    rgba(255, 255, 255, 0.10)
+    );
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.3  TitleBar Labels  ·  标题栏文本与封面图标
+ * --------------------------------------------------------------------------- */
+
+/* 主标题：相册名称，字号最大，加粗提亮 */
+#TitleBarTitleLabel {
+    font-size: 36px;
+    font-weight: bold;
+    color: rgba(255, 255, 255, 1);
+    background: transparent;
+}
+
+/* 副标题：略大于普通文本，弱化颜色 */
+#TitleBarSubTitle {
+    font-size: 12px;
+    color: rgba(200, 200, 200, 0.85);
+    background: transparent;
+}
+
+/* 相册封面图标：比主标题更大，保持透明背景与胶囊圆角 */
+#TitleBarIconLabel {
+    font-size: 3.5em;
+    min-width: 3.5em;
+    min-height: 3.5em;
+    border-radius: 1.75em;
+    background: transparent;
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.4  TitleBar Tool Buttons  ·  标题栏工具按钮（L · 48px）
+ * --------------------------------------------------------------------------- */
+
+#TitleBarExtraButton::menu-indicator {
+    image: none;
+    width: 0px;
+}
+
+#TitleBarAlbumButton,
+#TitleBarSearchButton,
+#TitleBarExtraButton {
+    min-width:  48px;  max-width:  48px;
+    min-height: 48px;  max-height: 48px;
+
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 24px;                       /* 48 / 2 = 24 → 正圆 */
+
+    background-color: rgba(96, 96, 96, 0.55);
+    color: rgba(240, 240, 240, 0.92);
+
+    font-size: 1em;
+    icon-size: 3em;                           /* 图标取按钮一半，视觉协调 */
+}
+
+#TitleBarAlbumButton:hover,
+#TitleBarSearchButton:hover,
+#TitleBarExtraButton:hover {
+    background-color: rgba(128, 128, 128, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.30);
+}
+
+#TitleBarAlbumButton:pressed,
+#TitleBarSearchButton:pressed,
+#TitleBarExtraButton:pressed {
+    background-color: rgba(72, 72, 72, 0.90);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+#TitleBarAlbumButton:focus,
+#TitleBarSearchButton:focus,
+#TitleBarExtraButton:focus {
+    outline: none;
+    border: 2px solid rgba(0, 122, 255, 0.65);
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.5  Floating Search Bar  ·  浮动搜索栏（L · 48px）
+ * --------------------------------------------------------------------------- */
+
+/* —— 容器：大胶囊 —— */
+#TitleBarFloatingSearchBar {
+    min-height: 48px;
+    max-height: 48px;
+
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 24px;
+
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(128, 128, 128, 0.80),
+        stop:0.8  rgba(192, 192, 192, 0.50),
+        stop:1    rgba(255, 255, 255, 0.10)
+    );
+}
+
+#TitleBarFloatingSearchBar:hover {
+    border: 1px solid rgba(255, 255, 255, 0.30);
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(144, 144, 144, 0.85),
+        stop:0.8  rgba(204, 204, 204, 0.55),
+        stop:1    rgba(255, 255, 255, 0.14)
+    );
+}
+
+/* —— 搜索输入框 —— */
+#TitleBarLineEdit {
+    padding: 4px 12px;
+    border: none;
+    background: transparent;
+    color: rgba(240, 240, 240, 0.92);
+    font-size: 1em;
+}
+
+#TitleBarLineEdit:focus {
+    color: #FFFFFF;
+}
+
+/* —— 搜索选项下拉 —— */
+#TitleBarOptionCombo {
+    min-width: 72px;
+    padding: 4px 12px;
+    border: none;
+    border-left: 1px solid rgba(255, 255, 255, 0.18);
+    background-color: transparent;
+    color: rgba(200, 200, 200, 0.90);
+    font-size: 1em;
+}
+
+#TitleBarOptionCombo:hover {
+    color: #FFFFFF;
+}
+
+#TitleBarOptionCombo::drop-down {
+    border: none;
+    width: 20px;
+}
+
+#TitleBarOptionCombo QAbstractItemView {
+    background-color: rgba(60, 60, 60, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 12px;
+    outline: none;
+    selection-background-color: rgba(0, 122, 255, 0.55);
+    selection-color: #FFFFFF;
+}
+
+/* —— 搜索执行 / 入口按钮（统一为同一 objectName） —— */
+#TitleBarSearchBtn {
+    min-width:  48px;  max-width:  48px;
+    min-height: 48px;  max-height: 48px;
+
+    padding: 0;
+    border: none;
+    border-radius: 24px;
+
+    background: transparent;
+    color: rgba(240, 240, 240, 0.85);
+    font-size: 1em;
+}
+
+#TitleBarSearchBtn:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+    color: #FFFFFF;
+}
+
+#TitleBarSearchBtn:pressed {
+    background-color: rgba(255, 255, 255, 0.22);
+}
+
+/* —— 搜索关闭按钮 —— */
+#TitleBarCloseBtn {
+    min-width:  48px;  max-width:  48px;
+    min-height: 48px;  max-height: 48px;
+
+    padding: 0;
+    border: none;
+    border-radius: 24px;
+
+    background: transparent;
+    color: rgba(200, 200, 200, 0.85);
+    font-size: 1em;
+}
+
+#TitleBarCloseBtn:hover {
+    background-color: rgba(255, 96, 96, 0.35);
+    color: #FFFFFF;
+}
+
+#TitleBarCloseBtn:pressed {
+    background-color: rgba(220, 68, 60, 0.55);
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.6  Overlay  ·  覆盖层（相册 / 采集源）
+ * --------------------------------------------------------------------------- */
+
+QStackedWidget#WindowOverlay {
     background: transparent;
     border: none;
 }
 
-.BlurLabel {
+/* —— Album —— */
+#AlbumScrollArea,
+#AlbumScrollArea > QWidget > QWidget,
+#AlbumMoreView {
     background: transparent;
     border: none;
 }
 
-#WindowContent {
-    background: transparent;
-    qproperty-placeholderColor: grey;
-    qproperty-border_radius: 16;
+#AlbumCloseButton,
+#IngestSourceCloseButton,
+#SettingCloseButton,
+QPushButton#DetailCloseButton {
+    min-width: 0;
+    /* max-width: 16777211;                       /* 不用这个值会触发警告 */
+
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0 16px;
+
+    border: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 16px;
+
+    background-color: rgba(96, 96, 96, 0.22);
+    color: rgba(192, 192, 192, 0.85);
+    font-size: 1em;
 }
+
+#AlbumCloseButton:hover,
+#IngestSourceCloseButton:hover,
+#SettingCloseButton:hover,
+QPushButton#DetailCloseButton:hover {
+    background-color: rgba(255, 96, 96, 0.50);
+    border: 1px solid rgba(255, 96, 96, 0.60);
+    color: #FFFFFF;
+}
+
+#AlbumCloseButton:pressed,
+#IngestSourceCloseButton:pressed,
+#SettingCloseButton:pressed,
+QPushButton#DetailCloseButton:pressed {
+    background-color: rgba(200, 64, 64, 0.65);
+    color: rgba(255, 255, 255, 0.92);
+}
+
+#AlbumCloseButton:focus,
+#IngestSourceCloseButton:focus,
+#SettingCloseButton:focus,
+QPushButton#DetailCloseButton:focus {
+    outline: none;
+    border: 2px solid rgba(0, 122, 255, 0.65);
+}
+
+/* —— 相册工具按钮：成对胶囊（左圆 / 右圆） —— */
+#AlbumAddButton,
+#AlbumEditButton {
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0 16px;
+
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(96, 96, 96, 0.80),
+        stop:0.8  rgba(128, 128, 128, 0.50),
+        stop:1    rgba(196, 196, 196, 0.10)
+    );
+    color: rgba(200, 200, 200, 0.85);
+    font-size: 1em;
+}
+
+#AlbumAddButton:hover,
+#AlbumEditButton:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(96, 96, 96, 0.85),
+        stop:0.8  rgba(192, 192, 192, 0.55),
+        stop:1    rgba(255, 255, 255, 0.14)
+    );
+    color: #FFFFFF;
+}
+
+#AlbumAddButton {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    border-top-right-radius: 16px;
+    border-bottom-right-radius: 16px;
+}
+
+#AlbumEditButton {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-top-left-radius: 16px;
+    border-bottom-left-radius: 16px;
+}
+
+/* —— 相册悬浮入口 —— */
+#AlbumHover {
+    border: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 16px;
+    background-color: rgba(96, 96, 96, 0.22);
+    color: rgba(192, 192, 192, 0.85);
+    font-size: 1em;
+}
+
+#AlbumHover:hover {
+    background-color: rgba(96, 96, 96, 0.50);
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    color: #FFFFFF;
+}
+
+/* —— 相册内容视图 / 采集源视图 —— */
+#AlbumView,
+#IngestSourceView {
+    background-color: transparent;
+    border-top: 1px solid rgba(80, 80, 80, 0.70);
+    border-bottom-left-radius: 16px;
+    border-bottom-right-radius: 16px;
+}
+
+#AlbumView:hover,
+#IngestSourceView:hover {
+    border-top: 1px solid rgba(160, 160, 160, 0.85);
+}
+
+/* ---------------------------------------------------------------------------
+ *  2.7  IngestSource  ·  采集源界面（对齐 Album 胶囊风格）
+ * --------------------------------------------------------------------------- */
+
+.IngestSource {}
+
+/* —— 滚动区域透明（对齐 #AlbumScrollArea） —— */
+#IngestSourceScrollArea,
+#IngestSourceScrollArea > QWidget > QWidget {
+    background: transparent;
+    border: none;
+}
+
+/* —— 右侧详情区三层容器透明 —— */
+#IngestSourceDetailContainer,
+#IngestSourceDetailWidgetContainer,
+#IngestSourceDetailWidget {
+    background: transparent;
+    border: none;
+}
+
+/* —— 顶部 Add / 应用 Apply：与 AlbumAddButton 同款渐变胶囊 —— */
+#IngestSourceAddButton,
+#IngestSourceApplyButton {
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0 16px;
+
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 16px;
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(96, 96, 96, 0.80),
+        stop:0.8  rgba(128, 128, 128, 0.50),
+        stop:1    rgba(196, 196, 196, 0.10)
+    );
+    color: rgba(200, 200, 200, 0.85);
+    font-size: 1em;
+}
+
+#IngestSourceAddButton:hover,
+#IngestSourceApplyButton:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(96, 96, 96, 0.85),
+        stop:0.8  rgba(192, 192, 192, 0.55),
+        stop:1    rgba(255, 255, 255, 0.14)
+    );
+    border: 1px solid rgba(255, 255, 255, 0.30);
+    color: #FFFFFF;
+}
+
+#IngestSourceAddButton:pressed,
+#IngestSourceApplyButton:pressed {
+    background: rgba(72, 72, 72, 0.90);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+#IngestSourceAddButton:focus,
+#IngestSourceApplyButton:focus {
+    outline: none;
+    border: 2px solid rgba(0, 122, 255, 0.65);
+}
+
+/* —— 详情面板里的关闭按钮（XS · 24px 正圆，对齐窗口动作按钮风格） —— */
+#IngestSourceCloseDetailBtn {
+    min-width:  24px;  max-width:  24px;
+    min-height: 24px;  max-height: 24px;
+
+    padding: 0;
+    border: none;
+    border-radius: 12px;
+
+    background-color: rgba(255, 95, 87, 0.60);
+    color: transparent;
+    font-size: 1em;
+}
+
+#IngestSourceCloseDetailBtn:hover {
+    background-color: #FF7B74;
+    color: #7A1310;
+}
+
+#IngestSourceCloseDetailBtn:pressed {
+    background-color: #DC443C;
+    color: #5C0E0B;
+}
+
+#IngestSourceCloseDetailBtn:focus {
+    outline: none;
+    border: 2px solid rgba(0, 122, 255, 0.65);
+}
+
+/* ============================================================================
+ *  2.7  IngestSource  ·  采集源界面（对齐 Album 风格）
+ * ============================================================================ */
+
+/* ---------------------------------------------------------------------------
+ *  2.7.1  外层卡片  ·  大圆角 + 灰色半透明
+ * --------------------------------------------------------------------------- */
+
+#IngestSource {
+    background-color: rgba(96, 96, 96, 0.22);
+    border: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 16px;
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.7.2  顶栏按钮  ·  与 AlbumAddButton 同款渐变胶囊（S · 32px）
+ * --------------------------------------------------------------------------- */
+
+#IngestSourceAddButton,
+#IngestSourceApplyButton {
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0 16px;
+
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 16px;
+
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(96, 96, 96, 0.80),
+        stop:0.8  rgba(128, 128, 128, 0.50),
+        stop:1    rgba(196, 196, 196, 0.10)
+    );
+    color: rgba(200, 200, 200, 0.85);
+    font-size: 1em;
+}
+
+#IngestSourceAddButton:hover,
+#IngestSourceApplyButton:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(96, 96, 96, 0.85),
+        stop:0.8  rgba(192, 192, 192, 0.55),
+        stop:1    rgba(255, 255, 255, 0.14)
+    );
+    border: 1px solid rgba(255, 255, 255, 0.30);
+    color: #FFFFFF;
+}
+
+#IngestSourceAddButton:pressed,
+#IngestSourceApplyButton:pressed {
+    background: rgba(72, 72, 72, 0.90);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+#IngestSourceAddButton:focus,
+#IngestSourceApplyButton:focus {
+    outline: none;
+    border: 2px solid rgba(0, 122, 255, 0.65);
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.7.3  内部全部透明  ·  让背景只由外层 #IngestSource 提供
+ * --------------------------------------------------------------------------- */
+
+#IngestSource QSplitter,
+#IngestSourceDetailContainer,
+#IngestSourceDetailWidgetContainer,
+#IngestSourceDetailWidget,
+#IngestSourceScrollArea,
+#IngestSourceScrollArea > QWidget > QWidget {
+    background: transparent;
+    border: none;
+}
+
+/* 覆盖掉 2.6 节里 #IngestSourceView 那条共享规则带来的边框/圆角 */
+#IngestSourceView {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+}
+
+#IngestSourceView:hover {
+    border: none;
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.7.4  Splitter 分隔线  ·  与 SettingMain 一致
+ * --------------------------------------------------------------------------- */
+
+#IngestSource QSplitter::handle {
+    width: 2px;
+    margin: 8px 0;
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0    rgba(80, 80, 80, 0),
+        stop:0.5  rgba(80, 80, 80, 0.70),
+        stop:1    rgba(80, 80, 80, 0)
+    );
+}
+
+#IngestSource QSplitter::handle:hover {
+    background: rgba(0, 122, 255, 0.65);
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.7.5  详情面板关闭按钮  ·  XS 正圆（与 CloseButton 呼应）
+ * --------------------------------------------------------------------------- */
+
+#IngestSourceCloseDetailBtn {
+    min-width:  24px;  max-width:  24px;
+    min-height: 24px;  max-height: 24px;
+
+    padding: 0;
+    border: none;
+    border-radius: 12px;
+
+    background-color: rgba(255, 95, 87, 0.60);
+    color: transparent;
+    font-size: 1em;
+}
+
+#IngestSourceCloseDetailBtn:hover {
+    background-color: #FF7B74;
+    color: #7A1310;
+}
+
+#IngestSourceCloseDetailBtn:pressed {
+    background-color: #DC443C;
+    color: #5C0E0B;
+}
+
+#IngestSourceCloseDetailBtn:focus {
+    outline: none;
+    border: 2px solid rgba(0, 122, 255, 0.65);
+}
+
+
+/* ============================================================================
+ *  3. SETTING  ·  设置界面
+ * ============================================================================ */
+
+/* ---------------------------------------------------------------------------
+ *  3.1  Setting Main Panel  ·  设置主面板
+ * --------------------------------------------------------------------------- */
+
+#SettingMain {
+    border: 1px solid rgba(80, 80, 80, 0.60);
+    border-radius: 16px;
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(128, 128, 128, 0.85),
+        stop:0.8  rgba(160, 160, 160, 0.65),
+        stop:1    rgba(192, 192, 192, 0.45)
+    );
+}
+
+/* 背景层（BlurLabel）不绘制任何东西 */
+#SettingMain BlurLabel {
+    background: transparent;
+    border: none;
+}
+
+/* —— 页面内关闭按钮（直接子级 QPushButton） —— */
+#SettingMain > QPushButton {
+    min-width: 0;
+    /* max-width: 16777211;                       /* 不用这个值会触发警告 */
+
+    min-height: 32px;
+    max-height: 32px;
+    margin: 6px 8px 0 8px;
+    padding: 0 16px;
+
+    border: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 16px;
+
+    background-color: rgba(96, 96, 96, 0.22);
+    color: rgba(192, 192, 192, 0.85);
+    font-size: 1em;
+}
+
+#SettingMain > QPushButton:hover {
+    background-color: rgba(255, 96, 96, 0.50);
+    border: 1px solid rgba(255, 96, 96, 0.60);
+    color: #FFFFFF;
+}
+
+#SettingMain > QPushButton:pressed {
+    background-color: rgba(200, 64, 64, 0.65);
+    color: rgba(255, 255, 255, 0.92);
+}
+
+#SettingMain > QPushButton:focus {
+    outline: none;
+    border: 2px solid rgba(0, 122, 255, 0.65);
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  3.2  Splitter  ·  左右分栏分隔条
+ * --------------------------------------------------------------------------- */
+
+#SettingMain QSplitter {
+    background: transparent;
+}
+
+#SettingMain QSplitter::handle {
+    width: 2px;
+    margin: 8px 0;
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0    rgba(80, 80, 80, 0),
+        stop:0.5  rgba(80, 80, 80, 0.70),
+        stop:1    rgba(80, 80, 80, 0)
+    );
+}
+
+#SettingMain QSplitter::handle:hover {
+    background: rgba(0, 122, 255, 0.65);
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  3.3  Scroll Areas  ·  滚动区域（左导航 + 右内容）
+ * --------------------------------------------------------------------------- */
+
+#SettingMain QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+#SettingMain QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  3.4  Nav Jump Buttons  ·  左侧导航按钮（S · 32px）
+ * --------------------------------------------------------------------------- */
+
+#SettingMain QPushButton[objectName$="JumpButton"] {
+    min-width: 0;
+    /* max-width: 16777211;                       /* 不用这个值会触发警告 */
+
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0 14px;
+    margin: 2px 6px;
+
+    border: 1px solid transparent;
+    border-radius: 16px;
+
+    background: transparent;
+    color: rgba(240, 240, 240, 0.85);
+    font-size: 1em;
+    text-align: left;
+    icon-size: 16px;
+}
+
+#SettingMain QPushButton[objectName$="JumpButton"]:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #FFFFFF;
+}
+
+#SettingMain QPushButton[objectName$="JumpButton"]:pressed,
+#SettingMain QPushButton[objectName$="JumpButton"]:checked {
+    background-color: rgba(0, 122, 255, 0.55);
+    border: 1px solid rgba(0, 122, 255, 0.80);
+    color: #FFFFFF;
+}
+
+#SettingMain QPushButton[objectName$="JumpButton"]:focus {
+    outline: none;
+    border: 1px solid rgba(0, 122, 255, 0.85);
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  3.5  Scroll Bars  ·  细窄半透明滚动条
+ * --------------------------------------------------------------------------- */
+
+#SettingMain QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 4px 2px 4px 0;
+    border: none;
+}
+
+#SettingMain QScrollBar::handle:vertical {
+    background: rgba(255, 255, 255, 0.35);
+    min-height: 24px;
+    border-radius: 4px;
+}
+
+#SettingMain QScrollBar::handle:vertical:hover {
+    background: rgba(255, 255, 255, 0.60);
+}
+
+#SettingMain QScrollBar::handle:vertical:pressed {
+    background: rgba(0, 122, 255, 0.75);
+}
+
+#SettingMain QScrollBar::add-line:vertical,
+#SettingMain QScrollBar::sub-line:vertical {
+    height: 0;
+    background: transparent;
+}
+
+#SettingMain QScrollBar::add-page:vertical,
+#SettingMain QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+
+#SettingMain QScrollBar:horizontal {
+    background: transparent;
+    height: 8px;
+    margin: 0 4px 2px 4px;
+    border: none;
+}
+
+#SettingMain QScrollBar::handle:horizontal {
+    background: rgba(255, 255, 255, 0.35);
+    min-width: 24px;
+    border-radius: 4px;
+}
+
+#SettingMain QScrollBar::handle:horizontal:hover {
+    background: rgba(255, 255, 255, 0.60);
+}
+
+#SettingMain QScrollBar::add-line:horizontal,
+#SettingMain QScrollBar::sub-line:horizontal {
+    width: 0;
+    background: transparent;
+}
+
+#SettingMain QScrollBar::add-page:horizontal,
+#SettingMain QScrollBar::sub-page:horizontal {
+    background: transparent;
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  3.6  Collapsible Group Box（设置内）  ·  折叠分组（S · 32px）
+ * --------------------------------------------------------------------------- */
+
+#SettingMain CollapsibleGroupBox {
+    background: rgba(96, 96, 96, 0.22);
+    border: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 16px;
+    margin-top: 1.6em;
+    font-weight: bold;
+    color: rgba(240, 240, 240, 0.90);
+}
+
+#SettingMain CollapsibleGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 6px;
+    background: rgba(40, 40, 40, 0.0);
+    color: rgba(240, 240, 240, 0.95);
+}
+
+#SettingMain CollapsibleGroupBox[collapsed="true"] {
+    background: transparent;
+    border: none;
+    border-top: 1px solid rgba(80, 80, 80, 0.70);
+    margin-left: 16px;
+    margin-right: 16px;
+    border-radius: 0;
+}
+
+/* ======== detail ======== */
+/*
+QPushButton#DetailCloseButton {
+    border: none; border-radius: 16px;
+    color: #f2f2f2; font-size: 15px;
+    background: rgba(255, 255, 255, 0.12);
+}
+QPushButton#DetailCloseButton:hover   { background: rgba(255,255,255,0.26); }
+QPushButton#DetailCloseButton:pressed { background: rgba(255,255,255,0.36); }
+*/

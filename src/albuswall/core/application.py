@@ -3,7 +3,44 @@
 
 import sys
 import threading
+import traceback
 from typing import TYPE_CHECKING, Callable, Optional, Any
+
+# 引导期异常兜底（必须放在任何可能失败的代码之前）
+# 目的：从 import 那一刻起，保证未捕获异常一定写到 stderr，
+#       即使后面 _Application 构造失败也不会静默丢失。
+
+_origin_sys_excepthook = sys.excepthook
+_origin_threading_excepthook = threading.excepthook
+
+
+def _bootstrap_sys_hook(exc_type, exc_value, exc_tb):
+    # noinspection broad-exception
+    try:
+        sys.stderr.write("[albuswall][bootstrap] uncaught exception:\n")
+        traceback.print_exception(exc_type, exc_value, exc_tb, file=sys.stderr)
+    except Exception:
+        # 兜底输出自身不能再抛
+        pass
+
+
+def _bootstrap_thread_hook(args):
+    # noinspection broad-exception
+    try:
+        sys.stderr.write("[albuswall][bootstrap] uncaught thread exception:\n")
+        traceback.print_exception(
+            args.exc_type, args.exc_value, args.exc_traceback, file=sys.stderr
+        )
+    except Exception:
+        pass
+
+
+sys.excepthook = _bootstrap_sys_hook
+threading.excepthook = _bootstrap_thread_hook
+
+# ============================================================
+# 正常导入
+# ============================================================
 
 from .bootstrap import Container
 from .main_loop import HeadlessMainLoop, MainLoop
@@ -45,12 +82,17 @@ class _Application:
         self.log_enable = False
 
         # 记住系统原始 hook，便于二次委托
-        self._origin_sys_excepthook = sys.excepthook
-        self._origin_threading_excepthook = threading.excepthook
+        # 注意：这里使用模块加载时捕获的原始 hook，
+        # 而不是当前（可能已被 _bootstrap_* 替换的）sys.excepthook，
+        # 否则二次委托会绕回引导钩子。
+        self._origin_sys_excepthook = _origin_sys_excepthook
+        self._origin_threading_excepthook = _origin_threading_excepthook
 
         # 内部真实 handler（通过 property 对外暴露，可随时替换）
-        self._handle_exception: ExceptionHandler = lambda *a: None
-        self._thread_exception: ThreadExceptionHandler = lambda *a: None
+        # 约定：返回 False 表示“我处理不了，请继续往下传”
+        # 默认就返回 False，等于默认走系统原始 hook（打印到 stderr）
+        self._handle_exception: ExceptionHandler = lambda *a: False
+        self._thread_exception: ThreadExceptionHandler = lambda *a: False
 
         self.setup()
 
@@ -122,8 +164,8 @@ class _Application:
             self._main_loop.quit()
 
     def setup(self):
-        self.container.reg("configue", lambda: self.configure)
-        self.container.reg("plugins", lambda: self.plugins)
+        self.container.reg("configue", lambda: self.configure, returns="Configue")
+        self.container.reg("plugins", lambda: self.plugins, returns=PluginManager)
 
         # 安装稳定的 wrapper：每次都从 self 读取当前 handler
         # noinspection broad-exception,none-function-assignment,unreachable-code,simplify-boolean-check
@@ -160,6 +202,9 @@ class _Application:
         sys.excepthook = _sys_hook
         threading.excepthook = _thread_hook
 
+        # # 标记：albuswall 已经接管异常钩子
+        # sys.stderr.write("[albuswall] exception hooks installed\n")
+
     def exec(self) -> int:
         # 1) boot：让容器跑 on_boot 钩子（mkdir 等）
         self.container.exec()
@@ -176,7 +221,16 @@ class _Application:
 
 class Application:
     """Interface."""
-    _object = _Application()
+    try:
+        _object = _Application()
+    except BaseException as _e:  # noqa: BLE001
+        sys.stderr.write(
+            "[albuswall][bootstrap] _Application() 构造失败，"
+            "Application 将不可用\n"
+        )
+        traceback.print_exception(type(_e), _e, _e.__traceback__, file=sys.stderr)
+        raise
+
     _instance = None
 
     def __new__(cls, *args, **kwargs):

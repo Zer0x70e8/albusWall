@@ -1,7 +1,7 @@
 #
 """"""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from .configue import Configue
 from .utils import (
@@ -10,9 +10,27 @@ from .utils import (
     parse_section_file,
 )
 
+T = TypeVar("T")
+
 if TYPE_CHECKING:
     from .bootstrap import setup_config
-    from .declaration import ConfigDeclaration, ConfigField, ConfigMeta, get_config
+    from .declaration import ConfigDeclaration, ConfigMeta, get_config
+
+
+    class ConfigField(Generic[T]):
+        """仅给类型检查器看的存根。
+
+        用法：
+            x = ConfigField[int]("a", "b")       # x: int
+            x = ConfigField("a", default=0)      # 由 default 推出 T=int
+            x: int = ConfigField("a")            # 由变量注解推出
+        """
+
+        def __new__(
+                cls,
+                *path: str,
+                default: T = ...,  # type: ignore[assignment]
+        ) -> T: ...  # type: ignore[misc]
 
 __all__ = [
     "Configue", "Namespace", "FrozenNamespace", "get_user_config_dir",

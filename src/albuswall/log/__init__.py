@@ -6,12 +6,16 @@ from typing import TYPE_CHECKING
 # from .bootstrap import setup_log
 from .common import TRACE
 from .type import Logger
+from .logger import getLogger
 
 if TYPE_CHECKING:
     from albuswall.core import Container
-    def setup_log(_: "Container"):...
 
-__all__ = ["TRACE", "Logger", "setup_log"]
+
+    def setup_log(_: "Container"): ...
+
+__all__ = ["TRACE", "Logger", "getLogger", "setup_log"]
+
 
 def __getattr__(name):
     if name == "setup_log":

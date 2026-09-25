@@ -2,9 +2,13 @@
 """"""
 
 from collections import OrderedDict
+from typing import TypeVar, Generic
+
+K = TypeVar("K")
+V = TypeVar("V")
 
 
-class LRUCache:
+class LRUCache(Generic[K, V]):
     """一个简单的 LRU 缓存，使用 OrderedDict 维护访问顺序。
 
     当缓存达到容量上限时，会自动淘汰最久未使用的条目。

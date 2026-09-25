@@ -38,10 +38,11 @@ class About(CollapsibleGroupBox):
         layout = QVBoxLayout(self.contentWidget())
 
         self.content_text_label = QLabel(self)
-        self.content_text_label.setText(f"""
-            \t{'\n\t'.join(
+        self.content_text_label.setText(
+            "\t" + '\n\t'.join(
             cast(str, __about_doc__).split("\n")
-        )}
+        ) +
+            f"""
             \ttitle: {__title__}
             \tauthor: {__author__}
             \tversion: {__version__}

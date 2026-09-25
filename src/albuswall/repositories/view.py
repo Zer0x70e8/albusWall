@@ -149,8 +149,115 @@ class ViewRepository(BaseRepository):
         file_path = Path(row["file_path"])
         source_path = row["source_path"]
 
-        # # file_path 已为绝对路径，或没有可用的源路径起点时，直接返回
-        # if file_path.is_absolute() or not source_path:
-        #     return str(file_path
+        # file_path 已为绝对路径，或没有可用的源路径起点时，直接返回
+        if file_path.is_absolute() or not source_path:
+            return file_path
 
+        return Path(source_path) / file_path
+
+    def count_assets(self, album_uuid: str) -> int:
+        """统计相簿内未被软删除的资产数量。"""
+        row = self._fetchone(
+            """
+            SELECT COUNT(*) AS cnt
+              FROM album_assets AS aa
+              JOIN albums AS al ON al.id = aa.album_id
+              JOIN assets AS a  ON a.id = aa.asset_id
+             WHERE al.uuid = ?
+               AND al.is_deleted = 0
+               AND a.is_deleted = 0
+            """,
+            (album_uuid,),
+        )
+        return int(row["cnt"]) if row else 0
+
+    def list_assets(
+            self,
+            album_uuid: str,
+            offset: int = 0,
+            limit: int = 100,
+    ) -> List[AssetDTO]:
+        """按唯一确定顺序分页获取相簿内资产。"""
+        rows = self._fetchall(
+            """
+            SELECT a.*
+              FROM album_assets AS aa
+              JOIN albums AS al ON al.id = aa.album_id
+              JOIN assets AS a  ON a.id = aa.asset_id
+             WHERE al.uuid = ?
+               AND al.is_deleted = 0
+               AND a.is_deleted = 0
+             ORDER BY aa.asset_taken_at IS NULL,
+                      aa.asset_taken_at DESC,
+                      a.id DESC
+             LIMIT ? OFFSET ?
+            """,
+            (album_uuid, limit, offset),
+        )
+        # ORDER BY a.taken_at IS NULL,
+        #          a.taken_at DESC,
+        #          a.id DESC
+
+        # 用 aa.asset_taken_at：利用 album_assets 冗余字段，少回表，性能可能更好；
+        # 用 a.taken_at：直接读 assets 当前值，更准确，但要保证和冗余字段的语义一致。
+
+        return [AssetDTO.from_row(row) for row in (rows or [])]
+
+    def list_asset_ids_by_scope(self, scope: str) -> List[int]:
+        """按 scope（active / deleted）列出 asset 的整数 id。
+
+        供虚拟相册（All / Trash）使用，与 get_cover_asset_by_scope 同构。
+        """
+        where = self._SCOPE_WHERE[scope]
+        order = self._SCOPE_ORDER[scope]
+        rows = self._fetchall(
+            f"SELECT id FROM assets WHERE {where} ORDER BY {order}"
+        )
+        return [int(r["id"]) for r in (rows or [])]
+
+    def list_asset_ids_by_album(self, album_uuid: str) -> List[int]:
+        """列出物理相册内所有可见 asset 的整数 id。
+
+        JOIN 结构与 list_assets 一致，只是 SELECT 只取 id、不分页。
+        """
+        rows = self._fetchall(
+            """
+            SELECT a.id
+              FROM album_assets AS aa
+              JOIN albums AS al ON al.id = aa.album_id
+              JOIN assets AS a  ON a.id = aa.asset_id
+             WHERE al.uuid = ?
+               AND al.is_deleted = 0
+               AND a.is_deleted = 0
+             ORDER BY aa.asset_taken_at IS NULL,
+                      aa.asset_taken_at DESC,
+                      a.id DESC
+            """,
+            (album_uuid,),
+        )
+        return [int(r["id"]) for r in (rows or [])]
+
+    def get_asset_full_path_by_id(self, asset_id: int) -> Optional[Path]:
+        """按 asset 整数主键取磁盘完整路径。拼路径规则与 get_asset_full_path 一致。"""
+        row = self._fetchone(
+            """
+            SELECT a.file_path   AS file_path,
+                   s.source_path AS source_path
+              FROM assets AS a
+              LEFT JOIN ingest_source AS s
+                     ON s.id = a.source_id
+             WHERE a.id = ?
+               AND a.is_deleted = 0
+            """,
+            (int(asset_id),),
+        )
+        if row is None or not row["file_path"]:
+            return None
+
+        file_path = Path(row["file_path"])
+        source_path = row["source_path"]
+
+        # 与 get_asset_full_path 保持同一套规则
+        if file_path.is_absolute() or not source_path:
+            return file_path
         return Path(source_path) / file_path

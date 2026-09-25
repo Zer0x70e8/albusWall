@@ -14,8 +14,8 @@ JUMO_BUTTON_OBJ_NAME_SUFFIX = "JumpButton"
 class Setting(_Setting):
     about: About
 
-    def __init__(self, parent=None, auto_setup=True):
-        super().__init__(parent, auto_setup=auto_setup)
+    def __init__(self, parent=None, target=None, auto_setup=True):
+        super().__init__(parent, target=target, auto_setup=auto_setup)
 
         self.setup_ui()
 

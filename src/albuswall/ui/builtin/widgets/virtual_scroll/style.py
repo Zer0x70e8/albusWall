@@ -3,7 +3,7 @@
 
 from typing import Optional
 
-from PySide6.QtCore import QRectF, Property
+from PySide6.QtCore import QRectF, Property, QEvent
 from PySide6.QtGui import QPainter, QPainterPath, QPalette, QColor
 from PySide6.QtWidgets import QWidget
 
@@ -132,6 +132,6 @@ class StyledVirtualScrollWidget(VirtualScrollWidget):
 
     # 可选：响应调色板变化自动重绘
     def changeEvent(self, event):
-        if event.type() == event.Type.PaletteChange:
+        if event.type() == QEvent.Type.PaletteChange:
             self.update()
         super().changeEvent(event)
