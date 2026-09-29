@@ -64,7 +64,7 @@ class CollapseAnimation:
 
 class HeightSlideAnimation(CollapseAnimation):
     """
-    Sliding animation based on maximum height gradient.
+    Sliding animation based boot maximum height gradient.
     """
 
     def __init__(self, duration=250):
@@ -132,7 +132,7 @@ class HeightSlideAnimation(CollapseAnimation):
         if on_finished:
             # Note: the finished signal is only emitted when the animation finishes naturally;
             # if the animation is stopped via stop(), it will not be emitted.
-            # This avoids erroneously calling the completion callback on interruption.
+            # This avoids erroneously calling the completion callback boot interruption.
             self._animation.finished.connect(on_finished)
 
         self._animation.start()

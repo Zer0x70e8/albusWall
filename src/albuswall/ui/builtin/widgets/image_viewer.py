@@ -40,11 +40,6 @@ class ImageViewer(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
 
     # ------------------------------------------------------------- 数据接口
-
-    def set_pixmap(self, pixmap: QPixmap | None) -> None:
-        self._pixmap = QPixmap() if pixmap is None else QPixmap(pixmap)
-        self.reset_view()
-
     def clear(self) -> None:
         self.set_pixmap(QPixmap())
 
@@ -53,8 +48,18 @@ class ImageViewer(QWidget):
         self._offset = QPointF(0.0, 0.0)
         self.update()
 
-    # ------------------------------------------------------------- 几何
+    def set_pixmap(self, pixmap: QPixmap | None) -> None:
+        """同步设置图片并复位视图（保持原语义）。"""
+        self._pixmap = QPixmap() if pixmap is None else QPixmap(pixmap)
+        self.reset_view()
 
+    def replace_pixmap(self, pixmap: QPixmap | None) -> None:
+        """切换资产时用：保留当前缩放/偏移，只换图。"""
+        self._pixmap = QPixmap() if pixmap is None else QPixmap(pixmap)
+        self._clamp_offset()
+        self.update()
+
+    # ------------------------------------------------------------- 几何
     def _fit_scale(self) -> float:
         if self._pixmap.isNull():
             return 1.0

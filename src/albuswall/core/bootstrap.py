@@ -135,5 +135,5 @@ class Container:
 
     # alias
     reg = register
-    on = on_boot
+    boot = on_boot
     final = on_final

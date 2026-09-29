@@ -59,10 +59,10 @@ def discover_entry_points(group: str = ENTRY_POINT_GROUP) -> None:
             _logger.exception("failed to load entry_point %r, skipped", ep.name)
             continue
 
-        # Case 1: target is a module -> module-level @declare already ran on load
+        # Case 1: target is a module -> module-level @declare already ran boot load
         # Case 2: target is a callable -> explicitly call it so it registers itself
         if isinstance(target, types.ModuleType):
-            # Module: module-level @declare already ran on import, no action needed
+            # Module: module-level @declare already ran boot import, no action needed
             pass
         elif callable(target):
             # Function/class: explicitly call it so it registers itself

@@ -8,19 +8,17 @@ import traceback
 from logging import getLogger
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QTimer, QEvent, qInstallMessageHandler
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import (
+    QTimer, QEvent, qInstallMessageHandler
+)
 
 from albuswall.core import MainLoop
 from albuswall.log import TRACE, Logger
 
 from ..protocol import register_ui
 from .window import Window
-from .presenter import (
-    PresenterManager, WindowPresenter,
-    AlbumPresenter, ThumbnailGridPresenter,
-    IngestSourcePresenter
-)
+from .presenter import PresenterManager
 
 if TYPE_CHECKING:
     from albuswall.core import Container
@@ -47,6 +45,7 @@ _logger.trace = lambda msg, *args: _logger.log(TRACE, msg, *args)
 @register_ui("builtin")
 class Application(QApplication):
     presenters: PresenterManager
+    window: Window
 
     class MainLoop(MainLoop):
         def __init__(self, parent: "Application"):
@@ -65,7 +64,6 @@ class Application(QApplication):
         self._signal_timer = QTimer()
         self._debug = False
         self.main_loop = Application.MainLoop(self)
-        self.window = None
 
     # noinspection unused-parameter
     def setup(self, container: "Container") -> None:
@@ -78,47 +76,15 @@ class Application(QApplication):
                     traceback.print_stack()
 
             qInstallMessageHandler(handler)
+            QTimer.singleShot(10, lambda: _logger.debug(repr(self)))
 
         self.window = Window()
-        self.presenters = PresenterManager()
-
-        window_presenter = WindowPresenter(self.window, self.window)
-        album_presenter = AlbumPresenter(self.window.title_bar,
-                                         container.get("view_service"))
-        thumb_presenter = ThumbnailGridPresenter(
-            self.window.content,
-            thumb_repo=container.get("thumbnail_repo"),
-            thumb_service=container.get("thumbnail_service"),
-            spec="medium",
-        )
-        self.presenters.add(window_presenter)
-        self.presenters.add(album_presenter)
-        self.presenters.add(thumb_presenter)
-        self.presenters.add(IngestSourcePresenter(
-            self.window.source, container.get("source_service"),
-        ))
-
-        # 缩略图被激活 → 交给 window_presenter 去取整图、写 detail
-        thumb_presenter.item_activated.connect(window_presenter.show_detail)
-
-        # 建立数据流：相册变化 → 网格刷新
-        def _on_album_changed(album):
-            try:
-                asset_ids = container.get("view_service").get_asset_ids(album)
-            except Exception as exc:
-                _logger.error("list asset ids failed for album %s: %s", album, exc)
-                asset_ids = []
-            thumb_presenter.set_assets(asset_ids)
-
-        album_presenter.album_changed.connect(_on_album_changed)
+        self.presenters = PresenterManager(self.window, container).build()
 
         from .config.setup import setup  # lazy load
         setup(container.get("config"))
 
         self.presenters.setup(container)
-
-        if container.get("config").static.debug:
-            QTimer.singleShot(10, lambda: _logger.debug(str(self)))
 
     def teardown(self) -> None:
         if self.presenters is not None:
@@ -146,5 +112,13 @@ class Application(QApplication):
             ")",
         ))
 
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}("
+            # f"debug={self._debug!r}, "
+            f"mainWindow={self.window.objectName() 
+            if self.window is not None else 'None'}, "
+            f"presenters={len(self.presenters)})"
+        )
 
 UIApplication = Application

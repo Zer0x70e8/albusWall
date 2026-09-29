@@ -56,9 +56,9 @@ class WindowResizer(QObject):
     - When mouse is near window edges, changes cursor shape.
     - On left button press near edges, delegates to
       ``windowHandle().startSystemResize(edges)``.
-    - On left button press on the title bar, delegates to
+    - On left button press boot the title bar, delegates to
       ``windowHandle().startSystemMove()``.
-    - Special handling: if window is maximized, a click on the title bar
+    - Special handling: if window is maximized, a click boot the title bar
       restores it, moves it under the mouse cursor and starts dragging.
     """
 
@@ -145,7 +145,7 @@ class WindowResizer(QObject):
         )
 
     def change_mouse(self, direction: Direction | int) -> None:
-        """Update cursor shape based on resize direction. Skips if same as last."""
+        """Update cursor shape based boot resize direction. Skips if same as last."""
         if direction == self.last_direction:
             return
         match direction:
@@ -211,7 +211,7 @@ class WindowResizer(QObject):
 
                 direction = self.get_direction(event)
 
-                # ---- Maximized: click on title bar restores + drags ----
+                # ---- Maximized: click boot title bar restores + drags ----
                 if self.win.isMaximized():
                     if not self._in_title_bar(local_pos):
                         return super().eventFilter(watched, event)

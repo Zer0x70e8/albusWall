@@ -186,9 +186,28 @@ CREATE TABLE IF NOT EXISTS asset_candidate_cache (
 -- 索引 —— 覆盖所有常用查询与排序，确保大数据量下的性能
 -- =============================================================================
 
--- 活跃资产哈希唯一，防止重复导入（软删除后允许重新导入同一 hash）
-CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_active_hash
-    ON assets(file_hash) WHERE is_deleted = 0;
+-- ── 排序契约支撑索引 ────────────────────────────────────────────
+-- 排序契约 `_ASSET_ORDER_SQL` 是两段式：
+--   active : (taken_at IS NULL), taken_at DESC, id DESC
+--   deleted: (deleted_at IS NULL), deleted_at DESC, id DESC
+-- 单列索引撑不起 “DESC + 复合 tie-break”，必须复合 + DESC 方向。
+--
+-- SQLite 中 NULL 视为最小值：列 DESC 索引里 NULL 天然聚在末尾，
+-- 与 `IS NULL` 排在最后一位的语义完全一致，故无需为 NULL 段单独建索引。
+--
+-- 旧单列索引 idx_assets_taken_at 已被下面两条完全覆盖，先 DROP 以免残留。
+DROP INDEX IF EXISTS idx_assets_taken_at;
+
+-- 活跃段：覆盖 list_asset_ids_by_scope('active') / list_assets 的 ORDER BY
+-- 以及 get_asset_neighbours_by_scope('active') 的 prev/next/index/total 全部查询
+CREATE INDEX IF NOT EXISTS idx_assets_active_taken_id
+    ON assets(taken_at DESC, id DESC)
+    WHERE is_deleted = 0;
+
+-- Trash 段：同上，键换成 deleted_at
+CREATE INDEX IF NOT EXISTS idx_assets_deleted_deleted_at_id
+    ON assets(deleted_at DESC, id DESC)
+    WHERE is_deleted = 1;
 
 -- 同一源内活跃资产路径唯一，防止重复导入同一文件
 CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_source_file_path_active

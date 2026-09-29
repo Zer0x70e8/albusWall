@@ -28,22 +28,25 @@ from albuswall.dto.thumbnail import (
     ThumbnailPaths,
     ThumbnailStats,
     ThumbnailTaskInput,
+    ThumbSpec,
 )
 
 from .base import BaseRepository
 
 logger = getLogger(__name__)  # albuswall.database.thumbnail
 
-# spec 名 → assets 列名
-SPEC_TO_COLUMN: dict[str, str] = {
-    "small": "thumb_small_path",
-    "medium": "thumb_medium_path",
-    "large": "thumb_large_path",
+# spec → assets 列名
+SPEC_TO_COLUMN: dict[ThumbSpec, str] = {
+    ThumbSpec.SMALL: "thumb_small_path",
+    ThumbSpec.MEDIUM: "thumb_medium_path",
+    ThumbSpec.LARGE: "thumb_large_path",
 }
 
-COLUMN_TO_SPEC: dict[str, str] = {v: k for k, v in SPEC_TO_COLUMN.items()}
+COLUMN_TO_SPEC: dict[str, ThumbSpec] = {v: k for k, v in SPEC_TO_COLUMN.items()}
 
-ALL_SPECS: tuple[str, ...] = ("small", "medium", "large")
+ALL_SPECS: tuple[ThumbSpec, ...] = (
+    ThumbSpec.SMALL, ThumbSpec.MEDIUM, ThumbSpec.LARGE,
+)
 
 # 缩略图主目录列，独立于 spec
 BASE_COLUMN: str = "thumb_path"
@@ -71,7 +74,7 @@ class ThumbnailRepository(BaseRepository):
     def update_paths(
             self,
             asset_id: int,
-            paths: Mapping[str, Optional[str]],
+            paths: Mapping[ThumbSpec, Optional[str]],
             *,
             base_dir: str | UnsetType | None = UNSET,
     ) -> int:
@@ -99,7 +102,7 @@ class ThumbnailRepository(BaseRepository):
     def update_paths_by_uuid(
             self,
             uuid: str,
-            paths: Mapping[str, Optional[str]],
+            paths: Mapping[ThumbSpec, Optional[str]],
             *,
             base_dir: UnsetType = UNSET,
     ) -> int:
@@ -116,8 +119,8 @@ class ThumbnailRepository(BaseRepository):
     def bulk_update_paths(
             self,
             rows: Iterable[
-                tuple[int, Mapping[str, Optional[str]]]
-                | tuple[int, Mapping[str, Optional[str]], object]
+                tuple[int, Mapping[ThumbSpec, Optional[str]]] |
+                tuple[int, Mapping[ThumbSpec, Optional[str]], object]
                 ],
     ) -> int:
         """批量更新缩略图路径，单事务提交。
@@ -158,7 +161,7 @@ class ThumbnailRepository(BaseRepository):
     def clear_paths(
             self,
             asset_id: int,
-            specs: Sequence[str] = ALL_SPECS,
+            specs: Sequence[ThumbSpec] = ALL_SPECS,
             *,
             clear_base: bool = False,
     ) -> int:
@@ -261,7 +264,7 @@ class ThumbnailRepository(BaseRepository):
     # ------------------------------------------------------------------ #
     def list_missing(
             self,
-            specs: Sequence[str] = ALL_SPECS,
+            specs: Sequence[ThumbSpec] = ALL_SPECS,
             limit: int = 500,
             source_id: Optional[int] = None,
     ) -> list[MissingThumbnailRow]:
@@ -340,43 +343,61 @@ class ThumbnailRepository(BaseRepository):
     # ------------------------------------------------------------------ #
     # 任务输入
     # ------------------------------------------------------------------ #
-    def get_task_input(self, asset_id: int) -> Optional[ThumbnailTaskInput]:
+    def get_task_input(
+            self,
+            asset_id: int,
+            *,
+            include_deleted: bool = False,
+    ) -> Optional[ThumbnailTaskInput]:
         """取渲染缩略图所需的上下文（join ingest_source 拿 source_path）。
 
         仅供**生成侧**调用：带 is_deleted = 0，已删除资产返回 None。
         读取场景（含 Trash）请改用 get_paths / get_paths_bulk，
         它们不过滤 is_deleted，能正确读到回收站里资产的缩略图。
         """
+        where = "a.id = ?"
+        if not include_deleted:
+            where += " AND a.is_deleted = 0"
+
         row = self._fetchone(
-            """
-            SELECT a.id            AS id,
-                   a.uuid          AS uuid,
-                   a.source_id     AS source_id,
-                   s.source_path   AS source_path,
-                   a.file_path     AS file_path
-              FROM assets a
-              LEFT JOIN ingest_source s ON s.id = a.source_id
-             WHERE a.id = ? AND a.is_deleted = 0
-            """,
+            f"""
+                SELECT a.id            AS id,
+                       a.uuid          AS uuid,
+                       a.source_id     AS source_id,
+                       s.source_path   AS source_path,
+                       a.file_path     AS file_path
+                  FROM assets a
+                  LEFT JOIN ingest_source s ON s.id = a.source_id
+                 WHERE {where}
+                """,
             (asset_id,),
         )
         if row is None:
             return None
         return ThumbnailTaskInput.from_row(row)
 
-    def get_task_input_by_uuid(self, uuid: str) -> Optional[ThumbnailTaskInput]:
+    def get_task_input_by_uuid(
+            self,
+            uuid: str,
+            *,
+            include_deleted: bool = False,
+    ) -> Optional[ThumbnailTaskInput]:
         """同 get_task_input，但按 assets.uuid 定位。"""
+        where = "a.uuid = ?"
+        if not include_deleted:
+            where += " AND a.is_deleted = 0"
+
         row = self._fetchone(
-            """
-            SELECT a.id            AS id,
-                   a.uuid          AS uuid,
-                   a.source_id     AS source_id,
-                   s.source_path   AS source_path,
-                   a.file_path     AS file_path
-              FROM assets a
-              LEFT JOIN ingest_source s ON s.id = a.source_id
-             WHERE a.uuid = ? AND a.is_deleted = 0
-            """,
+            f"""
+                SELECT a.id            AS id,
+                       a.uuid          AS uuid,
+                       a.source_id     AS source_id,
+                       s.source_path   AS source_path,
+                       a.file_path     AS file_path
+                  FROM assets a
+                  LEFT JOIN ingest_source s ON s.id = a.source_id
+                 WHERE {where}
+                """,
             (uuid,),
         )
         if row is None:
@@ -393,7 +414,7 @@ class ThumbnailRepository(BaseRepository):
 
     @staticmethod
     def _build_update_sets(
-            paths: Mapping[str, Optional[str]],
+            paths: Mapping[ThumbSpec, Optional[str]],
             *,
             base_dir: str | UnsetType | None = UNSET,
             context: str = "",

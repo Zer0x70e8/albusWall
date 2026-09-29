@@ -8,7 +8,11 @@ from logging import getLogger
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import (
+    QObject, QRunnable, QThreadPool, Qt, Signal, Slot,
+    QModelIndex, QMetaObject, Q_ARG,
+)
+from PySide6.QtGui import QPixmap
 
 import albuswall
 from albuswall.log import TRACE, Logger
@@ -17,6 +21,9 @@ from albuswall.ui.vo.album import TitleBarVO
 
 from ..config.registory import PreferenceField
 from ..config.static import WindowPresenterConfs
+from ..model.album_model import AlbumModel, AlbumRole
+from ..delegate.album_cover_delegate import AlbumCOverDelegate
+from ..widgets.square_grid import SquareGridView
 
 if TYPE_CHECKING:
     from albuswall.services.view import ViewService
@@ -35,34 +42,23 @@ _DEFAULT_SEARCH_ICON = "search_button.svg"
 _ICON_DIR_CANDIDATES = ("icons", "cover", "imgs", "assets")
 
 
+class _CoverJob(QRunnable):
+    """把一个可调用对象丢进线程池；异常只记日志，不传播。"""
+
+    def __init__(self, fn):
+        super().__init__()
+        self._fn = fn
+
+    def run(self) -> None:
+        try:
+            self._fn()
+        except Exception:  # noqa: BLE001
+            _logger.exception("封面加载任务异常")
+
+
 # noinspection bad-assignment
 class PreferenceConfig:
-    """标题栏 / 专辑相关的统一用户偏好配置。
-
-    合并了原先分散在 static / dynamic 中的多个配置类：
-
-        WindowPresenterPreferences.theme        -> theme
-        WindowPresenterPreferences.theme_dir    -> theme_dir
-        WindowPresenterPreferences.style_sheet  -> style_sheet
-        WindowPresenterPreferences.icon_dir     -> icon_dir_pref
-        WindowPresenterPreferences.window_title -> window_title
-        IconPreferences.album_icon              -> album_icon
-        IconPreferences.extra_icon              -> extra_icon
-        IconPreferences.search_icon             -> search_icon
-        AlbumPresenterPreferences.search_expanded -> search_expanded
-        AlbumPresenterPreferences.album_text    -> album_text
-        AlbumPresenterPreferences.extra_text    -> extra_text
-        ...search_text                   -> search_text
-        GeneralPreferences.language             -> language
-
-    读取位置：``dynamic.preference.<section>.<name>``，与
-    ``PreferenceField("section", "name")`` 一致。
-
-    说明：原来 ``AlbumPresenterConfs`` / ``WindowPresenterConfs`` 里的
-    标题栏文案（``album_text`` / ``extra_text`` / ``search_text``）
-    现已并入此类，字段本身走偏好配置；如果 preference.ini 里没有对应项，
-    就会使用各自 ``default``。
-    """
+    """标题栏 / 专辑相关的统一用户偏好配置。"""
 
     # ---------------- ui / 主题 ----------------
     theme: str = PreferenceField("ui", "theme", default="default")
@@ -70,7 +66,6 @@ class PreferenceConfig:
         "ui", "theme_dir", default=None)
     style_sheet: Optional[str | Path] = PreferenceField(
         "ui", "style_sheet", default=None)
-    # 注意：原 IconPreferences 里的 icon_dir() 是方法，这里字段改名避免冲突
     icon_dir_pref: Optional[str | Path] = PreferenceField(
         "ui", "icon_dir", default=None)
     window_title: str = PreferenceField(
@@ -100,25 +95,14 @@ class PreferenceConfig:
 
     # ---------------- 图标路径解析 ----------------
 
-    # noinspection string-conversion-without-dunder-method
     @classmethod
     def icon_dir(cls) -> Optional[Path]:
-        """解析图标根目录，返回第一个实际存在的候选；都拿不到返回 None。
-
-        优先级：
-          1) preference.ui.icon_dir
-          2) static.path.cover（嵌套）
-          3) 扁平命名的 static.icon_dir / static.cover
-          4) <style_sheet>.parent / _ICON_DIR_CANDIDATES 中第一个存在的
-        """
-        # 1) 用户偏好
         pref = getattr(cls(), "icon_dir_pref", None)
         if pref:
             p = Path(str(pref))
             _logger.trace("图标目录命中 preference.ui.icon_dir = %s", p)
             return p
 
-        # 2) static 配置（回退）
         static = WindowPresenterConfs()
 
         path_obj = getattr(static, "path", None)
@@ -156,7 +140,6 @@ class PreferenceConfig:
 
     @classmethod
     def _resolve(cls, raw: Any) -> Optional[Path]:
-        """把单个偏好值解析成**存在的**绝对路径；不存在返回 None。"""
         if not raw:
             return None
 
@@ -182,40 +165,74 @@ class PreferenceConfig:
         _logger.debug("图标文件不存在: %s", full)
         return None
 
-    # ---------------- 对外接口 ----------------
-
     def album_icon_path(self) -> Optional[Path]:
-        """专辑封面图标路径；不存在返回 None。"""
         return self._resolve(self.album_icon)
 
     def extra_icon_path(self) -> Optional[Path]:
-        """更多/附加按钮图标路径；不存在返回 None。"""
         return self._resolve(self.extra_icon)
 
     def search_icon_path(self) -> Optional[Path]:
-        """搜索按钮图标路径；不存在返回 None。"""
         return self._resolve(self.search_icon)
 
 
 class AlbumPresenter(QObject):
-    """负责将 Album DTO 的数据呈现在标题栏上。"""
+    """专辑面板 presenter。
+
+    同时管两件事，状态只有一份（`_current_album`）：
+
+    - 网格列表：从 ``ViewService`` 拉专辑 → 喂给 ``SquareGridView``；
+    - 标题栏：把当前专辑 + 偏好配置 → 打包成 ``TitleBarVO`` 交给 ``TitleBar``。
+
+    两侧通过同一个 ``_current_album`` 保持一致：
+
+    - 列表点击 → ``set_album`` → 刷 TitleBar + 高亮网格
+    - 外部 ``set_album`` → 刷 TitleBar + 高亮网格
+
+    依赖 ``AlbumModel`` 至少提供以下接口::
+
+        append(uuid: str, pixmap: QPixmap | None = None) -> int
+        clear() -> None
+        rowCount() -> int
+        uuid_at(row: int) -> str
+        setPixmap(row: int, pixmap: QPixmap) -> None
+        index(row: int, column: int) -> QModelIndex   # QAbstractItemModel 自带
+        data(index: QModelIndex, role: int) -> Any
+    """
+
     album_changed = Signal(Album)
 
     def __init__(
             self,
             title_bar: "TitleBar",
+            album_view: SquareGridView,
             view_service: "ViewService",
             parent=None
     ):
-        super().__init__(parent=parent)
+        super().__init__(parent)
         self._title_bar = title_bar
+        self._view = album_view
         self._view_service = view_service
         self._config = PreferenceConfig()
         self._current_album: Album | None = None
+        self._pool = QThreadPool.globalInstance()
 
-    # ---------------- 对外接口 ----------------
-    # noinspection unused-parameter
-    def setup(self, container):
+        # --- 注入 model / delegate（SquareGridView 是被动的，得我们提供）---
+        self._model = AlbumModel(self)
+        self._delegate = AlbumCOverDelegate(self)
+        self._view.setModel(self._model)
+        self._view.setItemDelegate(self._delegate)
+        self._view.setSelectionMode(
+            self._view.SelectionMode.SingleSelection)
+        self._view.clicked.connect(self._on_album_clicked)
+
+    @property
+    def current(self) -> Album | None:
+        return self._current_album
+
+    # ---------------- 生命周期 ----------------
+
+    def setup(self, container) -> None:
+        self._populate_list()
         self._load_default_album()
         self.refresh()
         self.album_changed.emit(self._current_album)
@@ -223,25 +240,102 @@ class AlbumPresenter(QObject):
             "view_service=%r module=%s",
             self._view_service, type(self._view_service).__module__)
 
-        # if container.get("config").static.debug:
-        #     _logger.debug(self)
-
     def refresh(self) -> None:
+        """重绘 TitleBar + 重新同步网格选中。"""
         self._apply_window_settings()
         self._title_bar.set_vo(self._build_vo(self._current_album))
+        self._sync_selection(self._current_album)
 
     def set_album(self, album: Album) -> None:
+        """切换当前专辑：状态、TitleBar、网格高亮一起变。"""
         self._current_album = album
         self._title_bar.set_vo(self._build_vo(album))
+        self._sync_selection(album)
         self.album_changed.emit(album)
 
-    def _load_default_album(self) -> None:
-        """决定初始展示的专辑。
+    # ---------------- 网格数据 ----------------
 
-        解析顺序：
-          1. 偏好 ``album.default_album_uuid``；
-          2. 缺失时取 ``ViewService.get_active_album_uuids()`` 的第一个；
-          3. 都没有则保持 ``None``（退化为空标题栏）。
+    def _populate_list(self) -> None:
+        """拉活动专辑列表，先塞占位，再异步回填封面。"""
+        self._model.clear()
+        try:
+            uuids = self._view_service.get_active_album_uuids()
+        except Exception:  # noqa: BLE001
+            _logger.exception("拉取活动专辑列表失败")
+            return
+
+        _logger.debug("活动专辑: %r", uuids)
+        for u in uuids:
+            self._model.append(str(u))
+        for u in uuids:
+            self._load_cover_async(u)
+
+    def _load_cover_async(self, album_uuid: UUID | str) -> None:
+        """在后台把封面读成 QPixmap，回主线程按 uuid 回填。"""
+
+        def job() -> None:
+            album = self._view_service.get_album_by_uuid(album_uuid)
+            path = (
+                self._view_service.get_cover_full_path(album)
+                if album is not None else None
+            )
+            pm = QPixmap(str(path)) if path else QPixmap()
+            QMetaObject.invokeMethod(
+                self, "_on_cover_ready",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, str(album_uuid)),
+                Q_ARG(QPixmap, pm),
+            )
+
+        self._pool.start(_CoverJob(job))
+
+    @Slot(str, QPixmap)
+    def _on_cover_ready(self, uuid_str: str, pixmap: QPixmap) -> None:
+        """线程池回调：按 uuid 定位行，避免列表变动后 row 错位。"""
+        row = self._row_for_uuid(uuid_str)
+        if row < 0:
+            _logger.trace("封面回填时找不到 uuid=%s（可能已被移除）", uuid_str)
+            return
+        self._model.setPixmap(row, pixmap)
+
+    def _row_for_uuid(self, uuid_str: str) -> int:
+        for r in range(self._model.rowCount()):
+            if self._model.uuid_at(r) == uuid_str:
+                return r
+        return -1
+
+    # ---------------- 交互 ----------------
+
+    @Slot(QModelIndex)
+    def _on_album_clicked(self, index: QModelIndex) -> None:
+        uuid_val = index.data(AlbumRole.Uuid)
+        if not uuid_val:
+            return
+        album = self._view_service.get_album_by_uuid(uuid_val)
+        if album is None:
+            _logger.debug("点击的专辑 %s 查询为空", uuid_val)
+            return
+        self.set_album(album)
+
+    def _sync_selection(self, album: Album | None) -> None:
+        """让网格高亮/滚动到当前专辑。"""
+        if album is None:
+            self._view.clearSelection()
+            return
+        row = self._row_for_uuid(str(album.uuid))
+        if row < 0:
+            return
+        idx = self._model.index(row, 0)
+        self._view.setCurrentIndex(idx)
+        self._view.scrollTo(idx)
+
+    # ---------------- 默认专辑 ----------------
+
+    def _load_default_album(self) -> None:
+        """解析顺序：
+            1. 偏好 ``album.default_album_uuid``；
+            2. 缺失时取 ``ViewService.get_active_album_uuids()`` 的第一个；
+            3. 都没有则保持 ``None``。
         """
         album_uuid: UUID | str | None = self._config.default_album_uuid
 
@@ -259,6 +353,8 @@ class AlbumPresenter(QObject):
         if self._current_album is None:
             _logger.debug("默认专辑 %s 查询为空", album_uuid)
 
+    # ---------------- TitleBar VO ----------------
+
     def _window_title(self) -> str:
         return self._config.window_title or _DEFAULT_TITLE
 
@@ -267,50 +363,34 @@ class AlbumPresenter(QObject):
 
     @staticmethod
     def _text_or_none(value: Optional[str]) -> Optional[str]:
-        """空串统一转为 None：渲染层据此跳过文本，避免覆盖图标。"""
         if value is None:
             return None
         s = str(value)
         return s if s != "" else None
 
-    def _album_cover_path(self, album: Album | None) -> Optional[Path]:
-        """组合调用 ViewService，得到专辑封面的完整磁盘路径。"""
+    def _album_cover_path(self, album: Album | None) -> Optional[str]:
         if album is None:
             return None
         return self._view_service.get_cover_full_path(album)
 
     def _build_vo(self, album: Album | None) -> TitleBarVO:
-        """由 PreferenceConfig + Album DTO 构造 TitleBarVO。"""
         return TitleBarVO(
             window_title=self._window_title(),
-
-            # 封面：交给渲染层决定如何展示（例如 icon_label / 背景）。
             cover=self._album_cover_path(album),
-
             title=album.title if album is not None else None,
             description=album.description if album is not None else None,
-
-            # 三个按钮图标
             album_icon=self._config.album_icon_path(),
             extra_icon=self._config.extra_icon_path(),
             search_icon=self._config.search_icon_path(),
-
-            # 三个按钮文本
             album_text=self._text_or_none(self._config.album_text),
             extra_text=self._text_or_none(self._config.extra_text),
-            search_text=self._text_or_none(
-                self._config.search_placeholder),
-
+            search_text=self._text_or_none(self._config.search_placeholder),
             search_expanded=self._config.search_expanded,
         )
 
-    # noinspection GrazieInspection
     def __str__(self) -> str:
         return "\n".join((
             f"{type(self).__name__} (",
             f"\tcurrent: UUID({self._current_album.uuid if self._current_album else 'None'})",
-            # It's too lang.
-            # "\tview_service: ",
-            # *[f"\t\t{l}" for l in str(self._view_service).splitlines()],
             ")"
         ))

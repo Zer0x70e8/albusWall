@@ -27,6 +27,7 @@ from concurrent.futures import (
 from albuswall.configue import ConfigField
 from albuswall.dto.import_ import AssetCandidateCacheDTO, AssetCreateDTO
 from albuswall.log import getLogger
+from albuswall.utils.signal import Signal
 
 try:
     # 统一 EXIF 解析入口；缺失时不影响导入主流程。
@@ -84,6 +85,7 @@ class ImportConfig:
         "import", "max_backoff", default=60.0,
     )
 
+
 """
 如果希望「超时也能被 kill」，Python 的 ProcessPoolExecutor 做不到，
 得换成显式的 multiprocessing.Process + join(timeout) + terminate()，
@@ -92,7 +94,6 @@ class ImportConfig:
 不能保证子进程真的停下来——这一点最好在 ImportConfig 的注释里点明，
 避免以后有人以为超时后资源已经释放了。
 """
-
 
 _cfg = ImportConfig()
 
@@ -256,6 +257,7 @@ class ImportService:
     同步调用：
     - process_pending()：直接执行一轮，幂等（_run_lock 防重入）。
     """
+    assets_imported: Signal = Signal(name="AssetsImported")
 
     def __init__(self, repo: "ImportRepository", task: "TaskService"):
         self._repo = repo
@@ -372,6 +374,11 @@ class ImportService:
             totals["ok"], totals["failed"], totals["skipped"],
             totals["retry"], totals["timeout"],
         )
+        if totals["ok"] > 0:
+            try:
+                self.assets_imported.emit(self, **totals)
+            except Exception:
+                _logger.exception("emit assets_imported failed")
 
     # ---- 批处理 -----------------------------------------------------------
 

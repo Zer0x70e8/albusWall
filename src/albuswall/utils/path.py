@@ -6,8 +6,9 @@ import os
 from pathlib import Path
 from typing import Iterator, Optional, Union
 
-_SPEC_SUFFIX: dict[str, str] = {}   # 留空，后缀由 fmt 参数决定
+from albuswall.dto.thumbnail import ThumbSpec  # ← 新增
 
+_SPEC_SUFFIX: dict[str, str] = {}  # 留空，后缀由 fmt 参数决定
 
 
 def is_valid_mount_point(mount_point: str) -> bool:
@@ -94,11 +95,12 @@ def iter_files_depth_first(
     # 从根目录开始，深度为 0
     yield from _walk(root, 0)
 
+
 def resolve_asset_source(
-    *,
-    source_id: Optional[int],
-    source_path: Optional[str],
-    file_path: str,
+        *,
+        source_id: Optional[int],
+        source_path: Optional[str],
+        file_path: str,
 ) -> Path:
     """把 (source_id / source_path, file_path) 解析为绝对文件路径。
 
@@ -127,11 +129,11 @@ def resolve_asset_source(
 
 
 def build_thumb_paths(
-    *,
-    uuid: str,
-    version: int | str,
-    fmt: str,
-) -> tuple[str, dict[str, str]]:
+        *,
+        uuid: str,
+        version: int | str,
+        fmt: str,
+) -> tuple[str, dict[ThumbSpec, str]]:
     """构造缩略图相对路径。
 
     Returns:
@@ -157,8 +159,9 @@ def build_thumb_paths(
     if ext == "jpg":
         ext = "jpeg"
 
-    spec_rels = {
-        spec: f"{spec}.{ext}"
-        for spec in ("small", "medium", "large")
+    # noinspection string-conversion-without-dunder-method
+    spec_rels: dict[ThumbSpec, str] = {
+        spec: f"{spec.value}.{ext}"  # ← 用 .value，避免 3.12 Enum 格式化
+        for spec in (ThumbSpec.SMALL, ThumbSpec.MEDIUM, ThumbSpec.LARGE)
     }
     return base_rel, spec_rels

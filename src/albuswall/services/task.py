@@ -644,7 +644,7 @@ class TaskService:
                     cur_max = self._global_sem.max
                     delta = self._global_sem.increase_max(1)
                     if delta > 0:
-                        _logger.info(
+                        _logger.trace(
                             "Low resource usage (CPU=%.1f%%, mem=%.1f%%), "
                             "concurrency increased %d -> %d",
                             cpu, mem, cur_max, self._global_sem.max,

@@ -1,12 +1,15 @@
 #
 """"""
 
-from typing import TYPE_CHECKING, TypedDict, Dict, Callable, Any
+from typing import TYPE_CHECKING, Callable, Any, TypedDict
+
+from albuswall.utils.repository_registry import register_repositories
 
 from .source import IngestSourceRepository
 from .import_ import ImportRepository
 from .view import ViewRepository
 from .thumbnail import ThumbnailRepository
+from .asset import AssetRepository
 
 if TYPE_CHECKING:
     from albuswall.core import Container
@@ -17,23 +20,17 @@ class Repositories(TypedDict):
     import_repo: ImportRepository
     view_repo: ViewRepository
     thumbnail_repo: ThumbnailRepository
+    asset_repo: AssetRepository
 
 
-# Mapping of required args initialization cls.
-_ARG_MAP: Dict[str, Callable[[Any, "Container"], Any]] = {}
+# 只有「需要特殊参数」的仓库才写进来，其余走默认工厂
+_ARG_MAP: dict[str, Callable[[Any, "Container"], Any]] = {
+    # 例如:
+    # "asset": lambda t, c: t(c.get("db"), c.get("fs")),
+}
 
 
 def registry_repository(container: "Container"):
-    for name, type_ in Repositories.__annotations__.items():
-        if name in _ARG_MAP:
-            container.reg(
-                name,
-                lambda n_=name: _ARG_MAP[n_](type_, container),
-                returns=type_,
-            )
-        else:
-            container.reg(
-                name,
-                lambda t_=type_: t_(container.get("db")),
-                returns=type_,
-            )
+    register_repositories(
+        container, Repositories.__annotations__, arg_map=_ARG_MAP
+    )

@@ -50,7 +50,7 @@ class BlurLabel(QLabel):
         self._updating = False
         self._draw_label_content = draw_label_content
 
-        # Frameless sub-window that stays on top of the target
+        # Frameless sub-window that stays boot top of the target
         if self.parent() is None:
             self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         # self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -221,7 +221,7 @@ class BlurLabel(QLabel):
         #     label_global_pos = self.mapToGlobal(QPoint(0, 0))
         #     label_in_target = self._target.mapFromGlobal(label_global_pos)
         #
-        #     # Source rectangle on the full blurred pixmap
+        #     # Source rectangle boot the full blurred pixmap
         #     source_rect = QRect(label_in_target, self.size())
         #
         #     # Draw the matching piece of the blurred pixmap scaled into our rect
@@ -258,7 +258,7 @@ class BlurLabel(QLabel):
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Clean up the installed event filter on the target."""
+        """Clean up the installed event filter boot the target."""
         if self._target:
             self._target.removeEventFilter(self)
         super().closeEvent(event)

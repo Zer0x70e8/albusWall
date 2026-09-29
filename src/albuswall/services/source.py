@@ -557,15 +557,28 @@ class SourceFacedService:
     def start(self):
         self.update()
 
-    def create_source(self, source: IngestSourceCreate):
-        self._source_repo.create(source)
+    def create_source_default(self, source: IngestSourceCreate) -> int:
+        return self._source_repo.create(source)
 
-    def update_source_config(self, source_id: int, source: IngestSourceUpdate):
-        # 注意：与 update_source 方法名称冲突，这里改为 update_source_config 避免混淆
-        self._source_repo.update(source_id, source)
+    def create_source(self, source: IngestSourceCreate) -> int:
+        """创建导入源并立即调度一次扫描。
 
-    # alias
-    create = create_source
+        Returns:
+            新建 source 的 id（此前未返回，导致 UI 无法聚焦新卡片）。
+        """
+        new_id = self._source_repo.create(source)
+        # 关键：让 worker 立即拾取新 source 并重建任务 → _submit_new_tasks 提交扫描
+        self.update_source(new_id)
+        return new_id
+
+    def update_source_config(
+            self, source_id: int, source: IngestSourceUpdate
+    ) -> bool:
+        """局部更新 + 让 worker 重新评估该源（配置可能触发重新扫描）。"""
+        ok = self._source_repo.update(source_id, source)
+        if ok:
+            self.update_source(source_id)
+        return ok
 
     # ------------------------------------------------------------------
     # 信号透传：外部通过 `service.scan_finished` 订阅单 source 完成事件
@@ -634,6 +647,9 @@ class SourceFacedService:
             self.update_source(source_id)
         return deleted
 
+    # alias
+    delete = delete_source
+    create = create_source
 
 # alias
 SourceService = SourceFacedService

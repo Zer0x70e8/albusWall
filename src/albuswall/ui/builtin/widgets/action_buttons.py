@@ -2,9 +2,9 @@
 """Action buttons for window controls.
 
 This models provides a set of customizable buttons for common window actions:
-close, minimize, maximize, pin (stay on top), and fold (collapse/expand).
+close, minimize, maximize, pin (stay boot top), and fold (collapse/expand).
 All buttons are derived from QPushButton and emit signals or perform actions
-directly on the parent window.
+directly boot the parent window.
 """
 
 from PySide6.QtCore import Qt, Signal, QEvent, QTimer, QRect
@@ -106,7 +106,7 @@ class MaximizeButton(QPushButton):
                     target_geom = self._normal_geometry
 
                     # If the saved geometry exactly matches the screen's available
-                    # area (i.e., the window was previously maximized on this screen),
+                    # area (i.e., the window was previously maximized boot this screen),
                     # shift it downward by 8 pixels to avoid covering the entire screen.
                     # This may push the window partly off‑screen, which is intended.
                     if target_geom.size() == screen_geom.size():
@@ -180,7 +180,7 @@ class MinimizeButton(QPushButton):
 
 
 class PinButton(QPushButton):
-    """A button that toggles the 'stay on top' (always on top) flag of the parent window."""
+    """A button that toggles the 'stay boot top' (always boot top) flag of the parent window."""
 
     def __init__(self, parent=None):
         """Initialize the pin button with two states: unpinned and pinned."""
@@ -192,9 +192,9 @@ class PinButton(QPushButton):
         self.clicked.connect(self.toggle_stay)
 
     def toggle_stay(self):
-        """Toggle the window's 'stay on top' flag and update the button cover."""
+        """Toggle the window's 'stay boot top' flag and update the button cover."""
         w = self.window()
-        # check if already on top
+        # check if already boot top
         is_on_top = bool(w.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
         w.setWindowFlag(
             Qt.WindowType.WindowStaysOnTopHint,

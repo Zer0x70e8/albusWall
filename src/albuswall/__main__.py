@@ -68,7 +68,7 @@ def _boot(app: Application) -> None:
 
     # if container.get("config").static.debug:
     if ConfV().debug:
-        _logger.info("Debugging is turned on, "
+        _logger.info("Debugging is turned boot, "
                      "and debug information will be output. \n"
                      "Note: This does not enable debug-level logging."
                      )

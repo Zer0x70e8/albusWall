@@ -23,7 +23,26 @@ class Album:
 
 @dataclass
 class AssetDTO:
-    """资产 DTO，对应 assets 表；不包含软删除等内部字段。"""
+    """资产 DTO，对应 assets 表；不包含软删除等内部字段。
+
+    缩略图字段说明：
+        本 DTO 如实映射 assets 表上的缩略图列：
+
+            thumb_path            —— 缩略图主目录的绝对路径（base）
+            thumb_<spec>_path     —— 相对 base 的 spec 子路径
+
+        这些列对应 ThumbnailPaths 的 base / small / medium / large。
+        拼接完整路径、按 spec 取路径等逻辑，请统一走
+        ``ThumbnailRepository`` / ``ThumbnailPaths``，不要从本 DTO 的
+        thumb* 字段自行拼接：
+
+            # 推荐
+            paths = thumb_repo.get_paths(asset_id)
+            full  = paths.resolve(ThumbSpec.MEDIUM)
+
+            # 不推荐：自行拼接，容易与仓储的路径口径脱节
+            full = f"{dto.thumb_path}/{dto.thumb_medium_path}"
+    """
 
     # 必填业务字段
     uuid: str
@@ -33,12 +52,15 @@ class AssetDTO:
     file_hash: str
 
     # 可选 / 默认字段
-    # id: Optional[int] = None
+    # id: Optional[int] = None  # 内部资产入库逻辑
     source_id: int = -1
 
+    # NOTE: 职责问题，外部自己转化 enum
+    # （thumb_path = 绝对 base；thumb_<spec>_path = 相对文件名）
     thumb_path: Optional[str] = None
     thumb_small_path: Optional[str] = None
     thumb_medium_path: Optional[str] = None
+    thumb_large_path: Optional[str] = None
 
     file_size: int = 0
     width: int = 0
@@ -72,9 +94,12 @@ class AssetDTO:
             uuid=data["uuid"],
             file_path=data["file_path"],
             source_id=data.get("source_id", -1),
+            # legacy, 请改用 ThumbnailRepository/ThumbnailPaths
+            # 保留读取：向后兼容旧调用点，待迁移完成后再评估移除
             thumb_path=data.get("thumb_path"),
             thumb_small_path=data.get("thumb_small_path"),
             thumb_medium_path=data.get("thumb_medium_path"),
+            thumb_large_path=data.get("thumb_large_path"),
             original_name=data["original_name"],
             mime_type=data["mime_type"],
             file_hash=data["file_hash"],

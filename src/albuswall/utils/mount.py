@@ -54,7 +54,7 @@ def build_mount_command(
     elif os_name in ("darwin", "linux"):
         return ["mount", mount_target, str(mount_point)]
     else:
-        raise NotImplementedError(f"Auto-mount not supported on {os_name}")
+        raise NotImplementedError(f"Auto-mount not supported boot {os_name}")
 
 
 def auto_mount(

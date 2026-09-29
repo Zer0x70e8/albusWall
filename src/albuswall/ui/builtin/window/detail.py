@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Sequence, Mapping, Optional
 
-from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, Signal, QModelIndex
 from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
@@ -16,6 +17,10 @@ from PySide6.QtWidgets import (
     QGridLayout,
 )
 
+from ..delegate.square_thumb_delegate import SquareThumbDelegate
+# from albuswall.dto.thumbnail import ThumbSpec
+
+from ..model.navigation_bar_model import ThumbnailModel
 from ..widgets import BlurLabel
 from ..widgets.image_viewer import ImageViewer
 
@@ -26,6 +31,16 @@ class Detail(BlurLabel):
     """照片详情页容器（继承自 BlurLabel，背景自动模糊）。"""
     close_requested = Signal()
     image_loaded = Signal(str)
+    asset_navigate_requested = Signal(int)
+
+    # ---- 写操作意图（由内部按钮发出） ----
+    favorite_toggle_requested = Signal()
+    trash_requested = Signal()
+    multiple_choice_requested = Signal()
+    edit_requested = Signal()
+
+    # ---- 对外广播：写操作已生效，需要外部（缩略图网格等）刷新 ----
+    assets_changed = Signal(list)  # payload: list[int]
 
     main_layout: QVBoxLayout
 
@@ -46,6 +61,9 @@ class Detail(BlurLabel):
 
     def __init__(self, parent=None):
         super().__init__(parent=parent, draw_label_content=False)
+        self._nav_asset_ids: list[int] = []
+        self._nav_model: ThumbnailModel | None = None
+
         self.setup_ui()
         self.setup_key()
 
@@ -124,6 +142,56 @@ class Detail(BlurLabel):
             self.overlay, 0, 0, Qt.AlignmentFlag.AlignBottom
         )
 
+        #
+        self.item_line_viewer.clicked.connect(self._on_nav_item_clicked)
+
+        # 收藏按钮做成 checkable，presenter 只负责 setChecked
+        self.favourite_button.setCheckable(True)
+
+        # 意图信号：视图只声明“被点了”，不含业务
+        self.favourite_button.clicked.connect(
+            self.favorite_toggle_requested.emit
+        )
+        self.trash_button.clicked.connect(self.trash_requested.emit)
+        self.multiple_choice_button.clicked.connect(
+            self.multiple_choice_requested.emit
+        )
+        self.edit_button.clicked.connect(self.edit_requested.emit)
+
+        # 让每格就是「方形」的：iconSize 决定 pixmap 绘制尺寸，
+        # gridSize 决定每格占位（含 padding），保持一致就能形成规整方格。
+        self.item_line_viewer.setIconSize(ThumbnailModel.THUMB_SIZE)  # 80×80
+        self.item_line_viewer.setGridSize(ThumbnailModel.THUMB_SIZE)
+        self.item_line_viewer.setSpacing(4)
+
+        # 固定高度，避免导航栏抢走竖直空间、也避免横向滚动条把格子压扁
+        self.item_line_viewer.setFixedHeight(
+            ThumbnailModel.THUMB_SIZE.height() + 24
+        )
+        self.item_line_viewer.setResizeMode(QListView.ResizeMode.Adjust)
+        self.item_line_viewer.setSelectionMode(
+            QListView.SelectionMode.SingleSelection
+        )
+
+        self._nav_delegate = SquareThumbDelegate(self.item_line_viewer)
+        # ---------- 新增：把 ThumbnailModel 挂上 ----------
+        self._nav_model = ThumbnailModel(parent=self)
+        self.item_line_viewer.setModel(self._nav_model)
+
+        self.item_line_viewer.setIconSize(ThumbnailModel.THUMB_SIZE)
+        self.item_line_viewer.setGridSize(ThumbnailModel.THUMB_SIZE)
+        self.item_line_viewer.setSpacing(4)
+        self.item_line_viewer.setFixedHeight(
+            ThumbnailModel.THUMB_SIZE.height() + 24
+        )
+        self.item_line_viewer.setResizeMode(QListView.ResizeMode.Adjust)
+        self.item_line_viewer.setSelectionMode(
+            QListView.SelectionMode.SingleSelection
+        )
+
+        # 点击走 model，别再用 self._nav_asset_ids（那是 None）
+        self.item_line_viewer.clicked.connect(self._on_nav_item_clicked)
+
     def setup_key(self):
         # # ---------- Esc 关闭 ----------
         # sc = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
@@ -143,6 +211,65 @@ class Detail(BlurLabel):
 
     def clear_image(self) -> None:
         self.image_viewer.clear()
+
+    def set_navigation_items(
+            self,
+            *,
+            asset_ids: Sequence[int],
+            thumb_map: Mapping[int, str],
+            current_asset_id: int,
+    ) -> None:
+        assert self._nav_model is not None
+
+        self._nav_asset_ids = [int(a) for a in asset_ids]
+        self._nav_model.set_items(self._nav_asset_ids, thumb_map)
+
+        row = self._nav_model.row_of(current_asset_id)
+        if row < 0:
+            return
+
+        self._nav_model.set_current_index(row)
+
+        # 真正让 QSS 的 QListView::item:selected 生效、并滚到可见位置
+        idx = self._nav_model.index(row, 0)
+        self.item_line_viewer.setCurrentIndex(idx)
+        self.item_line_viewer.scrollTo(
+            idx, QListView.ScrollHint.PositionAtCenter
+        )
+
+    def set_navigation_position(
+            self,
+            *,
+            index: int,
+            total: int,
+            prev_id: Optional[int],
+            next_id: Optional[int],
+    ) -> None:
+        """缓存 (index, total, prev_id, next_id)，供状态栏 / 方向键翻页使用。
+
+        - total == 0 / index == 0 时应禁用翻页；
+        - prev_id / next_id 为 None 表示该方向已到头。
+        """
+
+    def set_metadata(self, metadata: Mapping[str, object]) -> None:
+        """用元信息 dict 刷新信息面板（尺寸、时间、EXIF 等）。"""
+
+    def set_favorite_state(self, is_favorite: bool) -> None:
+        """同步收藏按钮选中态（由 presenter 在切换后 / 打开详情时调用）。"""
+        self.favourite_button.setChecked(bool(is_favorite))
+
+    def notify_assets_changed(self, asset_ids: Sequence[int]) -> None:
+        """写操作完成后由 presenter 调用，把受影响的资产 id 广播出去。
+
+        外部的缩略图网格 / 收藏列表 / 搜索结果只需 connect ``assets_changed``，
+        按 id 局部刷新即可。
+        """
+        self.assets_changed.emit([int(i) for i in asset_ids])
+
+    def _on_nav_item_clicked(self, idx: QModelIndex) -> None:
+        asset_id = self._nav_model.asset_id_at(idx.row())
+        if asset_id is not None:
+            self.asset_navigate_requested.emit(int(asset_id))
 
     # alias
     show_image = set_image

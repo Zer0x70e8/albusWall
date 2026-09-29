@@ -27,8 +27,6 @@ class UIConfig:
     no_builtin: bool = ConfigField("ui", "no_builtin", default=False)
 
 
-# ui/bootstrap.py
-
 def registry_ui(container: "Container"):
     confs = UIConfig()
     logger.debug("UI(active=%s, theme=%s) registry now.",
@@ -74,8 +72,9 @@ def registry_ui(container: "Container"):
             return
         # noinspection broad-exception,PyBroadException
         try:
+            # 我也不知道为什么要有两种检查抑制方法
             # noinspection unresolved-references,PyUnresolvedReferences
-            _ui_instance.teardown()  # 我也不知道为什么要有两种检查抑制方法
+            _ui_instance.teardown()
         except Exception:
             logger.exception("ui teardown failed")
 

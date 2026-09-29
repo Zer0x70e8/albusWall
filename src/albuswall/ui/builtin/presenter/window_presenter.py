@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtCore import QObject, QTimer
-from PySide6.QtGui import QPixmap
 
 from ..widgets import blur_overlay_label
 from ..config import WindowPresenterConfs
@@ -15,14 +14,14 @@ from .window_resizer import WindowResizer
 if TYPE_CHECKING:
     from albuswall.core import Container
     from albuswall.configue import Configue
-    from albuswall.services import ViewService
+    # from albuswall.services import ViewService
     from ..window.window import Window
 
 _logger = getLogger(__name__)
 
 
 class Presenter(QObject):
-    _service: "ViewService"
+    # _service: "ViewService"
 
     def __init__(
             self,
@@ -37,7 +36,7 @@ class Presenter(QObject):
     def setup(self, container: "Container"):
         config = container.get("config")
 
-        self._service = container.get("view_service")
+        # self._service = container.get("view_service")
 
         self.confs.ensure_theme_files_completed(config)
 
@@ -75,6 +74,10 @@ class Presenter(QObject):
         # #
         self._connector(
             self._target.detail.close_button.clicked,
+            self._target.detail.close_requested.emit,
+        )
+        self._connector(
+            self._target.detail.close_requested,
             self._target.overlay.show_blank,
         )
 
@@ -159,19 +162,17 @@ class Presenter(QObject):
     #
     #     self._target.overlay.setCurrentWidget(station)
 
-    def show_detail(self, asset_id: int) -> None:
-        path = self._service.get_asset_full_path_by_id(asset_id)
-        if path is None or not path.is_file():
-            _logger.warning("detail: no full path for asset=%d", asset_id)
-            return
+    def show_detail(self) -> None:
+        """把详情视图推到栈顶。
 
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
-            _logger.warning("detail: QPixmap load failed: %s", path)
-            return
-
+        展示哪张资产由 ViewerPresenter.open(ctx) 决定；
+        这里不再查路径、不再加载 QPixmap、不再调 detail.set_image。
+        """
         self._target.overlay.setCurrentWidget(self._target.detail)
-        self._target.detail.set_image(str(path))
+
+    def hide_detail(self) -> None:
+        """收起详情视图。"""
+        self._target.overlay.show_blank()
 
 
 WindowPresenter = Presenter

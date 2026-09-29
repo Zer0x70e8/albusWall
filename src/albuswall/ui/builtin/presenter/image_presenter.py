@@ -11,7 +11,8 @@
               返回对象需具备 base / small / medium / large 四个属性
               （即 ThumbnailPaths 的形状）。
           thumb_repo.resolve_path(base, spec_path) -> str | None
-          thumb_service.submit(asset_id) -> concurrent.futures.Future
+          thumb_service.submit(asset_id, *, include_deleted: bool = False)
+                -> concurrent.futures.Future
               future.result() 需具备 .ok: bool 属性。
 
 展示约定：
@@ -51,6 +52,7 @@ from typing import Any, Optional
 from PySide6.QtCore import QObject, QRect, Qt, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
 
+from albuswall.dto.thumbnail import ThumbSpec
 from albuswall.log import TRACE, Logger
 
 try:
@@ -86,7 +88,7 @@ class ThumbnailGridPresenter(QObject):
             thumb_repo: Any,
             thumb_service: Optional[Any] = None,
             *,
-            spec: str = "small",
+            spec: ThumbSpec = ThumbSpec.SMALL,
             max_workers: int = 4,
             parent: Optional[QObject] = None,
     ) -> None:
@@ -110,6 +112,8 @@ class ThumbnailGridPresenter(QObject):
         # 数据源
         self._asset_ids: list[int] = []
         self._generation = 0
+        # 当前视图是否包含已删除资产（由 set_assets 设置）
+        self._include_deleted: bool = False
 
         # 去抖
         self._inflight: set[int] = set()  # 正在磁盘加载的 asset_id
@@ -131,11 +135,29 @@ class ThumbnailGridPresenter(QObject):
     # ------------------------------------------------------------------ #
     # 公开 API
     # ------------------------------------------------------------------ #
-    def set_assets(self, asset_ids: list[int]) -> None:
-        """重置数据源并滚回顶部，触发一次可见范围重新计算。"""
-        _logger.info("set_assets called: n=%d", len(asset_ids))
+    def set_assets(
+            self,
+            asset_ids: list[int],
+            *,
+            include_deleted: bool = False,
+    ) -> None:
+        """重置数据源并滚回顶部，触发一次可见范围重新计算。
+
+        Args:
+            asset_ids: 当前视图里的 asset 整数 id 列表。
+            include_deleted:
+                当前视图是否为 Trash（scope=deleted）。
+                True  —— 缺失缩略图时允许触发生成，生成侧 include_deleted=True。
+                False —— Active 视图，生成侧 include_deleted=False。
+                默认 False，保持向后兼容。
+        """
+        _logger.info(
+            "set_assets called: n=%d, include_deleted=%s",
+            len(asset_ids), include_deleted,
+        )
         self._generation += 1
         self._asset_ids = list(asset_ids)
+        self._include_deleted = include_deleted
         self._inflight.clear()
         self._submitted.clear()
         self._visible_range = (0, -1)
@@ -144,7 +166,7 @@ class ThumbnailGridPresenter(QObject):
 
         self._attempts.clear()
 
-    def set_spec(self, spec: str) -> None:
+    def set_spec(self, spec: ThumbSpec) -> None:
         """切换缩略图规格；清空缓存后按需重载。"""
         if spec not in ("small", "medium", "large"):
             raise ValueError(f"unsupported spec: {spec!r}")
@@ -231,7 +253,7 @@ class ThumbnailGridPresenter(QObject):
         self._executor.submit(self._load_worker, index, asset_id, gen, spec)
 
     def _load_worker(
-            self, index: int, asset_id: int, generation: int, spec: str
+            self, index: int, asset_id: int, generation: int, spec: ThumbSpec
     ) -> None:
         image: Optional[QImage] = None
         try:
@@ -241,13 +263,14 @@ class ThumbnailGridPresenter(QObject):
         # 通过信号回到主线程
         self._load_result.emit(index, generation, image)
 
-    def _try_load_image(self, asset_id: int, spec: str) -> Optional[QImage]:
+    def _try_load_image(
+            self, asset_id: int, spec: ThumbSpec) -> Optional[QImage]:
         paths = self._repo.get_paths(asset_id)
         if paths is None:
             return None
 
-        rel = getattr(paths, spec, None)
-        base = getattr(paths, "base", None)
+        rel = paths.for_spec(spec)
+        base = paths.base
         if not rel:
             return None
 
@@ -293,7 +316,7 @@ class ThumbnailGridPresenter(QObject):
             self.item_failed.emit(index, "no_thumbnail")
             return
         if asset_id in self._submitted:
-            return  # 已在队列里，等结果
+            return
 
         n = self._attempts.get(asset_id, 0)
         if n >= _MAX_ATTEMPTS:
@@ -302,7 +325,10 @@ class ThumbnailGridPresenter(QObject):
         self._attempts[asset_id] = n + 1
 
         try:
-            future: Future = self._service.submit(asset_id)
+            future: Future = self._service.submit(
+                asset_id,
+                include_deleted=self._include_deleted,  # ← 关键
+            )
         except Exception as exc:  # noqa: BLE001
             _logger.error("submit thumbnail failed asset=%d: %s", asset_id, exc)
             self.item_failed.emit(index, f"submit:{type(exc).__name__}")
@@ -318,12 +344,18 @@ class ThumbnailGridPresenter(QObject):
         try:
             result = future.result()
             if not getattr(result, "ok", False):
+                error = getattr(result, "error", "?")
+                retryable = bool(getattr(result, "retryable", True))
                 _logger.warning(
-                    "thumbnail generation failed asset=%d: %s",
-                    asset_id, getattr(result, "error", "?"),
+                    "thumbnail generation failed asset=%d: %s (retryable=%s)",
+                    asset_id, error, retryable,
                 )
+                if not retryable:
+                    # 永久性失败：不 emit _gen_done，避免触发无意义重试。
+                    # _submitted 保持在集合里，阻止同一 asset 再次入队；
+                    # 下次 set_assets 会一并清空。
+                    return
         except Exception as exc:  # noqa: BLE001
             _logger.error("thumbnail future error asset=%d: %s", asset_id, exc)
 
-        # 无论成功与否都通知主线程重试（可能下次仍然拿不到，但不会有副作用）
         self._gen_done.emit(asset_id)

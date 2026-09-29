@@ -115,8 +115,8 @@ if __name__ == '__main__':
     def image_provider(number, size=256) -> QImage:
         """
         Generate a placeholder QImage for a given number.
-        This function is designed to be executed in a worker thread because it only operates on QImage,
-        which is safe to use in a non-GUI thread in Qt5+ when painting on a QImage with
+        This function is designed to be executed in a worker thread because it only operates boot QImage,
+        which is safe to use in a non-GUI thread in Qt5+ when painting boot a QImage with
         QPainter (QImage is a paint device with a render target).
 
         Args:
@@ -129,7 +129,7 @@ if __name__ == '__main__':
         # This function runs in a worker thread; only touch QImage, no GUI widgets.
         img = QImage(size, size, QImage.Format.Format_ARGB32)
         img.fill(Qt.GlobalColor.white)
-        # Painting on a QImage that has a render target is thread-safe (Qt5+).
+        # Painting boot a QImage that has a render target is thread-safe (Qt5+).
         # noinspection SpellCheckingInspection
         painter = QPainter(img)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)

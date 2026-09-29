@@ -57,7 +57,7 @@ def ui_loader(name: str) -> _Decorator:
             return Application
 
     The callback's return value is returned as-is by `activate_ui` (usually a UI class,
-    or None to skip); `registry_ui` mainly still relies on `_REGISTRY` populated by
+    or None to skip); `registry_ui` mainly still relies boot `_REGISTRY` populated by
     `@register_ui` to get the class.
     """
     def w(func: _PluginFn) -> _PluginFn:

@@ -14,9 +14,10 @@ from albuswall.dto.thumbnail import (
     ThumbnailPaths,
     ThumbnailResult,
     ThumbnailStats,
-    ThumbnailTaskInput,
+    ThumbSpec
 )
-from albuswall.repositories.thumbnail import ThumbnailRepository
+from albuswall.configue import ConfigField
+from albuswall.repositories import ThumbnailRepository
 from albuswall.services.task import TaskService
 from albuswall.utils import path as path_util
 from albuswall.log import getLogger
@@ -27,20 +28,35 @@ if TYPE_CHECKING:
 
 _logger = getLogger(__name__)
 
+ALL_SPECS: tuple[ThumbSpec, ...] = (
+    ThumbSpec.SMALL, ThumbSpec.MEDIUM, ThumbSpec.LARGE,
+)
+
 PRIORITY_AFTER_IMPORT = 0
 PRIORITY_MANUAL = 1
 PRIORITY_BACKFILL = 5
 
-ALL_SPECS: tuple[str, ...] = ("small", "medium", "large")
+__version__ = "0.0.1.dev"
 
 
-class _DefaultThumbnailConfig:
-    version = "v1"
-    specs = {"small": 128, "medium": 512, "large": 1024}
-    image_format = "JPEG"
-    quality = 85
-    thumb_root = "/home/skyline/.cache/albuswall/thumbs"
-    batch_size = 32
+class ThumbnailConfig:
+    section = ConfigField("service", default={})
+    version = __version__
+    # TODO config's dict formater parse.
+    # specs: dict[ThumbSpec, int]
+    specs = ConfigField("service", default={
+        ThumbSpec.SMALL: 128,
+        ThumbSpec.MEDIUM: 512,
+        ThumbSpec.LARGE: 1024,
+    })
+    image_format: str = ConfigField("service", "thumbnail_image_format", default="JPEG")
+    quality: int = ConfigField("service", "thumbnail_quality", default=85)
+    thumb_root: Path | str = ConfigField(
+        "service", "thumbnail_thumb_root", default="/home/skyline/.cache/albuswall/thumbs")
+    batch_size: int = ConfigField("service", "thumbnail_batch_size", default=32)
+
+
+_config = ThumbnailConfig()
 
 
 # ---------------------------------------------------------------------- #
@@ -49,23 +65,22 @@ class _DefaultThumbnailConfig:
 class _Renderer:
     """纯计算：源文件 → {spec: PIL.Image}。不碰 DB、不碰磁盘写入。"""
 
-    _DEFAULT_SIZES: dict[str, int] = {
-        "small": 128, "medium": 512, "large": 1024,
-    }
+    _DEFAULT_SIZES: dict[ThumbSpec, int] = _config.specs
 
     @classmethod
-    def render(cls, src: Path, cfg) -> dict[str, "PILImage"]:
+    def render(cls, src: Path, cfg) -> dict[ThumbSpec, "PILImage"]:
         from PIL import Image, ImageOps
 
         resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
-        specs: dict[str, int] = getattr(cfg, "specs", None) or cls._DEFAULT_SIZES
+        specs: dict[ThumbSpec, int] = \
+            getattr(cfg, "specs", None) or cls._DEFAULT_SIZES
 
         with Image.open(src) as im:
             im = ImageOps.exif_transpose(im)
             if im.mode not in ("RGB", "RGBA"):
                 im = im.convert("RGB")
 
-            result: dict[str, "PILImage"] = {}
+            result: dict[ThumbSpec, "PILImage"] = {}
             for spec, size in specs.items():
                 thumb = im.copy()
                 thumb.thumbnail((size, size), resample)
@@ -144,7 +159,7 @@ class ThumbnailService:
         self._task_service = task_service
         self._repo = thumb_repo
         self._source_repo = source_repo
-        self._cfg = cfg or _DefaultThumbnailConfig()
+        self._cfg = cfg or ThumbnailConfig()
 
         # thumb_root 归一化成绝对路径，保证写库的 thumb_path 永远是绝对路径
         self._thumb_root: Path = Path(self._cfg.thumb_root).expanduser().resolve()
@@ -190,6 +205,7 @@ class ThumbnailService:
             self,
             asset_id: int,
             *,
+            include_deleted: bool = False,
             priority: int = PRIORITY_AFTER_IMPORT,
             executor: ExecutorType = "thread",
     ):
@@ -216,6 +232,7 @@ class ThumbnailService:
             future = self._task_service.submit(
                 self._work_one,
                 asset_id,
+                include_deleted,
                 executor="thread",
                 priority=priority,
             )
@@ -242,13 +259,19 @@ class ThumbnailService:
             self,
             asset_ids: Sequence[int],
             *,
+            include_deleted: bool = False,
             priority: int = PRIORITY_AFTER_IMPORT,
             executor: ExecutorType = "thread",
     ) -> list:
         """批量提交。返回实际入队的 future 列表（去重后可能少于入参）。"""
         futures = []
         for aid in asset_ids:
-            fut = self.submit(aid, priority=priority, executor=executor)
+            fut = self.submit(
+                aid,
+                include_deleted=include_deleted,
+                priority=priority,
+                executor=executor,
+            )
             if fut is not None:
                 futures.append(fut)
         return futures
@@ -256,22 +279,39 @@ class ThumbnailService:
     # ------------------------------------------------------------------ #
     # 对外 API
     # ------------------------------------------------------------------ #
-    def regenerate(self, uuid: str):
-        task_input = self._repo.get_task_input_by_uuid(uuid)
+    def regenerate(self, uuid: str, *, include_deleted: bool = False):
+        task_input = self._repo.get_task_input_by_uuid(
+            uuid,
+            include_deleted=include_deleted,
+        )
         if task_input is None:
             raise KeyError(f"asset not found by uuid: {uuid!r}")
-        _logger.info("manual thumbnail rebuild: uuid=%s asset=%d",
-                     uuid, task_input.asset_id)
-        return self.submit(task_input.asset_id, priority=PRIORITY_MANUAL)
+        return self.submit(
+            task_input.asset_id,
+            include_deleted=include_deleted,
+            priority=PRIORITY_MANUAL,
+        )
 
-    def scan_and_submit(self, batch: Optional[int] = None) -> int:
+    def scan_and_submit(
+            self,
+            batch: Optional[int] = None,
+            *,
+            include_deleted: bool = False,
+    ) -> int:
         limit = batch or self._cfg.batch_size
-        rows = self._repo.list_missing(specs=ALL_SPECS, limit=limit)
+        rows = self._repo.list_missing(
+            specs=ALL_SPECS, limit=limit, include_deleted=include_deleted,
+        )
         if not rows:
             return 0
         ids = [r.id for r in rows]
-        _logger.info("thumbnail backfill: submitting %d tasks", len(ids))
-        self.submit_bulk(ids, priority=PRIORITY_BACKFILL)
+        _logger.info(
+            "thumbnail backfill: submitting %d tasks (include_deleted=%s)",
+            len(ids), include_deleted,
+        )
+        self.submit_bulk(
+            ids, include_deleted=include_deleted, priority=PRIORITY_BACKFILL,
+        )
         return len(ids)
 
     # noinspection broad-exception
@@ -307,7 +347,8 @@ class ThumbnailService:
     # 读取：只走 DB，禁止重算路径
     # ------------------------------------------------------------------ #
     def get_thumbnail_path(
-            self, asset_id: int, spec: str = "medium"
+            self, asset_id: int,
+            spec: ThumbSpec = ThumbSpec.MEDIUM
     ) -> Optional[str]:
         """获取某个 spec 缩略图的绝对路径；未生成或资产不存在返回 None。
 
@@ -321,7 +362,8 @@ class ThumbnailService:
         return paths.resolve(spec)
 
     def get_thumbnail_paths(
-            self, asset_ids: Sequence[int], spec: str = "medium"
+            self, asset_ids: Sequence[int],
+            spec: ThumbSpec = ThumbSpec.MEDIUM
     ) -> dict[int, str]:
         """批量版 get_thumbnail_path；返回 {asset_id: abs_path}。
 
@@ -395,18 +437,38 @@ class ThumbnailService:
     # ------------------------------------------------------------------ #
     # Worker
     # ------------------------------------------------------------------ #
-    def _work_one(self, asset_id: int) -> ThumbnailResult:
+    def _work_one(
+            self,
+            asset_id: int,
+            include_deleted: bool = False,
+    ) -> ThumbnailResult:
         """TaskService 调用的入口。去重标记由 submit() 挂在 future 上的
         done callback 统一释放，这里不再负责。"""
-        return self._work_one_impl(asset_id)
+        return self._work_one_impl(asset_id, include_deleted)
 
-    def _work_one_impl(self, asset_id: int) -> ThumbnailResult:
+    def _work_one_impl(
+            self,
+            asset_id: int,
+            include_deleted: bool = False,
+    ) -> ThumbnailResult:
         started = time.monotonic()
 
-        task_input: Optional[ThumbnailTaskInput] = \
-            self._repo.get_task_input(asset_id)
+        task_input = self._repo.get_task_input(
+            asset_id,
+            include_deleted=include_deleted,
+        )
         if task_input is None:
             # 永久性：资产不存在或已软删；不重试
+            if not include_deleted and self._repo.get_paths(asset_id) is not None:
+                # 资产存在但被 is_deleted=0 过滤
+                _logger.info(
+                    "thumbnail task skipped: asset %d is deleted (include_deleted=False)",
+                    asset_id,
+                )
+                return ThumbnailResult(
+                    ok=False, asset_id=asset_id,
+                    error="asset_deleted_filtered", retryable=False,
+                )
             _logger.warning("thumbnail task skipped: asset %d not found", asset_id)
             return ThumbnailResult(
                 ok=False, asset_id=asset_id,
@@ -483,3 +545,5 @@ class ThumbnailService:
         return ThumbnailResult(
             ok=True, asset_id=asset_id, duration_ms=duration_ms,
         )
+
+

@@ -35,6 +35,11 @@ class ThumbnailPaths:
 
     完整路径 = base.rstrip('/') + '/' + spec_rel
     任一为空 → resolve() 返回 None。
+
+    唯一权威来源：本类是缩略图路径的 canonical 表示。
+    ``AssetDTO.thumb_path`` / ``thumb_<spec>_path`` 是历史镜像
+    （见 albuswall.dto.album.AssetDTO 的 legacy 注释），
+    仅用于向后兼容，新代码一律从这里取路径。
     """
     base: Optional[str] = None
     small: Optional[str] = None
@@ -76,12 +81,33 @@ class ThumbnailPaths:
 
     @classmethod
     def from_row(cls, row: Mapping) -> "ThumbnailPaths":
-        """从含 thumb_path / thumb_*_path 列的行构造。"""
+        """从含 thumb_path / thumb_*_path 列的行构造。
+
+        用 ``_get`` 容错：迁移期不少 SELECT 只挑了部分 spec 列
+        （甚至只挑 thumb_path），缺列按 None 处理，不抛 KeyError。
+        """
         return cls(
-            base=row["thumb_path"],
-            small=row["thumb_small_path"],
-            medium=row["thumb_medium_path"],
-            large=row["thumb_large_path"],
+            base=_get(row, "thumb_path"),
+            small=_get(row, "thumb_small_path"),
+            medium=_get(row, "thumb_medium_path"),
+            large=_get(row, "thumb_large_path"),
+        )
+
+    @classmethod
+    def from_asset_dto(cls, dto: Any) -> "ThumbnailPaths":
+        """从历史 ``AssetDTO`` 借壳构造。
+
+        迁移过渡专用：调用点原本在 AssetDTO 上读 thumb* 字段时，
+        先改成 ``ThumbnailPaths.from_asset_dto(dto)`` 即可获得与
+        ``ThumbnailRepository.get_paths()`` 完全一致的语义。
+
+        待 AssetDTO 的 thumb* 字段彻底移除后，本类方法一并删除。
+        """
+        return cls(
+            base=getattr(dto, "thumb_path", None),
+            small=getattr(dto, "thumb_small_path", None),
+            medium=getattr(dto, "thumb_medium_path", None),
+            large=getattr(dto, "thumb_large_path", None),
         )
 
 

@@ -30,6 +30,20 @@ class ViewRepository(BaseRepository):
 
     _SCOPE_WHERE = {"active": "is_deleted = 0", "deleted": "is_deleted = 1"}
 
+    # 物理相册的统一 FROM/JOIN，所有查询共用
+    _PHYSICAL_ALBUM_FROM = (
+        "assets a "
+        "JOIN album_assets aa ON aa.asset_id = a.id "
+        "JOIN albums AS al ON al.id = aa.album_id"
+    )
+    _PHYSICAL_ALBUM_WHERE = (
+        "al.uuid = ? AND al.is_deleted = 0 AND a.is_deleted = 0"
+    )
+    # 排序键列按 scope 分派（与 _ASSET_ORDER_SQL 的键一一对应）
+    _SCOPE_KEY_COL = {"active": "taken_at", "deleted": "deleted_at"}
+
+    _ALLOWED_PREFIXES = frozenset(("", "a."))
+
     @classmethod
     def _order_by(cls, scope: str, prefix: str = "") -> str:
         """返回给定 scope 下的 ORDER BY 片段。
@@ -38,6 +52,8 @@ class ViewRepository(BaseRepository):
             scope: ``"active"`` 或 ``"deleted"``。
             prefix: 列名表别名前缀（如 ``"a."``），默认无别名。
         """
+        if prefix not in cls._ALLOWED_PREFIXES:  # assist
+            raise ValueError(f"unsupported prefix: {prefix!r}")
         return cls._ASSET_ORDER_SQL[scope].format(p=prefix)
 
     # ==================================================================
@@ -304,12 +320,273 @@ class ViewRepository(BaseRepository):
         return dto.to_dict() if dto else None
 
     # ==================================================================
+    # 上/下一张定位（P2）
+    # ==================================================================
+    # 契约：
+    #   - 排序必须与 list_asset_ids_by_album / list_asset_ids_by_scope 完全同源，
+    #     否则缩略图网格翻页会出现“错位一张”。
+    #   - 返回 (prev_id, next_id, index, total)：
+    #       · index 为 1-based 位置；
+    #       · 目标行缺失（相册为空 / 资产不属于该相册）时返回 (None, None, 0, 0)。
+    #   - 实现走基于排序键的索引 seek（O(log N)），不做窗口函数全表物化。
+    #     排序契约 = `(key IS NULL) ASC, key DESC, id DESC`，其中 NULL 段在末尾。
+    #     SQLite 的 DESC 索引里 NULL 天然聚在末尾、段内 id DESC 有序，
+    #     因此 prev/next/index/total 全部能落在
+    #     idx_assets_active_taken_id / idx_assets_deleted_deleted_at_id 上。
+
+    def get_asset_neighbours_by_scope(
+            self, scope: str, current_asset_id: int
+    ) -> tuple[Optional[int], Optional[int], int, int]:
+        """虚拟相册（All / Trash）内的上/下一张定位。
+
+        Args:
+            scope: ``"active"`` 或 ``"deleted"``（见 _SCOPE_WHERE）。
+            current_asset_id: 目标资产的整数主键。
+        """
+        return self._neighbours(
+            cur_id=int(current_asset_id),
+            from_clause="assets",
+            where_clause=self._SCOPE_WHERE[scope],
+            where_params=(),
+            id_col="id",
+            key_col=self._SCOPE_KEY_COL[scope],
+        )
+
+    def get_asset_neighbours_by_album(
+            self, album_uuid: str, current_asset_id: int
+    ) -> tuple[Optional[int], Optional[int], int, int]:
+        """物理相册内的上/下一张定位。
+
+        排序读 ``assets.taken_at``（与 list_assets 同源），
+        不用冗余的 ``album_assets.asset_taken_at``。
+        """
+        return self._neighbours(
+            cur_id=int(current_asset_id),
+            from_clause=self._PHYSICAL_ALBUM_FROM,
+            where_clause=self._PHYSICAL_ALBUM_WHERE,
+            where_params=(album_uuid,),
+            id_col="a.id",
+            key_col="a.taken_at",
+        )
+
+    def locate_in_scope(self, scope: str, asset_id: int) -> Optional[int]:
+        """只返回 1-based index；资产不在该 scope 中返回 None。"""
+        return self._locate(
+            cur_id=int(asset_id),
+            from_clause="assets",
+            where_clause=self._SCOPE_WHERE[scope],
+            where_params=(),
+            id_col="id",
+            key_col=self._SCOPE_KEY_COL[scope],
+        )
+
+    def locate_in_album(
+            self, album_uuid: str, asset_id: int
+    ) -> Optional[int]:
+        """只返回 1-based index；资产不在该相册中返回 None。"""
+        return self._locate(
+            cur_id=int(asset_id),
+            from_clause=self._PHYSICAL_ALBUM_FROM,
+            where_clause=self._PHYSICAL_ALBUM_WHERE,
+            where_params=(album_uuid,),
+            id_col="a.id",
+            key_col="a.taken_at",
+        )
+
+    # ------------------------------------------------------------------ #
+    # 邻居 / 定位 —— 私有分派器
+    # ------------------------------------------------------------------ #
+    def _neighbours(
+            self, *, cur_id, from_clause, where_clause, where_params,
+            id_col, key_col,
+    ) -> tuple[Optional[int], Optional[int], int, int]:
+        """统一的邻居聚合入口。
+
+        - 当前项不在集合内 → (None, None, 0, 0)。
+        - 集合为空 → 当前项必然不在集合内，同样返回 (None, None, 0, 0)。
+        """
+        found, cur_key = self._fetch_key(
+            from_clause=from_clause, where_clause=where_clause,
+            where_params=where_params, id_col=id_col, key_col=key_col,
+            cur_id=cur_id,
+        )
+        if not found:
+            return None, None, 0, 0
+
+        prev_id = self._find_prev(
+            from_clause=from_clause, where_clause=where_clause,
+            where_params=where_params, id_col=id_col, key_col=key_col,
+            cur_id=cur_id, cur_key=cur_key,
+        )
+        next_id = self._find_next(
+            from_clause=from_clause, where_clause=where_clause,
+            where_params=where_params, id_col=id_col, key_col=key_col,
+            cur_id=cur_id, cur_key=cur_key,
+        )
+        index = self._count_before(
+            from_clause=from_clause, where_clause=where_clause,
+            where_params=where_params, id_col=id_col, key_col=key_col,
+            cur_id=cur_id, cur_key=cur_key,
+        ) + 1
+        total = self._count_total(
+            from_clause=from_clause, where_clause=where_clause,
+            where_params=where_params,
+        )
+        return prev_id, next_id, index, total
+
+    def _locate(
+            self, *, cur_id, from_clause, where_clause, where_params,
+            id_col, key_col,
+    ) -> Optional[int]:
+        """统一的位置定位入口。当前项不在集合内 → None。"""
+        found, cur_key = self._fetch_key(
+            from_clause=from_clause, where_clause=where_clause,
+            where_params=where_params, id_col=id_col, key_col=key_col,
+            cur_id=cur_id,
+        )
+        if not found:
+            return None
+        return self._count_before(
+            from_clause=from_clause, where_clause=where_clause,
+            where_params=where_params, id_col=id_col, key_col=key_col,
+            cur_id=cur_id, cur_key=cur_key,
+        ) + 1
+
+    # ------------------------------------------------------------------ #
+    # 邻居 / 定位 —— 私有工具（索引 seek，不物化全表）
+    # ------------------------------------------------------------------ #
+    def _fetch_key(self, *, from_clause, where_clause, where_params,
+                   id_col, key_col, cur_id):
+        """按主键取当前项的排序键；当前项不在集合内返回哨兵。"""
+        row = self._fetchone(
+            f"SELECT {key_col} AS k FROM {from_clause} "
+            f"WHERE {where_clause} AND {id_col} = ?",
+            (*where_params, cur_id),
+        )
+        if row is None:
+            return False, None
+        return True, row["k"]
+
+    def _find_prev(self, *, from_clause, where_clause, where_params,
+                   id_col, key_col, cur_id, cur_key):
+        """严格排在 cur 前一项的 id；没有返回 None。
+
+        集合排序：`(key IS NULL) ASC, key DESC, id DESC`。
+        """
+        if cur_key is not None:
+            # 非 NULL 段：key 更大（或 key 相等且 id 更大）的最近一项
+            row = self._fetchone(
+                f"""SELECT {id_col} AS nid FROM {from_clause}
+                     WHERE {where_clause}
+                       AND {key_col} IS NOT NULL
+                       AND ({key_col} > ? OR ({key_col} = ? AND {id_col} > ?))
+                     ORDER BY {key_col} ASC, {id_col} ASC
+                     LIMIT 1""",
+                (*where_params, cur_key, cur_key, cur_id),
+            )
+            return row["nid"] if row else None
+
+        # cur 落在 NULL 段：先找 NULL 段中 id 更大的
+        row = self._fetchone(
+            f"""SELECT {id_col} AS nid FROM {from_clause}
+                 WHERE {where_clause}
+                   AND {key_col} IS NULL
+                   AND {id_col} > ?
+                 ORDER BY {id_col} ASC LIMIT 1""",
+            (*where_params, cur_id),
+        )
+        if row:
+            return row["nid"]
+        # 否则落到非 NULL 段的最后一项
+        row = self._fetchone(
+            f"""SELECT {id_col} AS nid FROM {from_clause}
+                 WHERE {where_clause}
+                   AND {key_col} IS NOT NULL
+                 ORDER BY {key_col} ASC, {id_col} ASC LIMIT 1""",
+            where_params,
+        )
+        return row["nid"] if row else None
+
+    def _find_next(self, *, from_clause, where_clause, where_params,
+                   id_col, key_col, cur_id, cur_key):
+        """严格排在 cur 后一项的 id；没有返回 None。"""
+        if cur_key is not None:
+            # 非 NULL 段：key 更小（或 key 相等且 id 更小）的最近一项
+            row = self._fetchone(
+                f"""SELECT {id_col} AS nid FROM {from_clause}
+                     WHERE {where_clause}
+                       AND {key_col} IS NOT NULL
+                       AND ({key_col} < ? OR ({key_col} = ? AND {id_col} < ?))
+                     ORDER BY {key_col} DESC, {id_col} DESC
+                     LIMIT 1""",
+                (*where_params, cur_key, cur_key, cur_id),
+            )
+            if row:
+                return row["nid"]
+            # 非 NULL 段之后紧邻 NULL 段的第一项
+            row = self._fetchone(
+                f"""SELECT {id_col} AS nid FROM {from_clause}
+                     WHERE {where_clause}
+                       AND {key_col} IS NULL
+                     ORDER BY {id_col} DESC LIMIT 1""",
+                where_params,
+            )
+            return row["nid"] if row else None
+
+        # cur 落在 NULL 段：找 NULL 段中 id 更小的
+        row = self._fetchone(
+            f"""SELECT {id_col} AS nid FROM {from_clause}
+                 WHERE {where_clause}
+                   AND {key_col} IS NULL
+                   AND {id_col} < ?
+                 ORDER BY {id_col} DESC LIMIT 1""",
+            (*where_params, cur_id),
+        )
+        return row["nid"] if row else None
+
+    def _count_before(self, *, from_clause, where_clause, where_params,
+                      id_col, key_col, cur_id, cur_key) -> int:
+        """严格排在 cur 之前的项数。"""
+        if cur_key is not None:
+            row = self._fetchone(
+                f"""SELECT COUNT(*) AS cnt FROM {from_clause}
+                     WHERE {where_clause}
+                       AND {key_col} IS NOT NULL
+                       AND ({key_col} > ? OR ({key_col} = ? AND {id_col} > ?))""",
+                (*where_params, cur_key, cur_key, cur_id),
+            )
+            return int(row["cnt"]) if row else 0
+
+        # cur 在 NULL 段：所有非 NULL 项 + NULL 段中 id 更大的
+        row = self._fetchone(
+            f"""SELECT COUNT(*) AS cnt FROM {from_clause}
+                 WHERE {where_clause} AND {key_col} IS NOT NULL""",
+            where_params,
+        )
+        non_null = int(row["cnt"]) if row else 0
+        row = self._fetchone(
+            f"""SELECT COUNT(*) AS cnt FROM {from_clause}
+                 WHERE {where_clause}
+                   AND {key_col} IS NULL AND {id_col} > ?""",
+            (*where_params, cur_id),
+        )
+        null_before = int(row["cnt"]) if row else 0
+        return non_null + null_before
+
+    def _count_total(self, *, from_clause, where_clause, where_params) -> int:
+        row = self._fetchone(
+            f"SELECT COUNT(*) AS cnt FROM {from_clause} WHERE {where_clause}",
+            where_params,
+        )
+        return int(row["cnt"]) if row else 0
+
+    # ==================================================================
     # 资产磁盘路径
     # ==================================================================
 
     def get_asset_full_path(
             self, asset_uuid: str, include_deleted: bool = False
-    ) -> Optional[Path]:
+    ) -> Optional[str]:
         """根据资产 uuid 获取其磁盘上的完整路径。
 
         路径拼接规则：
@@ -325,7 +602,7 @@ class ViewRepository(BaseRepository):
                 供 Trash（回收站）中展示原图使用。
 
         Returns:
-            资产完整路径（Path 对象）；无法定位时返回 None。
+            资产完整路径字符串；无法定位时返回 None。
         """
         where = "a.uuid = ?"
         if not include_deleted:
@@ -345,7 +622,7 @@ class ViewRepository(BaseRepository):
 
     def get_asset_full_path_by_id(
             self, asset_id: int, include_deleted: bool = False
-    ) -> Optional[Path]:
+    ) -> Optional[str]:
         """按 asset 整数主键取磁盘完整路径。拼路径规则与 get_asset_full_path 一致。"""
         where = "a.id = ?"
         if not include_deleted:
@@ -364,7 +641,7 @@ class ViewRepository(BaseRepository):
         return self._resolve_full_path(row)
 
     @staticmethod
-    def _resolve_full_path(row: Any) -> Optional[Path]:
+    def _resolve_full_path(row: Any) -> Optional[str]:
         """根据查询行拼接磁盘完整路径。两条 get_asset_full_path* 共用同一套规则。"""
         if row is None or not row["file_path"]:
             return None
@@ -374,6 +651,6 @@ class ViewRepository(BaseRepository):
 
         # file_path 已为绝对路径，或没有可用的源路径起点时，直接返回
         if file_path.is_absolute() or not source_path:
-            return file_path
+            return str(file_path)
 
-        return Path(source_path) / file_path
+        return str(Path(source_path) / file_path)

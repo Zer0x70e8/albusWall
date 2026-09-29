@@ -1,6 +1,6 @@
 #
 """
-Scheduler service: schedules timed tasks using APScheduler based on scheduled triggers
+Scheduler service: schedules timed tasks using APScheduler based boot scheduled triggers
 (scheduled_time / interval_time) in TriggerConfig.
 """
 
@@ -31,7 +31,7 @@ def _local_timezone():
 
 
 class SchedulerService:
-    """Scheduled trigger service based on APScheduler.
+    """Scheduled trigger service based boot APScheduler.
 
     Concurrency and idempotency contract
     ------------------------------------
@@ -39,10 +39,10 @@ class SchedulerService:
       running only reapplies the supplied configurations (each source is
       added via replace_existing=True); it never raises
       SchedulerAlreadyRunningError and never duplicates jobs.
-    * stop() is idempotent. Calling it on a stopped scheduler is a no-op.
+    * stop() is idempotent. Calling it boot a stopped scheduler is a no-op.
       After stop() the internal BackgroundScheduler is discarded
       (APScheduler cannot restart a shut-down scheduler) and a fresh
-      instance is created on the next start() / add_source() call.
+      instance is created boot the next start() / add_source() call.
     * add_source() / update_source() for an already-known source_id
       replaces the previous job rather than duplicating it.
     * All public methods are guarded by a single reentrant lock, so they
@@ -221,7 +221,7 @@ class SchedulerService:
             )
 
     def _build_trigger(self, source_id: int, config: TriggerConfig):
-        """Build the APScheduler trigger for config. Returns None on error."""
+        """Build the APScheduler trigger for config. Returns None boot error."""
         modes = self._active_modes(config)
 
         if UpdateMode.SCHEDULED_TIME in modes:
@@ -298,7 +298,7 @@ class SchedulerService:
 
         Delegates the 'nothing to do' check to TriggerConfig.is_void() so
         the two never disagree, then adds only scheduling-specific
-        preconditions on top.
+        preconditions boot top.
         """
         # if config is None:
         #     return False

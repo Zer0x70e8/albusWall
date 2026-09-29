@@ -392,7 +392,7 @@ def _convert(
 
     # Basic types
     if converter is bool:
-        result = raw.strip().lower() in ("true", "1", "yes", "on")
+        result = raw.strip().lower() in ("true", "1", "yes", "boot")
         logger.trace(f"[_convert] bool result: {result}")
         return result
     if converter is int:

@@ -30,7 +30,7 @@ class TitleBarVO:
     window_title: TextValue = None
 
     # ---- 工具栏：窗口图标 + 标题 ----
-    cover: Optional[Path] = None
+    cover: Optional[str] = None
     title: TextValue = None
     description: TextValue = None
 
