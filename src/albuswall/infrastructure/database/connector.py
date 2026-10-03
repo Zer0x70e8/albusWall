@@ -38,7 +38,7 @@ PRAGMA_BUSY_TIMEOUT = "PRAGMA busy_timeout = 5000"
 PRAGMA_RESOURCE_TRIGGERS = "PRAGMA recursive_triggers = OFF"
 
 # 当前 schema 版本；每次结构变化时 +1，并在 _run_migrations 里补一段
-SCHEMA_VERSION = 1  # TODO 目前是早期开发，在稳定之前都不改
+SCHEMA_VERSION = 2
 
 _package_name = __name__.split('.', 2)[-1] if '.' in __name__ else __name__
 
@@ -61,8 +61,8 @@ class Connector:
     """
 
     # 进程级：同一进程内多个 Connector 共用，避免重复初始化同一文件
-    # key = (resolved_path_or_memory_uri, schema_sql_hash, SCHEMA_VERSION)
-    _initialized_dbs: Set[Tuple[str, int, int]] = set()
+    # key = (resolved_path_or_memory_uri, SCHEMA_VERSION)
+    _initialized_dbs: Set[Tuple[str, int]] = set()
     _init_dbs_lock = threading.Lock()
 
     logger = logger
@@ -109,6 +109,7 @@ class Connector:
             return self._resolved_path
         with self._resolve_lock:
             if self._resolved_path is not None:
+                # noinspection bad-return
                 return self._resolved_path
             if self.db_path is None:
                 self.logger.info("No db_path given; using in-memory database")
@@ -116,6 +117,7 @@ class Connector:
             else:
                 self._resolved_path = str(Path(self.db_path).resolve())
                 self.logger.info("Database path resolved: %s", self._resolved_path)
+            # noinspection bad-return
             return self._resolved_path
 
     def _check_file_must_exist(self, resolved_path: str) -> None:
@@ -135,6 +137,7 @@ class Connector:
         if conn is not None:
             self.logger.trace("Reusing connection for thread %s",
                               threading.current_thread().name)
+            # noinspection bad-return
             return conn
 
         self.logger.debug("Creating connection for thread %s",
@@ -178,7 +181,11 @@ class Connector:
     def _ensure_initialized(self, conn: sqlite3.Connection, resolved: str) -> None:
         # 内存库用每实例唯一的 URI 作 key → 不同实例互不影响
         # 文件库用解析后的路径作 key → 同一文件在同进程内只初始化一次
-        key = (resolved, hash(self._schema_sql), SCHEMA_VERSION)
+        #
+        # key 不含 schema_sql 内容：schema 内容变化必须通过 SCHEMA_VERSION += 1
+        # 来显式宣告，这样初始化和迁移走同一套版本契约，不会出现
+        # "schema 悄悄改了但 key 撞上旧记录" 的隐性跳初始化。
+        key = (resolved, SCHEMA_VERSION)
 
         with Connector._init_dbs_lock:
             if key in Connector._initialized_dbs:
@@ -217,6 +224,18 @@ class Connector:
                 conn, 'asset_candidate_cache', 'claimed_at', "TEXT"
             )
 
+        if current < 2:
+            # 用户显式禁用导入源：以前是内存 set，现在落库。
+            #
+            # 注意：SQLite 的 ALTER TABLE ADD COLUMN 不支持携带 CHECK 约束，
+            # 所以迁移路径补出来的 disabled 列没有 CHECK 兜底，仅靠
+            # DEFAULT 0 + 应用层 PatchField[bool] 保证取值合法。
+            # 新库走 schema 文件时会带上 CHECK（见 media_library_schema.sql）。
+            self._add_column_if_not_exists(
+                conn, 'ingest_source', 'disabled',
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.logger.info("Migration done, schema version = %d", SCHEMA_VERSION)
 
@@ -238,6 +257,7 @@ class Connector:
         # 先清引用，即使 close() 抛错也不会留下坏引用
         self._local.connection = None
         try:
+            # noinspection unresolved-references
             conn.close()
         except Exception as e:
             self.logger.warning("Close error: %s", e)

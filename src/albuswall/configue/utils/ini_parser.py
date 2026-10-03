@@ -123,7 +123,7 @@ class DictInterpolation(ExtendedInterpolation):
         self._resolving.add(current_key)
         try:
             def replace(match):
-                key = match.group(1)  # 例如 "path:config" 或 "files:log"
+                key = match.group(1)  # 例如 "path:_config" 或 "files:log"
 
                 # 1. 优先从解析器已解析的内容中查找（支持跨节引用）
                 target_section, target_option = self._parse_key_for_parser(key, section)

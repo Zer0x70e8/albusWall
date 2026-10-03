@@ -70,8 +70,6 @@ class IngestSource(BlurLabel):
     def _setup_ui(self):
         # ---------- 顶层 ----------
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(0)
 
         # ---------- 按钮 ----------
         self.close_button = QPushButton("\u2715")
@@ -153,6 +151,9 @@ class IngestSource(BlurLabel):
 
         # ---------- 顶部 add 按钮 ----------
         self.add_button_layout = QHBoxLayout()
+        self.add_button_layout.setContentsMargins(0, 0, 0, 0)
+        self.add_button_layout.setSpacing(0)
+
         self.add_button_layout.setContentsMargins(0, 0, 0, 0)
         self.add_button_layout.addStretch()
         self.add_button_layout.addWidget(self.add_button)

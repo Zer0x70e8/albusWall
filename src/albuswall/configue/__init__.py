@@ -13,12 +13,20 @@ from .utils import (
 T = TypeVar("T")
 
 if TYPE_CHECKING:
-    from .bootstrap import setup_config
+    from .bootstrap import setup_dynamic_config, setup_static_config
     from .declaration import ConfigDeclaration, ConfigMeta, get_config
+
+    # state.py 里全是运行期实现，直接 import 供类型检查器用即可；
+    # StateField 是泛型描述符，IDE 对 __get__ 的返回类型解析得动，
+    # 不需要像 ConfigField 那样写存根。
+    from .state import (
+        ObservableNamespace, StatefulNamespace, StateField,
+        ObservableContext, StateContext,
+    )
 
 
     class ConfigField(Generic[T]):
-        """仅给类型检查器看的存根。
+        """配置项描述符，自动根据解析配置。
 
         用法：
             x = ConfigField[int]("a", "b")       # x: int
@@ -33,16 +41,33 @@ if TYPE_CHECKING:
         ) -> T: ...  # type: ignore[misc]
 
 __all__ = [
-    "Configue", "Namespace", "FrozenNamespace", "get_user_config_dir",
-    "get_user_data_dir", "setup_config", "parse_section_file",
+    # config
+    "Configue", "Namespace", "FrozenNamespace",
     "ConfigDeclaration", "ConfigField", "ConfigMeta", "get_config",
+    # utils
+    "get_user_config_dir", "get_user_data_dir",
+    "setup_static_config", "setup_dynamic_config",
+    "parse_section_file",
+    # state
+    "ObservableNamespace", "StatefulNamespace", "StateField",
+    "ObservableContext", "StateContext",
 ]
 
 
 def __getattr__(name):
+    # ── bootstrap ─────────────────────────────────
+    if name == "setup_static_config":
+        from .bootstrap import setup_static_config
+        return setup_static_config
+    if name == "setup_dynamic_config":
+        from .bootstrap import setup_dynamic_config
+        return setup_dynamic_config
     if name == "setup_config":
-        from .bootstrap import setup_config
-        return setup_config
+        # 兼容旧 API：只跑静态阶段
+        from .bootstrap import setup_static_config
+        return setup_static_config
+
+    # ── declaration ───────────────────────────────
     if name == "ConfigDeclaration":
         from .declaration import ConfigDeclaration
         return ConfigDeclaration
@@ -55,5 +80,13 @@ def __getattr__(name):
     if name == "get_config":
         from .declaration import get_config
         return get_config
+
+    # ── state ─────────────────────────────────────
+    if name in (
+            "ObservableNamespace", "StatefulNamespace", "StateField",
+            "ObservableContext", "StateContext",
+    ):
+        from . import state
+        return getattr(state, name)
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

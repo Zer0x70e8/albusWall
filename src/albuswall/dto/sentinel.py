@@ -1,4 +1,4 @@
-# albuswall/dto/sentinel.py
+#
 """DTO 层 PATCH 语义的缺失标记。
 
 约定：
@@ -12,7 +12,9 @@
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, TypeAlias, TypeVar, Union
+
+T = TypeVar("T")
 
 
 class _UnsetType:
@@ -50,3 +52,11 @@ def _get_unset() -> "_UnsetType":
 
 UNSET: Final = _UnsetType()
 UnsetType = _UnsetType
+
+# PATCH 字段：未设置 = UNSET；显式 None = 置 NULL；否则为 T
+PatchField: TypeAlias = Union[T, None, UnsetType]
+
+# TODO(py3.12): 最低支持版本升到 3.12 后，替换为 PEP 695 的
+#     type PatchField[T] = T | None | UnsetType
+# 现在用 Union 写法是因为 3.11 下 `T | None` 不返回 _UnionGenericAlias，
+# 泛型替换不生效；3.12 起 `|` 可直接用于 TypeVar 组合。

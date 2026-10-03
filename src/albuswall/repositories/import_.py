@@ -1,18 +1,38 @@
 #
-""""""
+"""ImportRepository：导入流程相关的 SQLite 仓储。
+
+约定：
+    - 列清单 / INSERT 占位符全部从 DTO 派生（DTO.COLUMNS / to_insert_params），
+      仓储层不再手写第二份，字段增删只动 DTO。
+    - 状态字面量统一走 CandidateStatus 枚举，禁止裸字符串。
+"""
+
+from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from typing import Sequence, Optional
 
+from albuswall.common.enums import CandidateStatus
 from albuswall.dto.import_ import AssetCandidateCacheDTO, AssetCreateDTO
 
 from .base import BaseRepository
 from .utils.sql_helpers import placeholders
 
-_CANDIDATE_COLUMNS = (
-    "id, uuid, path, source_id, mime_type, created_at, "
-    "status, claimed_by, claimed_at"
+# ---- 从 DTO 派生的 SQL 片段（单一事实源：DTO.COLUMNS） ----
+
+# 候选表 SELECT 列清单
+_CANDIDATE_COLUMNS = ", ".join(AssetCandidateCacheDTO.COLUMNS)
+
+# 资产 INSERT：列名与占位符均从 AssetCreateDTO.COLUMNS 生成，
+# 与 AssetCreateDTO.to_insert_params() 严格同序。
+_INSERT_ASSET_SQL = "INSERT INTO assets ({cols}) VALUES ({phs})".format(
+    cols=", ".join(AssetCreateDTO.COLUMNS),
+    phs=placeholders(len(AssetCreateDTO.COLUMNS)),
+)
+
+_UPDATE_CANDIDATE_STATUS_SQL = (
+    "UPDATE asset_candidate_cache SET status = ? WHERE id = ?"
 )
 
 # SQLite 默认 SQLITE_MAX_VARIABLE_NUMBER = 999；
@@ -22,33 +42,9 @@ _MAX_PATHS_PER_QUERY = 998
 # 单次拉取 pending 的默认上限，避免无 limit 调用时全表扫描。
 _DEFAULT_PENDING_LIMIT = 500
 
-_INSERT_ASSET_SQL = """
-    INSERT INTO assets (
-        uuid, file_path, source_id,
-        thumb_path, thumb_small_path, thumb_medium_path, thumb_large_path,
-        original_name, mime_type, file_hash,
-        file_size, width, height,
-        taken_at, city, exif_json,
-        is_favorite, is_deleted, deleted_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-"""
-
 
 class ImportRepository(BaseRepository):
-    """"""
-
-    # ---------- 内部工具 ----------
-
-    @staticmethod
-    def _asset_params(dto: AssetCreateDTO) -> tuple:
-        return (
-            dto.uuid, dto.file_path, dto.source_id,
-            dto.thumb_path, dto.thumb_small_path, dto.thumb_medium_path, dto.thumb_large_path,
-            dto.original_name, dto.mime_type, dto.file_hash,
-            dto.file_size, dto.width, dto.height,
-            dto.taken_at, dto.city, dto.exif_json,
-            dto.is_favorite, dto.is_deleted, dto.deleted_at,
-        )
+    """导入流程仓储。"""
 
     # ---------- 读 ----------
 
@@ -75,7 +71,6 @@ class ImportRepository(BaseRepository):
                 )
             )
 
-        # placeholders = ','.join('?' for _ in unique_paths)
         ph = placeholders(len(unique_paths))
 
         rows_assets = self._fetchall(
@@ -89,7 +84,7 @@ class ImportRepository(BaseRepository):
             [source_id, *unique_paths],
         )
 
-        existing = set()
+        existing: set[str] = set()
         if rows_assets:
             existing.update(row[0] for row in rows_assets)
         if rows_cache:
@@ -107,32 +102,35 @@ class ImportRepository(BaseRepository):
         effective_limit = _DEFAULT_PENDING_LIMIT if limit is None else limit
         sql = (
             "SELECT {cols} FROM asset_candidate_cache "
-            "WHERE status = 'pending' ORDER BY id LIMIT ?"
+            "WHERE status = ? ORDER BY id LIMIT ?"
         ).format(cols=_CANDIDATE_COLUMNS)
 
-        rows = self._fetchall(sql, (effective_limit,))
+        rows = self._fetchall(
+            sql, (CandidateStatus.PENDING.value, effective_limit)
+        )
         if not rows:
             return []
         return [AssetCandidateCacheDTO.from_row(row) for row in rows]
 
-    def get_candidate_status(self, candidate_id: int) -> Optional[str]:
+    def get_candidate_status(
+            self, candidate_id: int
+    ) -> Optional[CandidateStatus]:
         """返回候选记录的当前状态；不存在时返回 None。
 
         供 ImportService 在 finalize_candidate 返回 None 时，
-        判断终态是 'skipped'（重复导入）还是 'failed'（真失败）。
+        判断终态是 SKIPPED（重复导入）还是 FAILED（真失败）。
         """
         row = self._fetchone(
             "SELECT status FROM asset_candidate_cache WHERE id = ?",
             (candidate_id,),
         )
-        return row[0] if row else None
+        return CandidateStatus(row[0]) if row else None
 
-    def get_source_paths(self) -> dict:
+    def get_source_paths(self) -> dict[int, str]:
         """返回 {source_id: source_path}。
 
         供 ImportService 在调度前把 source_id 解析为绝对 source_path，
         再由子进程 process_candidate 拼出真实绝对路径。
-        以 dict 返回便于子进程 side 直接按 source_id 查找。
         """
         rows = self._fetchall("SELECT id, source_path FROM ingest_source")
         return {row[0]: row[1] for row in rows}
@@ -142,15 +140,19 @@ class ImportRepository(BaseRepository):
     def create_candidate_cache_batch(
             self, candidates: Sequence[AssetCandidateCacheDTO]
     ) -> None:
-        """批量插入资产候选缓存记录。"""
+        """批量插入资产候选缓存记录。
+
+        仅写入 (uuid, path, source_id, mime_type) 四个显式列；
+        其余列（id / created_at / status / claimed_*）交给 schema DEFAULT。
+        """
         if not candidates:
             return
 
-        insert_sql = """
-            INSERT OR IGNORE INTO asset_candidate_cache
-                (uuid, path, source_id, mime_type)
-            VALUES (?, ?, ?, ?)
-        """
+        insert_sql = (
+            "INSERT OR IGNORE INTO asset_candidate_cache "
+            "(uuid, path, source_id, mime_type) "
+            "VALUES (?, ?, ?, ?)"
+        )
         params = [
             (c.uuid, c.path, c.source_id, c.mime_type) for c in candidates
         ]
@@ -167,7 +169,9 @@ class ImportRepository(BaseRepository):
         """插入新资产记录，返回自增 ID；失败返回 None。"""
         try:
             with self._transaction() as conn:
-                cursor = conn.execute(_INSERT_ASSET_SQL, self._asset_params(dto))
+                cursor = conn.execute(
+                    _INSERT_ASSET_SQL, dto.to_insert_params()
+                )
                 return cursor.lastrowid
         except Exception as e:
             self.logger.error(
@@ -180,14 +184,18 @@ class ImportRepository(BaseRepository):
     ) -> Optional[AssetCandidateCacheDTO]:
         """原子性地领取一条 pending 状态的候选记录，标记为 processing。"""
         now_str = datetime.now(timezone.utc).isoformat()
+
+        pending = CandidateStatus.PENDING.value
+        processing = CandidateStatus.PROCESSING.value
+
         update_sql = """
             UPDATE asset_candidate_cache
-            SET status = 'processing', claimed_by = ?, claimed_at = ?
-            WHERE id = ? AND status = 'pending'
+            SET status = ?, claimed_by = ?, claimed_at = ?
+            WHERE id = ? AND status = ?
         """
         select_id_sql = (
             "SELECT id FROM asset_candidate_cache "
-            "WHERE status = 'pending' ORDER BY id LIMIT 1"
+            "WHERE status = ? ORDER BY id LIMIT 1"
         )
         fetch_sql = (
             "SELECT {cols} FROM asset_candidate_cache WHERE id = ?"
@@ -195,33 +203,33 @@ class ImportRepository(BaseRepository):
 
         while True:
             with self._transaction() as conn:
-                row = conn.execute(select_id_sql).fetchone()
+                row = conn.execute(select_id_sql, (pending,)).fetchone()
                 if not row:
                     return None
                 candidate_id = row[0]
                 cursor = conn.execute(
                     update_sql,
-                    (worker_id, now_str, candidate_id)
+                    (processing, worker_id, now_str, candidate_id, pending),
                 )
                 if cursor.rowcount == 0:
+                    # 被其它 worker 抢走，重试
                     continue
                 full_row = conn.execute(
-                    fetch_sql,
-                    (candidate_id,)
+                    fetch_sql, (candidate_id,)
                 ).fetchone()
                 return AssetCandidateCacheDTO.from_row(full_row)
 
     def finalize_candidate(
             self,
             candidate_id: int,
-            dto: AssetCreateDTO
+            dto: AssetCreateDTO,
     ) -> Optional[int]:
         """在一个事务里完成 create_asset + 候选状态更新。
 
         返回值 / 候选终态：
-        - 插入成功                → 返回 asset_id，候选置 'done'
-        - 唯一约束冲突（重复导入） → 返回 None，候选置 'skipped'
-        - 其他异常                → 返回 None，候选置 'failed'
+        - 插入成功                → 返回 asset_id，候选置 DONE
+        - 唯一约束冲突（重复导入）→ 返回 None，候选置 SKIPPED
+        - 其他异常                → 返回 None，候选置 FAILED
 
         注意：异常/IntegrityError 时外层 with 已经 rollback 完成，
         再通过 _safe_set_candidate_status 用独立事务落状态，
@@ -229,11 +237,13 @@ class ImportRepository(BaseRepository):
         """
         try:
             with self._transaction() as conn:
-                cursor = conn.execute(_INSERT_ASSET_SQL, self._asset_params(dto))
+                cursor = conn.execute(
+                    _INSERT_ASSET_SQL, dto.to_insert_params()
+                )
                 asset_id = cursor.lastrowid
                 conn.execute(
-                    "UPDATE asset_candidate_cache SET status='done' WHERE id=?",
-                    (candidate_id,),
+                    _UPDATE_CANDIDATE_STATUS_SQL,
+                    (CandidateStatus.DONE.value, candidate_id),
                 )
                 return asset_id
 
@@ -247,15 +257,20 @@ class ImportRepository(BaseRepository):
                     "(candidate_id=%s, uuid=%s, file_path=%s, source_id=%s): %s",
                     candidate_id, dto.uuid, dto.file_path, dto.source_id, e,
                 )
-                self._safe_set_candidate_status(candidate_id, "skipped")
+                self._safe_set_candidate_status(
+                    candidate_id, CandidateStatus.SKIPPED
+                )
                 return None
+
             # 其它 IntegrityError（NOT NULL / CHECK 等）→ 真失败
             self.logger.exception(
                 "IntegrityError not caused by uniqueness "
                 "(candidate_id=%s, uuid=%s): %s",
                 candidate_id, dto.uuid, e,
             )
-            self._safe_set_candidate_status(candidate_id, "failed")
+            self._safe_set_candidate_status(
+                candidate_id, CandidateStatus.FAILED
+            )
             return None
 
         except Exception as e:
@@ -263,11 +278,15 @@ class ImportRepository(BaseRepository):
                 "finalize_candidate failed (candidate_id=%s, uuid=%s): %s",
                 candidate_id, dto.uuid, e,
             )
-            self._safe_set_candidate_status(candidate_id, "failed")
+            self._safe_set_candidate_status(
+                candidate_id, CandidateStatus.FAILED
+            )
             return None
 
     # noinspection broad-exception
-    def _safe_set_candidate_status(self, candidate_id: int, status: str) -> None:
+    def _safe_set_candidate_status(
+            self, candidate_id: int, status: CandidateStatus
+    ) -> None:
         """在独立事务里更新候选状态；失败只记录日志，不再向上抛。
 
         必须在外层 _transaction 之外调用：_execute 会取 _WRITE_LOCK 并 commit，
@@ -275,14 +294,14 @@ class ImportRepository(BaseRepository):
         """
         try:
             self._execute(
-                "UPDATE asset_candidate_cache SET status=? WHERE id=?",
-                (status, candidate_id),
+                _UPDATE_CANDIDATE_STATUS_SQL,
+                (status.value, candidate_id),
             )
         except Exception:
             self.logger.exception(
                 "Failed to set candidate %s status=%s; "
                 "recover_stale_candidates will eventually recycle it.",
-                candidate_id, status,
+                candidate_id, status.value,
             )
 
     def recover_stale_candidates(self, timeout_seconds: int = 3600) -> int:
@@ -294,10 +313,14 @@ class ImportRepository(BaseRepository):
         with self._transaction() as conn:
             cursor = conn.execute(
                 "UPDATE asset_candidate_cache "
-                "SET status = 'pending', claimed_by = NULL, claimed_at = NULL "
-                "WHERE status = 'processing' "
+                "SET status = ?, claimed_by = NULL, claimed_at = NULL "
+                "WHERE status = ? "
                 "  AND (claimed_at IS NULL OR claimed_at < ?)",
-                (cutoff,),
+                (
+                    CandidateStatus.PENDING.value,
+                    CandidateStatus.PROCESSING.value,
+                    cutoff,
+                ),
             )
             recovered = cursor.rowcount
 
@@ -308,19 +331,29 @@ class ImportRepository(BaseRepository):
             )
         else:
             self.logger.debug(
-                "No stale candidates to recover (timeout=%ds).", timeout_seconds,
+                "No stale candidates to recover (timeout=%ds).",
+                timeout_seconds,
             )
         return recovered
 
-    def update_candidate_status(self, candidate_id: int, status: str) -> None:
-        """更新候选缓存的状态。"""
+    def update_candidate_status(
+            self, candidate_id: int, status: CandidateStatus
+    ) -> None:
+        """更新候选缓存的状态。入参使用 CandidateStatus，禁止裸字符串。"""
+        current = self.get_candidate_status(candidate_id)
+        if current is not None and not current.can_transition_to(status):
+            raise ValueError(
+                f"illegal transition: {current.value} -> {status.value} "
+                f"(candidate_id={candidate_id})"
+            )
+
         self._execute(
-            "UPDATE asset_candidate_cache SET status = ? WHERE id = ?",
-            (status, candidate_id),
+            _UPDATE_CANDIDATE_STATUS_SQL,
+            (status.value, candidate_id)
         )
 
     def mark_candidate_done(self, candidate_id: int) -> None:
-        self.update_candidate_status(candidate_id, 'done')
+        self.update_candidate_status(candidate_id, CandidateStatus.DONE)
 
     def mark_candidate_failed(self, candidate_id: int) -> None:
-        self.update_candidate_status(candidate_id, 'failed')
+        self.update_candidate_status(candidate_id, CandidateStatus.FAILED)

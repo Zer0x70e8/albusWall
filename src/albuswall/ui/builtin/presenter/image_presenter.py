@@ -74,9 +74,11 @@ class ThumbnailGridPresenter(QObject):
     item_failed = Signal(int, str)
     item_activated = Signal(int)
 
-    # 跨线程投递（参数用 object 承载 QImage / None）
+    # 跨线程投递（沿用 _load_result 的模式）
     _load_result = Signal(int, int, object)  # (index, generation, QImage|None)
     _gen_done = Signal(int)  # asset_id
+    # 新增：把 ThumbnailService 的 worker 线程 emit 桥接回主线程
+    _thumb_ready = Signal(int)
 
     #: 居中偏好，(x, y) ∈ [0, 1]。0.5/0.5 = 正中心；
     #: 想“顶部优先”（人像、证件）可改 (0.5, 0.3) 之类。
@@ -128,13 +130,40 @@ class ThumbnailGridPresenter(QObject):
             self._on_generation_done, Qt.ConnectionType.QueuedConnection
         )
 
+        # signal 桥（支持 QueuedConnection）
+        self._thumb_ready.connect(
+            self._on_thumbnail_ready,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        # 订阅 custom Signal，emit 到 Qt signal，让 Qt 负责 marshal
+        if self._service is not None and hasattr(self._service, "thumbnail_ready"):
+            self._service.thumbnail_ready.connect(
+                lambda aid: self._thumb_ready.emit(aid)
+            )
+
         view.visible_range_changed.connect(self._on_visible_range_changed)
         view.cache_cleared.connect(self._on_cache_cleared)
         view.unit_clicked.connect(self._on_unit_clicked)
 
+    @Slot(int)
+    def _on_thumbnail_ready(self, asset_id: int) -> None:
+        """主线程执行：后台（backfill）缩略图就绪后重载。"""
+        self._submitted.discard(asset_id)
+        self._attempts.pop(asset_id, None)
+        try:
+            index = self._asset_ids.index(asset_id)
+        except ValueError:
+            return
+        if not self._view.has_pixmap(index):
+            self._start_load(index)
+
     # ------------------------------------------------------------------ #
     # 公开 API
     # ------------------------------------------------------------------ #
+    def setup(self, _):...
+
+    def teardown(self):...
+
     def set_assets(
             self,
             asset_ids: list[int],
@@ -325,13 +354,23 @@ class ThumbnailGridPresenter(QObject):
         self._attempts[asset_id] = n + 1
 
         try:
-            future: Future = self._service.submit(
+            future: Future | None = self._service.submit(
                 asset_id,
-                include_deleted=self._include_deleted,  # ← 关键
+                include_deleted=self._include_deleted,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _logger.error("submit thumbnail failed asset=%d: %s", asset_id, exc)
             self.item_failed.emit(index, f"submit:{type(exc).__name__}")
+            return
+
+        # 关键：submit 命中 inflight 去重时会返回 None。
+        # 不要在这里 add_done_callback；那次任务的完成会通过
+        # ThumbnailService.thumbnail_ready 信号广播回来。
+        if future is None:
+            _logger.trace(
+                "thumbnail submit deduped asset=%d, waiting for broadcast", asset_id,
+            )
+            self._submitted.add(asset_id)
             return
 
         self._submitted.add(asset_id)
@@ -340,10 +379,11 @@ class ThumbnailGridPresenter(QObject):
         )
 
     def _on_submit_finished(self, asset_id: int, future: Future) -> None:
-        """在 TaskService 的 worker 线程执行 —— 只发信号，不碰 UI。"""
         try:
             result = future.result()
-            if not getattr(result, "ok", False):
+            if getattr(result, "ok", False):
+                self._attempts.pop(asset_id, None)  # 成功 → 清计数
+            else:
                 error = getattr(result, "error", "?")
                 retryable = bool(getattr(result, "retryable", True))
                 _logger.warning(
@@ -351,11 +391,8 @@ class ThumbnailGridPresenter(QObject):
                     asset_id, error, retryable,
                 )
                 if not retryable:
-                    # 永久性失败：不 emit _gen_done，避免触发无意义重试。
-                    # _submitted 保持在集合里，阻止同一 asset 再次入队；
-                    # 下次 set_assets 会一并清空。
                     return
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _logger.error("thumbnail future error asset=%d: %s", asset_id, exc)
 
         self._gen_done.emit(asset_id)

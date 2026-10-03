@@ -69,20 +69,32 @@ class ConfigDeclaration:
 
     _config_getter = staticmethod(get_config)
 
-    # ── __init__ 删掉（不再自动 load，因为 load 需要 resolver） ──
-
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         cls._registry = {}
-        cls._config_declaration = cls  # 反向写入
+        cls._config_declaration = cls
 
     @property
     def registry(self) -> Dict[str, ConfigMeta]:
         return self._registry
 
+    # ── 新增：给 bootstrap 注册内建字段用 ─────────
+    @classmethod
+    def add_builtin(
+        cls,
+        key: str,
+        path: Sequence[str],
+        default: Any,
+        typ: Any,
+    ) -> None:
+        cls._registry[key] = {
+            "path": tuple(path),
+            "default": default,
+            "type": typ,
+        }
+
     @classmethod
     def load(cls, resolver) -> None:
-        """把 registry 里的声明注册到 Resolver：类型 + 缺失时注入默认值。"""
         for key, meta in cls._registry.items():
             path = meta["path"]
             if len(path) == 2:
@@ -109,6 +121,7 @@ class ConfigDeclaration:
             "type": annotation,
         }
 
+    # alias
     reg = register
 
 

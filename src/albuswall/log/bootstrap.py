@@ -28,14 +28,14 @@ LOG_HEAD = "[Log]"
 class LogConf:
     root = ConfigField("log", default={})
     log_file: str = ConfigField("files", "log", default="log_config.ini")
-    log_file_path: str = ConfigField("log", "config", default=None)
+    log_file_path: str = ConfigField("log", "_config", default=None)
     level: Union[int, str] = ConfigField("log", "level", default=None)
 
 
 def setup_log(container: Container):
     config: Configue = container.get("config")
     # ensure method is not enable in frozen namespace
-    # config.static.ensure("log", Namespace)
+    # _config.static.ensure("log", Namespace)
     config.static.path.ensure("config", Path)
     config.static.files.ensure("log", None)
     confs = config.static.log
@@ -50,21 +50,22 @@ def setup_log(container: Container):
 
     # 用类型查找，别用 handlers[0]
     root_logger = logging.getLogger(albuswall.__name__)
-    buffer_handler = next(
-        (h for h in root_logger.handlers
-         if isinstance(h, MemoryCacheHandler)),
+    buffer_handler: MemoryCacheHandler | None = next(
+        (h for h in root_logger.handlers if isinstance(h, MemoryCacheHandler)),
         None,
     )
 
-    if log_conf_file.is_file():
-        msg = f"Loaded log file: {log_conf_file}"
-        _logger.debug(msg)
-        logging.getLogger(albuswall.__name__).removeHandler(buffer_handler)
-        logging.config.fileConfig(log_conf_file, disable_existing_loggers=False)
-    else:
-        msg = f"Not found log config: {log_conf_file}"
-        _logger.warning(msg)
-        logging.getLogger(albuswall.__name__).removeHandler(buffer_handler)
+    if isinstance(buffer_handler, MemoryCacheHandler):  # 收窄
+        root_logger.removeHandler(buffer_handler)
+        if log_conf_file.is_file():
+            msg = f"Loaded log file: {log_conf_file}"
+            _logger.debug(msg)
+            logging.getLogger(albuswall.__name__).removeHandler(buffer_handler)
+            logging.config.fileConfig(log_conf_file, disable_existing_loggers=False)
+        else:
+            msg = f"Not found log _config: {log_conf_file}"
+            _logger.warning(msg)
+            logging.getLogger(albuswall.__name__).removeHandler(buffer_handler)
     # print(log_conf_file.read_text())
 
     if log_level is not None:
@@ -83,7 +84,7 @@ def setup_log(container: Container):
             if source_logger.isEnabledFor(record.levelno):
                 source_logger.handle(record)
         buffer_handler.buffer.clear()
-    # # print(config.static.files)
+    # # print(_config.static.files)
     # print(f"_logger.level = {_logger.level}")
     # print(f"_logger.propagate = {_logger.propagate}")
     # print(f"root handlers = {logging.getLogger().handlers}")

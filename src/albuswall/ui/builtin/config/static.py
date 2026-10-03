@@ -23,6 +23,9 @@ class WindowPresenterConfs:
         "ui", "preference_config_node", default="ui.preference")
     preference_file_name: str = ConfigField("files", "preference", default="preference")
     preference_file: Optional[str | Path] = ConfigField("ui", "preference_file", default=None)
+    window_state_file_name: str = ConfigField("files", "window_state", default="window.json")
+    # window_state_file: Path | str = ConfigField(
+    #     "ui", "window_states_file", default="${files:window_state}/window.json")
 
     auto_complete: bool = ConfigField("ui", "auto_complete_theme", default=True)
     auto_complete_qss: bool = ConfigField("ui", "auto_complete_qss", default=True)
@@ -38,7 +41,7 @@ class WindowPresenterConfs:
     def ensure_theme_files_completed(self, config: Configue) -> None:
         """按配置把内置主题里缺失的文件补到用户主题目录。
 
-        路径全部由 config.ini 插值算好：
+        路径全部由 _config.ini 插值算好：
             ui.style_sheet  -> 目标 QSS
             path.icon       -> 目标图标目录
         通过以下开关精细控制：

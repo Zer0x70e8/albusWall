@@ -9,6 +9,8 @@ from pprint import pformat
 
 from albuswall.utils.format import factory_repr
 
+_Missing = object()
+
 
 # noinspection overloads
 class Container:
@@ -51,23 +53,31 @@ class Container:
 
         典型用法::
 
-            container.register('config', lambda: Configue(...))
-            container.annotate('config', Configue)
+            container.register('_config', lambda: Configue(...))
+            container.annotate('_config', Configue)
             # 或一次清掉:
-            container.annotate('config', None)
+            container.annotate('_config', None)
         """
         if name not in self._factories:
             raise KeyError(f"Factory {name!r} is not registered.")
         factory, singleton, _ = self._factories[name]
         self._factories[name] = (factory, singleton, returns)
 
-    def get(self, name: str):
-        if name in self._instances:
-            return self._instances[name]
+    def get(self, name: str, default=_Missing):
+        if (
+                (not name in self._factories) and
+                default is not _Missing
+        ):
+            return default
         factory, singleton, _ = self._factories[name]
-        instance = factory()
         if singleton:
-            self._instances[name] = instance
+            if name in self._instances:
+                return self._instances[name]
+            else:
+                instance = factory()
+                self._instances[name] = instance
+        else:
+            instance = factory()
         return instance
 
     def on_boot(self, callback: Callable[[], Any]) -> Callable:
@@ -97,6 +107,16 @@ class Container:
                  for i in ("Boot callback error: "
                            f"{traceback.format_exc()}")
                  .split("\n")]
+
+    def has_instance(self, name: str) -> bool:
+        """判断工厂是否已经被实例化过（不触发懒创建）。"""
+        return name in self._instances
+
+    def require(self, name: str) -> Any:
+        """取已实例化的单例；不存在则抛 KeyError。不触发懒创建。"""
+        if name not in self._instances:
+            raise KeyError(f"Instance {name!r} has not been created yet.")
+        return self._instances[name]
 
     def finally_(self):
         if self._finalized:

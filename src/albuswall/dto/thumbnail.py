@@ -2,8 +2,10 @@
 """"""
 
 from dataclasses import dataclass
-from enum import Enum
-from typing import Mapping, Optional, Any
+from typing import Any, Mapping, Optional
+
+from albuswall.common.enums import ThumbSpec
+from albuswall.utils.path import join_path
 
 
 def _get(row: Any, key: str, default: Any = None) -> Any:
@@ -14,10 +16,30 @@ def _get(row: Any, key: str, default: Any = None) -> Any:
         return default
 
 
-class ThumbSpec(str, Enum):
-    SMALL = "small"
-    MEDIUM = "medium"
-    LARGE = "large"
+
+# --------------------------------------------------------------------------- #
+# 唯一权威定义：spec / column 映射
+# --------------------------------------------------------------------------- #
+# 仓储、服务、迁移脚本一律从这里 import，禁止就地重定义。
+
+ALL_SPECS: tuple[ThumbSpec, ...] = (
+    ThumbSpec.SMALL, ThumbSpec.MEDIUM, ThumbSpec.LARGE,
+)
+
+# spec → assets 列名
+SPEC_TO_COLUMN: dict[ThumbSpec, str] = {
+    ThumbSpec.SMALL: "thumb_small_path",
+    ThumbSpec.MEDIUM: "thumb_medium_path",
+    ThumbSpec.LARGE: "thumb_large_path",
+}
+
+COLUMN_TO_SPEC: dict[str, ThumbSpec] = {v: k for k, v in SPEC_TO_COLUMN.items()}
+
+# 缩略图主目录列，独立于 spec
+BASE_COLUMN: str = "thumb_path"
+
+# 所有缩略图列（含 base），顺序固定：base 在前，spec 按 ALL_SPECS 顺序
+ALL_THUMB_COLUMNS: tuple[str, ...] = (BASE_COLUMN, *(SPEC_TO_COLUMN[s] for s in ALL_SPECS))
 
 
 # --------------------------------------------------------------------------- #
@@ -62,14 +84,7 @@ class ThumbnailPaths:
 
         仓储不碰文件系统，这只是给调用方一个统一的拼接口径。
         """
-        rel = self.for_spec(spec)
-        if not rel:
-            return None
-        if rel.startswith("/"):
-            return rel  # 兜底：已经是绝对路径
-        if not self.base:
-            return None
-        return f"{self.base.rstrip('/')}/{rel.lstrip('/')}"
+        return join_path(self.base, self.for_spec(spec))
 
     def as_dict(self) -> dict[str, Optional[str]]:
         return {
@@ -95,11 +110,7 @@ class ThumbnailPaths:
 
     @classmethod
     def from_asset_dto(cls, dto: Any) -> "ThumbnailPaths":
-        """从历史 ``AssetDTO`` 借壳构造。
-
-        迁移过渡专用：调用点原本在 AssetDTO 上读 thumb* 字段时，
-        先改成 ``ThumbnailPaths.from_asset_dto(dto)`` 即可获得与
-        ``ThumbnailRepository.get_paths()`` 完全一致的语义。
+        """【迁移专用，勿在新代码使用】从历史 ``AssetDTO`` 借壳构造。
 
         待 AssetDTO 的 thumb* 字段彻底移除后，本类方法一并删除。
         """

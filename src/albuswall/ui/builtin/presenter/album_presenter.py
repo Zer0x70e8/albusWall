@@ -240,6 +240,8 @@ class AlbumPresenter(QObject):
             "view_service=%r module=%s",
             self._view_service, type(self._view_service).__module__)
 
+    def teardown(self):...
+
     def refresh(self) -> None:
         """重绘 TitleBar + 重新同步网格选中。"""
         self._apply_window_settings()

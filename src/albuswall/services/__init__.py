@@ -4,51 +4,52 @@
 from typing import TypedDict, Dict, Callable, Any
 
 from albuswall.core import Container
-from albuswall.utils.repository_registry import register_repositories
+from albuswall.utils.registry import register_tool
+from albuswall.utils.signal import Signal
 
 from .source import SourceService
-from .task import TaskService
-from .trigger import TriggerService
-from .import_ import ImportService
-from .view import ViewService
+from .trigger_sync import TriggerSyncService
 from .thumbnail import ThumbnailService
+from .view import ViewService
+from .import_ import ImportService
 
 
 # ---------- 类型表：唯一事实来源 ----------
 class Services(TypedDict):
     source_service: SourceService
-    task_service: TaskService
-    trigger_service: TriggerService
-    import_service: ImportService
-    view_service: ViewService
+    trigger_sync_service: TriggerSyncService
     thumbnail_service: ThumbnailService
+    view_service: ViewService
+    import_service: ImportService
 
 
 # ---------- 构建表：声明每个服务"怎么造" ----------
-# 签名统一为 (cls, container) -> instance，与 register_repositories.arg_map 对齐
+# 签名统一为 (cls, container) -> instance，与 register.arg_map 对齐
 _ARG_MAP: Dict[str, Callable[[Any, Container], Any]] = {
     "source_service": lambda cls, c: cls(
         c.get("ingest_source_repo"),
         c.get("import_repo"),
         c.get("task_service"),
     ),
-    "trigger_service": lambda cls, c: cls(
+    "trigger_sync_service": lambda cls, c: cls(
         c.get("ingest_source_repo"),
-        # 回调函数：调用 SourceService 的 update_source 方法
-        lambda source_id: c.get("source_service").update_source(source_id),
-    ),
-    "import_service": lambda cls, c: cls(
-        c.get("import_repo"),
-        c.get("task_service"),
-    ),
-    "view_service": lambda cls, c: cls(
-        c.get("view_repo"),
+        c.get("trigger_facade"),  # ← 从容器拿
+        source_added=c.get("source_service").source_added,
+        source_updated=c.get("source_service").source_updated,
+        source_removed=c.get("source_service").source_removed,
     ),
     "thumbnail_service": lambda cls, c: cls(
         c.get("task_service"),
         c.get("thumbnail_repo"),
         c.get("ingest_source_repo"),
     ),
+    "view_service": lambda cls, c:cls(
+        c.get("view_repo")
+    ),
+    "import_service": lambda cls, c:cls(
+        c.get("import_repo"),
+        c.get("task_service")
+    )
 }
 
 
@@ -58,28 +59,50 @@ def _default_factory(type_, _):
 
 
 def register_service(container: Container):
-    # 从类型表取出 {字段名: 类型}，作为构建表传给注册器
-    services = dict(Services.__annotations__)
+    container.register(
+        "trigger_refresh_signal",
+        lambda: Signal(name="TriggerRefreshRequested"),
+        returns=Signal,
+    )
 
-    register_repositories(
+    services = dict(Services.__annotations__)
+    register_tool(
         container,
         services,
         arg_map=_ARG_MAP,
         default_factory=_default_factory,
     )
 
-    # 启动回调 (添加顺序会间接决定启动顺序)
-    container.boot(lambda: container.get("source_service").start())
-    container.boot(lambda: container.get("task_service"))  # 只是 get 一下，确保构造
-    container.boot(lambda: container.get("trigger_service").start())
-    container.boot(lambda: container.get("import_service").start())
-    container.boot(lambda: container.get("thumbnail_service").start())
-    container.boot(
-        lambda: container.get("source_service").scan_finished.connect(
-            lambda _event: container.get("import_service").trigger()
+    # ── 连接：扫描完成 → 唤醒导入 worker ────────────────
+    def _wire_scan_to_import():
+        source_service = container.get("source_service")
+        import_service = container.get("import_service")
+        # scan_finished payload 是 SourceScanFinished，trigger() 不接受参数，
+        # 用 lambda 吞掉 payload。
+        source_service.scan_finished.connect(
+            lambda _result: import_service.trigger()
         )
-    )
 
-    # 关闭回调（顺序和启动相反）
-    container.final(lambda: container.get("trigger_service").stop())
-    container.final(lambda: container.get("task_service").shutdown())
+    # ── 连接：导入完成 → 触发缩略图补齐 ────────────────
+    def _wire_import_to_thumb():
+        import_service = container.get("import_service")
+        thumbnail_service = container.get("thumbnail_service")
+        # assets_imported payload 是 (sender, **totals)，scan_and_submit 无参。
+        import_service.assets_imported.connect(
+            lambda *a, **kw: thumbnail_service.scan_and_submit()
+        )
+
+    container.boot(_wire_scan_to_import)
+    container.boot(_wire_import_to_thumb)
+    container.boot(lambda: container.get("trigger_refresh_signal").connect(
+        container.get("source_service").update_source,
+    ))
+    container.boot(lambda: container.get("trigger_sync_service").start())
+    container.boot(lambda: container.get("source_service").start())
+    container.boot(lambda: container.get("import_service").start())   # ← 补
+    container.boot(lambda: container.get("thumbnail_service").start())
+
+    container.final(lambda: container.get("thumbnail_service").stop(wait=True))
+    container.final(lambda: container.get("import_service").stop_worker())  # ← 补
+    container.final(lambda: container.get("trigger_sync_service").stop())
+    container.final(lambda: container.get("source_service").shutdown())

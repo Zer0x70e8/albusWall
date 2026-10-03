@@ -108,33 +108,26 @@ class _SectionView:
     def __getitem__(self, key):
         return self._resolver.get_typed(self._section, key)
 
-    # 旧 API 兼容
-    # noinspection unused-parameter
     def ensure(self, key, expected_type=None, default=_Missing):
-        """确保 key 存在并返回类型化值。
-
-        - 已存在：走 resolver.get_typed（缓存 + 类型转换）
-        - 不存在且有 default：注入 raw 后再取
-        - 不存在且无 default：KeyError
-
-        expected_type 只是签名兼容，真正的类型转换由 resolver 负责
-        （因为类型早已通过 ConfigDeclaration.register 注册进 resolver 了）。
-        """
         resolver = object.__getattribute__(self, "_resolver")
         section = object.__getattribute__(self, "_section")
         node = (section, key)
 
+        # 先决定要不要注入默认值
+        if node not in resolver:
+            if default is _Missing:
+                raise KeyError(f"[{section}]{key}")
+            resolver.inject_raw(section, key, default)
+
         value = resolver.get_typed(section, key)
-        if expected_type is not None and value is not None and not isinstance(value, expected_type):
+
+        if expected_type is not None and value is not None \
+                and not isinstance(value, expected_type):
             raise TypeError(
                 f"[{section}]{key}: expected {expected_type.__name__}, "
                 f"got {type(value).__name__}"
             )
-        if node not in resolver:
-            if default is _Missing:
-                raise KeyError(f"[{section}]{key}")
-            resolver.inject_raw(section, key, default)  # 不要 str()
-        return resolver.get_typed(section, key)
+        return value
 
     def get(self, key, default=None):
         try:
@@ -153,7 +146,7 @@ class _SectionView:
             yield k, self._resolver.get_typed(self._section, k)
 
     def __setattr__(self, k, v):
-        raise AttributeError("view is read-only; use config.resolver.set(...)")
+        raise AttributeError("view is read-only; use _config.resolver.set(...)")
 
     def __str__(self):
         return f"[{self._section}]"
@@ -186,7 +179,7 @@ class StaticConfig(Namespace):
 
     # noinspection method-overriding
     def __setattr__(self, name, value):
-        raise AttributeError("StaticConfig is read-only; use config.resolver.set(...)")
+        raise AttributeError("StaticConfig is read-only; use _config.resolver.set(...)")
 
 
 # class StaticConfig:
@@ -209,7 +202,7 @@ class StaticConfig(Namespace):
 #         return resolver.get_typed("__default__", name)
 #
 #     def __setattr__(self, name, value):
-#         raise AttributeError("StaticConfig is read-only; use config.resolver.set(...)")
+#         raise AttributeError("StaticConfig is read-only; use _config.resolver.set(...)")
 #
 #     def items(self):
 #         resolver = self._resolver
@@ -226,7 +219,7 @@ class DynamicConfig(Namespace):
       - 从根路径访问所有子树（业务层唯一入口）
       - 内部字段过滤（_lazy 等不出现在视图里）
 
-    懒加载：`mount_lazy(name, factory)` 后，第一次 `config.dynamic.<name>`
+    懒加载：`mount_lazy(name, factory)` 后，第一次 `_config.dynamic.<name>`
     才真正调用 factory；从没访问过的子树既不会读盘，也不会在
     to_dict() / items() 里出现。
     """
@@ -269,7 +262,7 @@ class DynamicConfig(Namespace):
         return node
 
     def mount_lazy(self, name: str, factory: Callable[[], Namespace]) -> None:
-        """挂载懒加载工厂。第一次 `config.dynamic.<name>` 时调用 factory。"""
+        """挂载懒加载工厂。第一次 `_config.dynamic.<name>` 时调用 factory。"""
         if name in self._INTERNAL_ATTRS or name.startswith("_"):
             raise ValueError(f"mount_lazy: name {name!r} is reserved")
         if name in self.__dict__:

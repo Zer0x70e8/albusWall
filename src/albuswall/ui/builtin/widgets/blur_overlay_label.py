@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import (
     QPixmap, QPainter,
-    QShowEvent, QPaintEvent, QResizeEvent, QCloseEvent, QImage#, QRegion
+    QPaintEvent, QCloseEvent, QImage#, QRegion, QShowEvent, QResizeEvent
 )
 
 DRAW_LABEL_CONTENT = True
@@ -71,13 +71,10 @@ class BlurLabel(QLabel):
         self._update_timer.setInterval(100)
         self._update_timer.timeout.connect(self._update_blur)
 
-    @Property(float)
-    def blur_radius(self) -> float:
-        return self._blur_radius
-
-    @blur_radius.setter
-    def blur_radius(self, v: float) -> None:
-        self._set_blur_radius(v)
+    def refresh(self) -> None:
+        """外部内容变化后，主动请求重新抓取 + 模糊。"""
+        self._update_timer.start()  # 走去抖，100ms 后真正抓取
+        # 或者想立即生效就 self._update_blur()，但注意别在 paint 里调
 
     def _set_blur_radius(self, radius: float) -> None:
         radius = float(radius)
@@ -204,10 +201,10 @@ class BlurLabel(QLabel):
 
     # ---------- Event overrides (modified) ----------
 
-    def showEvent(self, event: QShowEvent) -> None:
-        """Update the blur when shown. No longer forces geometry to match target."""
-        self._update_blur()
-        super().showEvent(event)
+    # def showEvent(self, event: QShowEvent) -> None:
+    #     """Update the blur when shown. No longer forces geometry to match target."""
+    #     self._update_blur()
+    #     super().showEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         """
@@ -242,10 +239,10 @@ class BlurLabel(QLabel):
         if self._draw_label_content:
             super().paintEvent(event)
 
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        """Debounce blur updates when the widgets is resized."""
-        self._update_timer.start()
-        super().resizeEvent(event)
+    # def resizeEvent(self, event: QResizeEvent) -> None:
+    #     """Debounce blur updates when the widgets is resized."""
+    #     self._update_timer.start()
+    #     super().resizeEvent(event)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         """

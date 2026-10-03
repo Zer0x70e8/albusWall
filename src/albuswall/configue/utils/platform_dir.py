@@ -22,7 +22,7 @@ def get_user_config_dir(app_name: str, app_author: Optional[str] = None) -> Path
     Follows platform conventions:
     - Windows: %APPDATA%/<author>/<app> or %APPDATA%/<app>
     - macOS:   ~/Library/Application Support/<app>
-    - Linux:   ~/.config/<app>
+    - Linux:   ~/._config/<app>
     """
     if sys.platform == "win32":
         base = os.environ.get("APPDATA", os.path.expanduser("~"))
@@ -43,10 +43,10 @@ def get_user_data_dir(app_name: str, app_author: Optional[str] = None) -> Path:
     - Windows: %APPDATA%/<author>/<app> or %APPDATA%/<app>
     - macOS:   ~/Library/Application Support/<app>
     - Linux:   $XDG_DATA_HOME/<app> (default ~/.local/share/<app>)
-    Note: On Windows/macOS, config and data often share the same directory.
+    Note: On Windows/macOS, _config and data often share the same directory.
     """
     if sys.platform == "win32":
-        # Windows: config and data share %APPDATA%
+        # Windows: _config and data share %APPDATA%
         base = os.environ.get("APPDATA", os.path.expanduser("~"))
         if app_author:
             return Path(base) / app_author / app_name

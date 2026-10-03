@@ -48,8 +48,8 @@ if TYPE_CHECKING:
 __all__ = [
     "snake_case",
     "make_getter_name",
-    "build_repository_getters",
-    "register_repositories",
+    "build_getters",
+    "register_tool",
 ]
 
 
@@ -106,7 +106,7 @@ def _default_factory(type_: Any, container: "Container") -> Any:
 # 生成具名 getter
 # --------------------------------------------------------------------------- #
 
-def build_repository_getters(
+def build_getters(
         repositories: Mapping[str, type],
         *,
         arg_map: Mapping[str, Callable[[Any, "Container"], Any]] | None = None,
@@ -153,7 +153,7 @@ def build_repository_getters(
 # 一次性注册到 container
 # --------------------------------------------------------------------------- #
 
-def register_repositories(
+def register_tool(
         container: "Container",
         repositories: Mapping[str, type],
         *,
@@ -165,7 +165,7 @@ def register_repositories(
 
     返回 ``{字段名: 无参 accessor}``，可用于测试或手动调用。
     """
-    getters = build_repository_getters(
+    getters = build_getters(
         repositories,
         arg_map=arg_map,
         default_factory=default_factory,

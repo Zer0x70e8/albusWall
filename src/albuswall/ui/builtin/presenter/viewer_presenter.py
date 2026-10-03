@@ -196,6 +196,9 @@ class ViewerPresenter:
         """把详情视图从栈顶弹出 / 隐藏。"""
         ...
 
+    def setup(self, _):
+        ...
+
     def teardown(self) -> None:
         self._cancel_inflight()
 
@@ -359,12 +362,13 @@ class ViewerPresenter:
         except Exception:
             return
 
-        # 缩略图清理是 best-effort：库里行删了就该走完流程，
-        # 不要因为某张缩略图文件删失败而卡住 UI。
-        try:
-            self.thumbnail_service.purge_bulk([asset_id])
-        except Exception:
-            pass
+        # NOTE: 软删除不purge_bulk
+        # # 缩略图清理是 best-effort：库里行删了就该走完流程，
+        # # 不要因为某张缩略图文件删失败而卡住 UI。
+        # try:
+        #     self.thumbnail_service.purge_bulk([asset_id])
+        # except Exception:
+        #     pass
 
         self.view.notify_assets_changed([asset_id])
 

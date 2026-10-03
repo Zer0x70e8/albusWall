@@ -39,7 +39,7 @@ def setup(config: "Configue"):
         PreferenceDeclaration  →  等价于 ConfigDeclaration
         _build_type_map_and_defaults  →  复用（类型 + 默认值）
         TypedConfigParser / DictInterpolation  →  复用
-        dynamic.preference  →  等价于 config.static
+        dynamic.preference  →  等价于 _config.static
     """
     # 延迟导入，避免与 bootstrap 循环依赖
     from albuswall.configue.declaration import (

@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - 环境缺依赖时的降级路径
 
 if TYPE_CHECKING:
     from albuswall.repositories.import_ import ImportRepository
-    from .task import TaskService
+    from albuswall.infrastructure.task import TaskService
 
 _logger = getLogger(__name__)
 
@@ -55,7 +55,7 @@ _logger = getLogger(__name__)
 class ImportConfig:
     """ImportService 的可调参数。
 
-    对应配置文件（config.toml / *.ini 等）：
+    对应配置文件（_config.toml / *.ini 等）：
 
         [import]
         batch_size      = 500     # 单轮 pending 批量上限

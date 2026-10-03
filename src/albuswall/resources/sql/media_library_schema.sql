@@ -46,11 +46,13 @@ CREATE TABLE IF NOT EXISTS ingest_source (
     subfolder_recursion     INTEGER NOT NULL DEFAULT 0,          -- 0/1 布尔：是否递归子目录
     subfolder_recursion_depth INTEGER,                           -- 递归深度；NULL 表示不限
     trigger_config          TEXT,                                -- JSON 对象，见下方结构示例
+    disabled                INTEGER NOT NULL DEFAULT 0,          -- 0/1 布尔：用户显式禁用（不参与调度）
     created_at              TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
     modified_at             TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
     CONSTRAINT chk_file_type_check CHECK (file_type_check IN ('suffix', 'magic')),
     CONSTRAINT chk_auto_mount_bool CHECK (auto_mount IN (0,1)),
-    CONSTRAINT chk_subfolder_recursion_bool CHECK (subfolder_recursion IN (0,1))
+    CONSTRAINT chk_subfolder_recursion_bool CHECK (subfolder_recursion IN (0,1)),
+    CONSTRAINT chk_ingest_source_disabled_bool CHECK (disabled IN (0,1))
 );
 
 -- 特殊源：id = 0，虚拟根 / 手动导入入口
@@ -58,14 +60,16 @@ CREATE TABLE IF NOT EXISTS ingest_source (
 INSERT OR IGNORE INTO ingest_source (
     id, title, description, source_path, target_path, mount_point,
     auto_mount, file_type_check, file_types, tags,
-    subfolder_recursion, subfolder_recursion_depth, trigger_config
+    subfolder_recursion, subfolder_recursion_depth, trigger_config,
+    disabled
 ) VALUES (
     0,
     '__manual__',
     '手动导入 / 虚拟根；file_path 语义见应用层',
     '',
     NULL, NULL, 0, 'suffix', '[]', '[]', 0, NULL,
-    '{"update_mode":"manual"}'
+    '{"update_mode":"manual"}',
+    0
 );
 
 -- trigger_config JSON 结构示例
@@ -195,7 +199,9 @@ CREATE TABLE IF NOT EXISTS asset_candidate_cache (
 -- SQLite 中 NULL 视为最小值：列 DESC 索引里 NULL 天然聚在末尾，
 -- 与 `IS NULL` 排在最后一位的语义完全一致，故无需为 NULL 段单独建索引。
 --
--- 旧单列索引 idx_assets_taken_at 已被下面两条完全覆盖，先 DROP 以免残留。
+-- 旧的单列索引 idx_assets_taken_at 已被下面两条完全覆盖
+-- （(taken_at DESC, id DESC) WHERE is_deleted=0 对任何只按 taken_at 排序
+--   的活跃查询都是严格更优的选择），这里 DROP 掉以免残留造成优化器抖动。
 DROP INDEX IF EXISTS idx_assets_taken_at;
 
 -- 活跃段：覆盖 list_asset_ids_by_scope('active') / list_assets 的 ORDER BY
@@ -215,10 +221,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_source_file_path_active
 
 -- 按导入源查询资产
 CREATE INDEX IF NOT EXISTS idx_assets_source_id ON assets(source_id);
-
--- 按拍摄时间排序（活跃资产）
-CREATE INDEX IF NOT EXISTS idx_assets_taken_at
-    ON assets(taken_at) WHERE is_deleted = 0;
 
 -- 收藏过滤（partial：只索引收藏项，体积更小）
 CREATE INDEX IF NOT EXISTS idx_assets_favorite

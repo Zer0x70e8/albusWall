@@ -47,11 +47,11 @@ def ui_loader(name: str) -> _Decorator:
 
         @declare(PLUGIN_ID)
         def setup(container):
-            from .config import WindowPresenterConfs  # noqa: F401
+            from ._config import WindowPresenterConfs  # noqa: F401
 
         @ui_loader("builtin")
         def load(container):
-            if container.get("config").static.ui.no_builtin:
+            if container.get("_config").static.ui.no_builtin:
                 return None
             from .application import Application
             return Application

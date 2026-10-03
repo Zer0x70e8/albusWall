@@ -65,10 +65,10 @@ class ScheduledTrigger:
 @dataclass
 class TriggerConfig:
     """总触发配置，对应 trigger_config 字段（嵌套结构）"""
-    id: Optional[int] = None  # 添加默认值
-    update_mode: List[UpdateMode] = None  # 可同时选择多种模式，默认为空列表
-    device_trigger: DeviceTrigger = None
-    scheduled: ScheduledTrigger = None
+    id: Optional[int] = None
+    update_mode: List[UpdateMode] | None = None  # 可同时选择多种模式，默认为空列表
+    device_trigger: DeviceTrigger | None = None
+    scheduled: ScheduledTrigger | None = None
 
     def __post_init__(self):
         # 确保复杂字段有默认实例，避免 None 引发错误
@@ -103,10 +103,16 @@ class TriggerConfig:
         # asdict 会递归包含所有字段，包括 id
         return {
             "id": self.id,
-            "update_mode": [mode.value for mode in self.update_mode],
-            "device_trigger": asdict(self.device_trigger),
-            "scheduled": asdict(self.scheduled),
+            "update_mode": [mode.value for mode in self._normal(self.update_mode, list)],
+            "device_trigger": asdict(self._normal(self.device_trigger, dict)),
+            "scheduled": asdict(self._normal(self.scheduled, dict)),
         }
+
+    @staticmethod
+    def _normal(v, t):
+        if v is None:
+            v = t()
+        return v
 
     def to_json(self) -> str:
         """转换为 JSON 字符串"""

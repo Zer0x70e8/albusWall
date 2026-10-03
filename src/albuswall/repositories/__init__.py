@@ -3,12 +3,12 @@
 
 from typing import TYPE_CHECKING, Callable, Any, TypedDict
 
-from albuswall.utils.repository_registry import register_repositories
+from albuswall.utils.registry import register_tool
 
 from .source import IngestSourceRepository
 from .import_ import ImportRepository
-from .view import ViewRepository
 from .thumbnail import ThumbnailRepository
+from .view import ViewRepository
 from .asset import AssetRepository
 
 if TYPE_CHECKING:
@@ -18,8 +18,8 @@ if TYPE_CHECKING:
 class Repositories(TypedDict):
     ingest_source_repo: IngestSourceRepository
     import_repo: ImportRepository
-    view_repo: ViewRepository
     thumbnail_repo: ThumbnailRepository
+    view_repo: ViewRepository
     asset_repo: AssetRepository
 
 
@@ -31,6 +31,6 @@ _ARG_MAP: dict[str, Callable[[Any, "Container"], Any]] = {
 
 
 def registry_repository(container: "Container"):
-    register_repositories(
+    register_tool(
         container, Repositories.__annotations__, arg_map=_ARG_MAP
     )

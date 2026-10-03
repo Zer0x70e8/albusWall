@@ -6,8 +6,6 @@ import os
 from pathlib import Path
 from typing import Iterator, Optional, Union
 
-from albuswall.dto.thumbnail import ThumbSpec  # ← 新增
-
 _SPEC_SUFFIX: dict[str, str] = {}  # 留空，后缀由 fmt 参数决定
 
 
@@ -128,40 +126,19 @@ def resolve_asset_source(
     return Path(source_path) / p
 
 
-def build_thumb_paths(
-        *,
-        uuid: str,
-        version: int | str,
-        fmt: str,
-) -> tuple[str, dict[ThumbSpec, str]]:
-    """构造缩略图相对路径。
+def join_path(base: Optional[str], rel: Optional[str]) -> Optional[str]:
+    """把「平台本地 base」与「POSIX 风格 rel」拼成平台本地路径。
 
-    Returns:
-        (base_rel, spec_rels)
-
-        base_rel  —— 形如 "v1/ab/<uuid>"，spec 文件的父目录（相对 thumb_root）
-        spec_rels —— {"small": "small.webp", "medium": "medium.webp", ...}
-
-    布局设计：
-        <thumb_root>/v1/ab/<uuid>/small.webp
-        <thumb_root>/v1/ab/<uuid>/medium.webp
-        <thumb_root>/v1/ab/<uuid>/large.webp
-    用 uuid 的前两位做一级散列，避免单目录塞太多文件。
+    契约：
+      - base 是平台本地绝对路径，如 /home/... 或 C:\\Users\\...
+      - rel 是 POSIX 风格相对路径，如 "small/xxx.jpg"
+      - rel 若已是绝对路径（POSIX 或平台本地）→ 原样返回
     """
-    if not uuid:
-        raise ValueError("uuid must be non-empty")
-
-    v = f"v{version}" if isinstance(version, int) else str(version)
-    shard = uuid[:2].lower()
-    base_rel = f"{v}/{shard}/{uuid}"
-
-    ext = (fmt or "webp").lower().lstrip(".")
-    if ext == "jpg":
-        ext = "jpeg"
-
-    # noinspection string-conversion-without-dunder-method
-    spec_rels: dict[ThumbSpec, str] = {
-        spec: f"{spec.value}.{ext}"  # ← 用 .value，避免 3.12 Enum 格式化
-        for spec in (ThumbSpec.SMALL, ThumbSpec.MEDIUM, ThumbSpec.LARGE)
-    }
-    return base_rel, spec_rels
+    if not rel:
+        return None
+    p_rel = Path(rel)
+    if p_rel.is_absolute():
+        return str(p_rel)
+    if not base:
+        return None
+    return str(Path(base) / p_rel)
