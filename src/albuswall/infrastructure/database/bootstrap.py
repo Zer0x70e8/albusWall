@@ -1,7 +1,7 @@
 #
 """"""
 
-from albuswall.core import Container
+from albuswall.core import Container, Application
 from albuswall.configue import ConfigField
 
 from .connector import Connector
@@ -15,6 +15,7 @@ class Config:
 
 
 config = Config()
+app = Application.instance()
 
 
 def register_database(
@@ -25,10 +26,10 @@ def register_database(
         must_exist=config.must_exist
     ), returns=Connector)
 
-    @container.on_boot
+    @app.on_boot
     def _keep_db_alive():
         container.get("db").keep_alive()  # 主线程持锚
 
-    @container.on_final
+    @app.on_final
     def _release_db_alive():
         container.get("db").release_keep_alive()

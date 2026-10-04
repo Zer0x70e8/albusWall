@@ -431,45 +431,52 @@ QStackedWidget#WindowOverlay {
 #AlbumCloseButton,
 #IngestSourceCloseButton,
 #SettingCloseButton,
-QPushButton#DetailCloseButton {
+QPushButton#DetailCloseButton,
+#IngestSourceCloseDetailBtn {
     min-width: 0;
     /* max-width: 16777211;                       /* 不用这个值会触发警告 */
 
-    min-height: 32px;
-    max-height: 32px;
-    padding: 0 16px;
+    min-height: 36px;
+    max-height: 36px;
+    padding: 0 20px;
 
-    border: 1px solid rgba(80, 80, 80, 0.70);
-    border-radius: 16px;
+    border: 2px solid rgba(130, 130, 130, 0.75);
+    border-radius: 18px;
 
-    background-color: rgba(96, 96, 96, 0.22);
-    color: rgba(192, 192, 192, 0.85);
+    background-color: rgba(96, 96, 96, 0.55);
+    color: rgba(224, 224, 224, 0.95);
+    font-weight: bold;
+
     font-size: 1em;
 }
 
 #AlbumCloseButton:hover,
 #IngestSourceCloseButton:hover,
 #SettingCloseButton:hover,
-QPushButton#DetailCloseButton:hover {
-    background-color: rgba(255, 96, 96, 0.50);
-    border: 1px solid rgba(255, 96, 96, 0.60);
+QPushButton#DetailCloseButton:hover,
+#IngestSourceCloseDetailBtn:hover {
+    background-color: rgba(255, 96, 96, 0.72);
+    border: 2px solid rgba(255, 120, 120, 0.90);
     color: #FFFFFF;
 }
 
 #AlbumCloseButton:pressed,
 #IngestSourceCloseButton:pressed,
 #SettingCloseButton:pressed,
-QPushButton#DetailCloseButton:pressed {
-    background-color: rgba(200, 64, 64, 0.65);
-    color: rgba(255, 255, 255, 0.92);
+QPushButton#DetailCloseButton:pressed,
+#IngestSourceCloseDetailBtn:pressed {
+    background-color: rgba(200, 64, 64, 0.92);
+    border: 2px solid rgba(180, 48, 48, 0.95);
+    color: #FFFFFF;
 }
 
 #AlbumCloseButton:focus,
 #IngestSourceCloseButton:focus,
 #SettingCloseButton:focus,
-QPushButton#DetailCloseButton:focus {
+QPushButton#DetailCloseButton:focus,
+#IngestSourceCloseDetailBtn:focus {
     outline: none;
-    border: 2px solid rgba(0, 122, 255, 0.65);
+    border: 2px solid rgba(0, 122, 255, 0.85);
 }
 
 /* —— 相册工具按钮：成对胶囊（左圆 / 右圆） —— */
@@ -609,6 +616,7 @@ QPushButton#DetailCloseButton:focus {
 }
 
 /* —— 详情面板里的关闭按钮（XS · 24px 正圆，对齐窗口动作按钮风格） —— */
+/*
 #IngestSourceCloseDetailBtn {
     min-width:  24px;  max-width:  24px;
     min-height: 24px;  max-height: 24px;
@@ -636,6 +644,7 @@ QPushButton#DetailCloseButton:focus {
     outline: none;
     border: 2px solid rgba(0, 122, 255, 0.65);
 }
+*/
 
 /* ============================================================================
  *  2.7  IngestSource  ·  采集源界面（对齐 Album 风格）
@@ -750,6 +759,7 @@ QPushButton#DetailCloseButton:focus {
  *  2.7.5  详情面板关闭按钮  ·  XS 正圆（与 CloseButton 呼应）
  * --------------------------------------------------------------------------- */
 
+/*
 #IngestSourceCloseDetailBtn {
     min-width:  24px;  max-width:  24px;
     min-height: 24px;  max-height: 24px;
@@ -776,6 +786,377 @@ QPushButton#DetailCloseButton:focus {
 #IngestSourceCloseDetailBtn:focus {
     outline: none;
     border: 2px solid rgba(0, 122, 255, 0.65);
+}
+*/
+
+
+/* ============================================================================
+ *  2.8  IngestSource Detail  ·  采集源详情表单
+ * ============================================================================
+ *  命名空间约定（来自 auto_set_object_names）：
+ *      #IngestSourceDetailWidget                       -> 表单根 QFrame
+ *      #IngestSourceDetailWidgetGrpMeta                -> 元信息分组
+ *      #IngestSourceDetailWidgetGrpSource              -> 摄入源分组
+ *      #IngestSourceDetailWidgetGrpTriggers            -> 触发器分组
+ *      #IngestSourceDetailWidgetGrpScheduled           -> 定时触发器子分组
+ *      #IngestSourceDetailWidgetGrpDeviceInsertionTrigger -> 设备触发器子分组
+ * ============================================================================ */
+
+
+/* ---------------------------------------------------------------------------
+ *  2.8.1  表单根 + 标签  ·  全部透明，颜色继承全局
+ * --------------------------------------------------------------------------- */
+
+#IngestSourceDetailWidget {
+    background: transparent;
+    border: none;
+}
+
+#IngestSourceDetailWidget QLabel {
+    background: transparent;
+    color: rgba(220, 220, 220, 0.92);
+    font-size: 1em;
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.8.2  GroupBox  ·  胶囊分组卡片
+ *      —— 外层三级分组用半透明灰卡；内层两个触发器分组再深一档，形成层级
+ * --------------------------------------------------------------------------- */
+
+#IngestSourceDetailWidget QGroupBox {
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(110, 110, 110, 0.58),
+        stop:0.7  rgba(90,  90,  90, 0.52),
+        stop:1    rgba(70,  70,  70, 0.48)
+    );
+    border: 1px solid rgba(80, 80, 80, 0.65);
+    border-radius: 12px;
+    margin-top: 1.4em;
+    padding: 14px 12px 12px 12px;
+    font-weight: bold;
+    color: rgba(240, 240, 240, 0.92);
+}
+
+#IngestSourceDetailWidget QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 16px;
+    padding: 0 8px;
+    background: transparent;
+    color: rgba(240, 240, 240, 0.95);
+}
+
+/* 嵌套一层：定时触发器 / 设备插入触发器 */
+#IngestSourceDetailWidget QGroupBox QGroupBox {
+    background: rgba(20, 20, 20, 0.45);
+    border: 1px solid rgba(80, 80, 80, 0.45);
+    border-radius: 10px;
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.8.3  文本输入框 / 数字框  ·  S 号胶囊
+ * --------------------------------------------------------------------------- */
+
+#IngestSourceDetailWidget QLineEdit,
+#IngestSourceDetailWidget QSpinBox {
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0 12px;
+
+    border: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 13px;                       /* 26 / 2 = 13 → 胶囊 */
+
+    background-color: rgba(20, 20, 20, 0.75);
+    color: rgba(240, 240, 240, 0.95);
+
+    font-size: 1em;
+    selection-background-color: rgba(0, 122, 255, 0.55);
+    selection-color: #FFFFFF;
+}
+
+#IngestSourceDetailWidget QLineEdit:hover,
+#IngestSourceDetailWidget QSpinBox:hover {
+    border: 1px solid rgba(160, 160, 160, 0.85);
+}
+
+#IngestSourceDetailWidget QLineEdit:focus,
+#IngestSourceDetailWidget QSpinBox:focus {
+    border: 1px solid rgba(0, 122, 255, 0.85);
+    background-color: rgba(30, 30, 30, 0.78);
+}
+
+#IngestSourceDetailWidget QLineEdit:disabled,
+#IngestSourceDetailWidget QSpinBox:disabled {
+    color: rgba(160, 160, 160, 0.55);
+    background-color: rgba(30, 30, 30, 0.30);
+    border: 1px solid rgba(80, 80, 80, 0.40);
+}
+
+/* SpinBox 上下按钮：去掉默认白底 */
+#IngestSourceDetailWidget QSpinBox::up-button,
+#IngestSourceDetailWidget QSpinBox::down-button {
+    width: 18px;
+    border: none;
+    background: transparent;
+}
+
+#IngestSourceDetailWidget QSpinBox::up-arrow,
+#IngestSourceDetailWidget QSpinBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+}
+
+#IngestSourceDetailWidget QSpinBox::up-arrow {
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid rgba(200, 200, 200, 0.85);
+}
+
+#IngestSourceDetailWidget QSpinBox::down-arrow {
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid rgba(200, 200, 200, 0.85);
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.8.4  下拉框  ·  S 号胶囊
+ * --------------------------------------------------------------------------- */
+
+#IngestSourceDetailWidget QComboBox {
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0 12px;
+
+    border: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 13px;
+
+    background-color: rgba(20, 20, 20, 0.75);
+    color: rgba(240, 240, 240, 0.95);
+    font-size: 1em;
+}
+
+#IngestSourceDetailWidget QComboBox:hover {
+    border: 1px solid rgba(160, 160, 160, 0.85);
+}
+
+#IngestSourceDetailWidget QComboBox:focus,
+#IngestSourceDetailWidget QComboBox:on {
+    border: 1px solid rgba(0, 122, 255, 0.85);
+}
+
+#IngestSourceDetailWidget QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 22px;
+    border: none;
+    background: transparent;
+}
+
+/* 用纯 CSS 画一个三角箭头，避免默认黑色箭头在深底上看不见 */
+#IngestSourceDetailWidget QComboBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    margin-right: 6px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid rgba(210, 210, 210, 0.85);
+}
+
+/* 下拉弹出列表 */
+#IngestSourceDetailWidget QComboBox QAbstractItemView {
+    background-color: rgba(40, 40, 40, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 10px;
+    padding: 4px;
+    outline: none;
+    selection-background-color: rgba(0, 122, 255, 0.55);
+    selection-color: #FFFFFF;
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.8.5  详情内的小按钮（add / browser）  ·  S 号渐变胶囊
+ *      —— 与 #IngestSourceAddButton 同款，但用后代选择器限定在表单内，
+ *         不会污染 IngestSource 顶栏的 add / apply
+ * --------------------------------------------------------------------------- */
+
+#IngestSourceDetailWidget QPushButton {
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0 14px;
+
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 13px;
+
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(96, 96, 96, 0.80),
+        stop:0.8  rgba(128, 128, 128, 0.50),
+        stop:1    rgba(196, 196, 196, 0.10)
+    );
+    color: rgba(220, 220, 220, 0.90);
+    font-size: 1em;
+}
+
+#IngestSourceDetailWidget QPushButton:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0    rgba(96, 96, 96, 0.85),
+        stop:0.8  rgba(192, 192, 192, 0.55),
+        stop:1    rgba(255, 255, 255, 0.14)
+    );
+    border: 1px solid rgba(255, 255, 255, 0.30);
+    color: #FFFFFF;
+}
+
+#IngestSourceDetailWidget QPushButton:pressed {
+    background: rgba(72, 72, 72, 0.90);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+#IngestSourceDetailWidget QPushButton:focus {
+    outline: none;
+    border: 2px solid rgba(0, 122, 255, 0.65);
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.8.6  CheckBox / RadioButton  ·  胶囊指示器
+ * --------------------------------------------------------------------------- */
+
+#IngestSourceDetailWidget QCheckBox,
+#IngestSourceDetailWidget QRadioButton {
+    background: transparent;
+    color: rgba(220, 220, 220, 0.92);
+    spacing: 8px;
+    font-size: 1em;
+}
+
+#IngestSourceDetailWidget QCheckBox::indicator,
+#IngestSourceDetailWidget QRadioButton::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid rgba(160, 160, 160, 0.75);
+    background-color: rgba(30, 30, 30, 0.55);
+}
+
+/* 复选框：圆角方块（略方一点，和单选区分开） */
+#IngestSourceDetailWidget QCheckBox::indicator {
+    border-radius: 4px;
+}
+
+/* 单选框：正圆 */
+#IngestSourceDetailWidget QRadioButton::indicator {
+    border-radius: 7px;
+}
+
+#IngestSourceDetailWidget QCheckBox::indicator:hover,
+#IngestSourceDetailWidget QRadioButton::indicator:hover {
+    border: 1px solid rgba(220, 220, 220, 0.95);
+}
+
+/* 选中态 */
+#IngestSourceDetailWidget QCheckBox::indicator:checked {
+    background-color: rgba(0, 122, 255, 0.95);
+    border: 1px solid rgba(0, 122, 255, 1.0);
+}
+
+#IngestSourceDetailWidget QRadioButton::indicator:checked {
+    /* 外圈蓝环 + 中心深色，形成实心点效果 */
+    background-color: rgba(0, 122, 255, 0.95);
+    border: 4px solid rgba(30, 30, 30, 0.90);
+    border-radius: 7px;
+}
+
+#IngestSourceDetailWidget QCheckBox::indicator:disabled,
+#IngestSourceDetailWidget QRadioButton::indicator:disabled {
+    border: 1px solid rgba(80, 80, 80, 0.50);
+    background-color: rgba(30, 30, 30, 0.30);
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.8.7  标签 / 文件类型的小列表  ·  深底胶囊条
+ * --------------------------------------------------------------------------- */
+
+#IngestSourceDetailWidget QListView {
+    background-color: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(80, 80, 80, 0.55);
+    border-radius: 10px;
+    padding: 2px 4px;
+    outline: none;
+}
+
+#IngestSourceDetailWidget QListView::item {
+    color: rgba(220, 220, 220, 0.92);
+    border: 1px solid rgba(120, 120, 120, 0.55);
+    border-radius: 8px;
+    padding: 2px 8px;
+    margin: 2px;
+    background-color: rgba(60, 60, 60, 0.55);
+}
+
+#IngestSourceDetailWidget QListView::item:hover {
+    background-color: rgba(96, 96, 96, 0.80);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+#IngestSourceDetailWidget QListView::item:selected {
+    background-color: rgba(0, 122, 255, 0.55);
+    border: 1px solid rgba(0, 122, 255, 0.80);
+    color: #FFFFFF;
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.8.8  详情滚动区滚动条  ·  与 SettingMain 一致的细窄款
+ * --------------------------------------------------------------------------- */
+
+#IngestSourceScrollArea QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 4px 2px 4px 0;
+    border: none;
+}
+
+#IngestSourceScrollArea QScrollBar::handle:vertical {
+    background: rgba(255, 255, 255, 0.35);
+    min-height: 24px;
+    border-radius: 4px;
+}
+
+#IngestSourceScrollArea QScrollBar::handle:vertical:hover {
+    background: rgba(255, 255, 255, 0.60);
+}
+
+#IngestSourceScrollArea QScrollBar::handle:vertical:pressed {
+    background: rgba(0, 122, 255, 0.75);
+}
+
+#IngestSourceScrollArea QScrollBar::add-line:vertical,
+#IngestSourceScrollArea QScrollBar::sub-line:vertical,
+#IngestSourceScrollArea QScrollBar::add-page:vertical,
+#IngestSourceScrollArea QScrollBar::sub-page:vertical {
+    background: transparent;
+    height: 0;
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  2.8.9  左侧卡片列表 item  ·  兜底把 item 背景拉回透明
+ *      —— 如果卡片仍为纯黑，多半是 itemDelegate 里 fillRect 了黑底，
+ *         QSS 无法覆盖；这里只是给"默认画刷"兜个底。
+ * --------------------------------------------------------------------------- */
+
+#IngestSourceView::item {
+    background: transparent;
+    border: none;
 }
 
 
@@ -1015,12 +1396,4 @@ QPushButton#DetailCloseButton:focus {
 }
 
 /* ======== detail ======== */
-/*
-QPushButton#DetailCloseButton {
-    border: none; border-radius: 16px;
-    color: #f2f2f2; font-size: 15px;
-    background: rgba(255, 255, 255, 0.12);
-}
-QPushButton#DetailCloseButton:hover   { background: rgba(255,255,255,0.26); }
-QPushButton#DetailCloseButton:pressed { background: rgba(255,255,255,0.36); }
-*/
+#Detail {}

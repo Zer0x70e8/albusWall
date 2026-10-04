@@ -17,7 +17,7 @@ from albuswall.configue import (
 
 from ..widgets import blur_overlay_label
 from ..config import WindowPresenterConfs
-from .window_resizer import WindowResizer
+from ..platform.window_resizer import WindowResizer
 
 if TYPE_CHECKING:
     from albuswall.core import Container

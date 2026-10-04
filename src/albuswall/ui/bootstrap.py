@@ -2,18 +2,14 @@
 """"""
 
 from logging import getLogger
-from typing import TYPE_CHECKING
 
 import albuswall
-from albuswall.core import Application
+from albuswall.core import Application, Container
 from albuswall.configue import ConfigField
 from albuswall.plugin import PluginManager
 
 from .common import DEFAULT_THEME, DEFAULT_UI
 from .protocol import get_ui
-
-if TYPE_CHECKING:
-    from albuswall.core import Container
 
 logger = getLogger(f"{albuswall.__title__}.ui")
 
@@ -67,7 +63,7 @@ def registry_ui(container: "Container"):
     container.reg("ui", create_ui, returns=ui_cls)
 
     # ③ teardown：只在实例真正被创建过时才调用
-    def _teardown() -> None:
+    def _teardown_ui() -> None:
         if _ui_instance is None:
             return
         # noinspection broad-exception,PyBroadException
@@ -79,14 +75,14 @@ def registry_ui(container: "Container"):
             logger.exception("ui teardown failed")
 
     # 用 insert(0) 保证 teardown 早于其它 final 收尾动作
-    container.on_final_insert(0, _teardown)
+    Application.on_final(_teardown_ui)
 
-    container.on_boot(
-        lambda: setattr(
-            Application.instance(),
-            "main_loop",
-            container.get("ui").main_loop
-        )
-    )
+    # container.on_boot(
+    #     lambda: setattr(
+    #         Application.instance(),
+    #         "main_loop",
+    #         container.get("ui").main_loop
+    #     )
+    # )
 
     return ui_cls

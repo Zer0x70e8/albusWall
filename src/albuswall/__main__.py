@@ -102,34 +102,15 @@ def _boot(app: Application) -> None:
 
     # phase others
     # dbg msg
-    container.on_boot_insert(
-        0,
-        lambda: app.configue.static.path.data.mkdir(
-            parents=True, exist_ok=True
-        )
-    )
-    container.final(lambda: _logger.debug("Program closed."))
-    container.on_boot_insert(
-        1,
-        lambda: _logger.debug(
-            "Program boot finished."
-        )
-    )
-
-    # on debug
     _logger.debug("Program boot registry finished.")
     if _config.debug:
         _logger.info(
-            "Debugging is turned boot, "
+            "Debugging is turned on, "
             "and debug information will be output. \n"
             "Note: This does not enable debug-level logging."
         )
         _logger.debug("Container: %s\n", container)
-        # _logger.debug("%s\n", app.config)
         _logger.debug(app.plugins)
-        container.on_final_insert(0, lambda: (
-            _logger.debug("The program is exiting gracefully.")
-        ))
 
 
 def _main() -> int | str:
@@ -137,14 +118,9 @@ def _main() -> int | str:
     _logger.debug("Program start.")
 
     app = Application()
-    app.container.reg(
-        "app",
-        lambda: app,
-        returns=Application
-    )
+    app.container.register("app", lambda: app, returns=Application)
     runtime.install()
-    _boot(app)
-
+    app.boot(_boot)
     return app.exec()
 
 

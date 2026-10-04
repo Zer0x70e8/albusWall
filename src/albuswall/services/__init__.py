@@ -3,8 +3,8 @@
 
 from typing import TypedDict, Dict, Callable, Any
 
-from albuswall.core import Container
-from albuswall.utils.registry import register_tool
+from albuswall.core import Container, Application
+from albuswall.utils.registry import register_all, build_getters
 from albuswall.utils.signal import Signal
 
 from .source import SourceService
@@ -43,10 +43,10 @@ _ARG_MAP: Dict[str, Callable[[Any, Container], Any]] = {
         c.get("thumbnail_repo"),
         c.get("ingest_source_repo"),
     ),
-    "view_service": lambda cls, c:cls(
+    "view_service": lambda cls, c: cls(
         c.get("view_repo")
     ),
-    "import_service": lambda cls, c:cls(
+    "import_service": lambda cls, c: cls(
         c.get("import_repo"),
         c.get("task_service")
     )
@@ -65,12 +65,14 @@ def register_service(container: Container):
         returns=Signal,
     )
 
-    services = dict(Services.__annotations__)
-    register_tool(
-        container,
-        services,
-        arg_map=_ARG_MAP,
-        default_factory=_default_factory,
+    register_all(
+        build_getters(
+            container,
+            Services.__annotations__,
+            arg_map=_ARG_MAP,
+            default_factory=_default_factory
+        ),
+        container.reg,
     )
 
     # ── 连接：扫描完成 → 唤醒导入 worker ────────────────
@@ -92,17 +94,19 @@ def register_service(container: Container):
             lambda *a, **kw: thumbnail_service.scan_and_submit()
         )
 
-    container.boot(_wire_scan_to_import)
-    container.boot(_wire_import_to_thumb)
-    container.boot(lambda: container.get("trigger_refresh_signal").connect(
+    # ── on_boot：按"依赖在前"的顺序注册 ────────────────
+    Application.on_boot(_wire_scan_to_import)  # ← container → Application
+    Application.on_boot(_wire_import_to_thumb)
+    Application.on_boot(lambda: container.get("trigger_refresh_signal").connect(
         container.get("source_service").update_source,
     ))
-    container.boot(lambda: container.get("trigger_sync_service").start())
-    container.boot(lambda: container.get("source_service").start())
-    container.boot(lambda: container.get("import_service").start())   # ← 补
-    container.boot(lambda: container.get("thumbnail_service").start())
+    Application.on_boot(lambda: container.get("trigger_sync_service").start())
+    Application.on_boot(lambda: container.get("source_service").start())
+    Application.on_boot(lambda: container.get("import_service").start())
+    Application.on_boot(lambda: container.get("thumbnail_service").start())
 
-    container.final(lambda: container.get("thumbnail_service").stop(wait=True))
-    container.final(lambda: container.get("import_service").stop_worker())  # ← 补
-    container.final(lambda: container.get("trigger_sync_service").stop())
-    container.final(lambda: container.get("source_service").shutdown())
+    # ── on_final：注册顺序 = 拆除顺序.reversed ──────────────────
+    Application.on_final(lambda: container.get("thumbnail_service").stop(wait=True))
+    Application.on_final(lambda: container.get("import_service").stop_worker())
+    Application.on_final(lambda: container.get("trigger_sync_service").stop())
+    Application.on_final(lambda: container.get("source_service").shutdown())

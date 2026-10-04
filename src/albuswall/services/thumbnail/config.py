@@ -70,6 +70,17 @@ class ThumbnailConfig:
         "thumbnail", "failure_cooldown_sec", default=300.0,
     )
 
+    # 写盘重试：单次 _work_one 内，写盘失败后的最大重试次数（首次不计）。
+    # 超过后该资产标记为永久失败并进入 failure_cooldown_sec 冷却。
+    write_max_retries: int = ConfigField(
+        "thumbnail", "write_max_retries", default=2,
+    )
+
+    # 写盘重试退避基数（秒）。第 n 次重试等待 backoff * 2**n。
+    write_retry_backoff_sec: float = ConfigField(
+        "thumbnail", "write_retry_backoff_sec", default=0.2,
+    )
+
 
 # 模块级单例。其它模块 ``from .config import config`` 直接取。
 config = ThumbnailConfig()

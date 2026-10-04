@@ -1,0 +1,343 @@
+# 按基础设施重新整理的问题清单
+
+我按“需要哪块基础设施”重新分组，每个基础设施下挂它现在要擦的所有屁股。你给的反馈我也合并进去了，并标注了**真实缺口**和**临时妥协**。
+
+---
+
+## A. 依赖注入 / 容器 / 生命周期（phase）
+
+### 涉及的问题
+
+| 编号 | 位置 | 现象 | 你的说明 |
+|---|---|---|---|
+| A1 | `manager._construct` | 手工 `c.get("view_service", None)` 探测可选依赖，每个 presenter 一层 try/except | 强制 Qt 依赖导致容器没用上，其实应该用容器 |
+| A2 | `source_presenter.__init__ / setup / set_service` | 三套注入路径：构造注入、setup 从 container 补、运行时 set_service | 容器没有 phase 概念，UI 是插件式工作 |
+| A3 | `source_presenter._torn_down` | 手工幂等标记 | 容器生命周期不统一，只能自己防重复调用 |
+| A4 | `manager.add / setup / teardown` | Manager 自己维护 presenter 列表、自己调 setup/teardown | 缺少 presenter 生命周期 phase |
+
+### 缺口
+
+**容器需要“可变更的 phase 模型”**，例如：
+
+```
+construction → wiring → setup → running → teardown
+```
+
+每个 phase 有明确的：
+- 哪些依赖已就绪
+- 哪些信号可以连
+- 哪些可以延后
+
+你的 UI 是插件式工作的，插件可能在运行时被装载/卸载，所以 phase 不能是一次性的，必须是**可重入的状态机**。
+
+### 临时妥协
+
+- `set_service()` 是运行时替换，本质是“phase 未定义”下的手工补丁。
+- `_torn_down` 是“没有幂等保证”下的防御。
+
+---
+
+## B. Wiring / 信号连接基础设施
+
+### 涉及的问题
+
+| 编号 | 位置 | 现象 | 你的说明 |
+|---|---|---|---|
+| B1 | `manager._wire` | `viewer_presenter` 的 `asset_navigate_requested` / `close_requested` 被连接两次 | 没有统一 wiring，接线散在各子包容器工厂 |
+| B2 | `window_presenter._wire_navigation` | 每条 connect 都 try/except + `format_exc` | 信号可能不存在，只能逐条兜 |
+| B3 | `source_presenter._bind_service / _unbind_service` | 订阅/退订都包异常，静默忽略 | 代码变更频繁，避免禁用接口后大规模改下游 |
+| B4 | `manager._on_assets_changed` | 注释明确依赖 DirectConnection 保证“删了立刻少一格” | 第一次正视，接线问题太多 |
+| B5 | `manager._on_assets_imported` / `_refresh_after_import` | 用 Signal 做“跨对象触发刷新” | 跨多个对象没足够信号槽 |
+
+### 缺口
+
+**需要一条统一的 wiring / event 基础设施**，至少要有：
+
+1. **声明式接线**：`(source_signal, target_slot, connection_type, once)` 表，集中管理，自动去重、自动断开。
+2. **跨对象事件总线**：资产变更、导入完成、相册切换这类“一对多、跨层”的通知，不该用 QObject 信号硬连。
+3. **连接生命周期**：谁连的、什么时候断、重复连怎么办，现在全靠人肉。
+4. **连接类型策略**：什么时候 Direct、什么时候 Queued，不该让 Manager 写注释解释。
+
+### 临时妥协
+
+- `_bind_service` 的 try/except 是“接口不稳定 + 下游太多”的胶水。
+- Manager 里重复 connect 是“没有 wiring 表”的直接后果，已经是 bug。
+
+---
+
+## C. Qt / 非 Qt 边界 + MainThreadDispatcher
+
+### 涉及的问题
+
+| 编号 | 位置 | 现象 | 你的说明 |
+|---|---|---|---|
+| C1 | `album_presenter._CoverJob` + `QMetaObject.invokeMethod` | 手工线程池 + QPixmap 跨线程 + 手工回主线程 | 你把 Qt 限制在 UI，这个冲突是设计导致的 |
+| C2 | `image_presenter._thumb_ready` | 手工把 `ThumbnailService.thumbnail_ready` 桥成 Qt 信号 | 基础设施不用 Qt，冲突明显 |
+| C3 | `source_presenter._scan_finished_queued` | 后端工作线程回调，手工 emit 到主线程 | 同上 |
+| C4 | 全局 | 没有 `MainThreadDispatcher` | 你还不会，所以一直没做 |
+
+### 缺口
+
+你问“让 util 提供转换接口是否合理”——**合理，但要分层**：
+
+- **C 层（非 Qt 基础设施）** 不应该知道 Qt。
+- **UI 边界层** 应该提供：
+  - `MainThreadDispatcher.post(callable)` —— 把任意 callable 投到主线程
+  - `QtSignalBridge.from_plain_signal(signal)` —— 把非 Qt 信号桥成 Qt 信号
+  - `AsyncImageLoader.load(path) -> Future[QImage]` —— 返回 QImage（线程安全），由边界层在主线程转 QPixmap
+
+`album_presenter` 里在 worker 线程构造 `QPixmap` 是明确错误，`QPixmap` 只能在 GUI 线程创建。至少应该改成 `QImage`。
+
+### 临时妥协
+
+- `_CoverJob` 用 `QMetaObject.invokeMethod` 手工投递。
+- `_thumb_ready` / `_scan_finished_queued` 用信号做桥。
+
+这些都应该被 `MainThreadDispatcher` 统一替代。
+
+---
+
+## D. 缩略图 / 图像服务状态管理
+
+### 涉及的问题
+
+| 编号 | 位置 | 现象 | 你的说明 |
+|---|---|---|---|
+| D1 | `image_presenter._inflight / _submitted / _attempts / _MAX_ATTEMPTS` | Presenter 维护任务去重、重试、成功清计数 | 缩略图基础设施太基础，只提供生成器 |
+| D2 | `image_presenter._submit_generation` | `submit()` 可能返回 `None`，调用方必须理解去重语义 | 跨层设计困难 |
+| D3 | `image_presenter._load_result / _gen_done` | 手工跨线程投递 | 没有 MainThreadDispatcher |
+| D4 | `image_presenter._center_crop_square` | Presenter 做图像裁剪 | View 没用 Qt MVC，没 delegate |
+| D5 | `image_presenter._try_load_image` | `paths.for_spec()` + `resolve_path` + `os.path.isfile` | 旧的兼容问题，新设计已去，presenter 还没换 |
+| D6 | `image_presenter.set_spec` | `clear_cache()` + `refresh_visible_range()` 手动触发 | 规格切换没有统一失效机制 |
+
+### 缺口
+
+**需要一个“缩略图状态机 / 缩略图任务管理器”**，夹在生成器和 Presenter 之间：
+
+- 任务句柄：`submit() -> Task`，永远返回句柄，不返回 `None`
+- 去重：同一 asset_id 的重复提交返回同一个 Task
+- 重试：内部管理 attempt，对外暴露 `state: pending/running/ok/failed`
+- 取消：`cancel(asset_id)`
+- 完成通知：`task.done` 或统一信号
+- 缓存失效：`invalidate(asset_id)` / `invalidate_spec(spec)`
+
+这样 Presenter 只做：
+```
+for index in visible_range:
+    if not view.has_pixmap(index):
+        task = thumb_manager.request(asset_id, spec)
+        task.done.connect(...)
+```
+
+### 临时妥协
+
+- `_attempts` 是 Presenter 在替服务记重试。
+- `future is None` 分支是服务契约不稳定的产物。
+- `_center_crop_square` 因为没 delegate 只能先放这里。
+
+---
+
+## E. 资源 / 主题 / 配置基础设施
+
+### 涉及的问题
+
+| 编号 | 位置 | 现象 | 你的说明 |
+|---|---|---|---|
+| E1 | `album_presenter.PreferenceConfig` | 图标目录候选、QSS 同级回退、static 回退、文件存在性判断 | 配置框架没设计好 |
+| E2 | `album_presenter._load_default_album` | 默认专辑解析顺序写在 Presenter | 其实应该放配置那里 |
+| E3 | `window_presenter._apply_style_sheet` | 手工读 QSS、`setStyleSheet`、改全局 `DRAW_LABEL_CONTENT` | 主题系统职责 |
+| E4 | `window_presenter.WindowState` | 窗口位置/大小/最大化持久化 | 实验功能，暂时先这样 |
+| E5 | `window_presenter.teardown` | 手工取 `normalGeometry()` 存 state | 同上 |
+
+### 缺口
+
+需要三块：
+
+1. **ResourceLocator**：逻辑名 → `Path`。图标、QSS、字体、翻译都走它。
+2. **ThemeManager**：主题切换、QSS 装载、全局绘制开关。
+3. **配置框架的“派生值”能力**：`get_default_album()` 这种“从多个配置推导”的逻辑，应该配置框架支持，而不是 Presenter 写。
+
+### 临时妥协
+
+- `PreferenceConfig.icon_dir()` 的多级回退是配置框架缺失下的胶水。
+- `WindowState` 是实验特性，先放着。
+- `E2` 是配置框架没设计好，你自己也认可。
+
+---
+
+## F. ViewService / 领域服务重构
+
+### 涉及的问题
+
+| 编号 | 位置 | 现象 | 你的说明 |
+|---|---|---|---|
+| F1 | `manager._album_scope` / `_include_deleted` | 重复调 `get_asset_ids` + `should_include_deleted` | ViewService 没重构 |
+| F2 | `viewer_presenter.open` | 手工聚合 neighbours、ids、thumb_map、full_path、dto、metadata | 又是 ViewService |
+| F3 | `viewer_presenter` `include_deleted` 取或 | 调用方漏传时 Presenter 兜底 | 缺少内部状态 |
+| F4 | `source_presenter` `DRAFT_SOURCE_ID = -1` / `MANUAL_SOURCE_ID = 0` | Presenter 理解虚拟源规则 | ViewService 没重构 |
+| F5 | `source_presenter` CRUD 后 `reload()` + 刷详情 | 手动编排 | 服务缺少变更通知/事务后刷新 |
+| F6 | `source_presenter._form_to_update_patch` / `_on_apply_requested` | 手工组装 PATCH / Create DTO | 接口变更后 presenter 没适配 |
+| F7 | `source_presenter` `getattr(detail, ...)` / `getattr(view, ...)` | 嗅探视图接口 | 接口变更后 presenter 没适配 |
+
+### 缺口
+
+ViewService 需要提供**聚合用例对象**，例如：
+
+- `AlbumScope(asset_ids, include_deleted, album_uuid)` —— 一次查询拿到完整 scope
+- `ViewerSnapshot(asset, neighbours, metadata, thumb_map, full_path, favorite)` —— 详情页一次拿全
+- `SourceMutationResult(...)` —— 服务返回变更结果，Presenter 不用手工 reload
+
+同时 DTO 层需要 `FormData → Create/Update` 的工厂，不要让 Presenter 手写。
+
+### 临时妥协
+
+- `getattr` 嗅探是“接口变更后下游太多”的胶水。
+- `reload()` 是“没有变更通知”的替代。
+- `include_deleted` 取或是“ctx 缺少内部状态”的兜底。
+
+---
+
+## G. 视图 / Model / Delegate 基础设施
+
+### 涉及的问题
+
+| 编号 | 位置 | 现象 | 你的说明 |
+|---|---|---|---|
+| G1 | `image_presenter._center_crop_square` | Presenter 做裁剪 | View 没用 Qt MVC，没 delegate |
+| G2 | `manager._close_viewer` | 手动 `detail.refresh()` + `_refresh_grid()` | 视图需要重新设计 |
+| G3 | `source_presenter._on_context_menu_requested` | 右键菜单里手工查状态、两态循环 | 没有 model |
+| G4 | `viewer_presenter` 图像接口不统一 | `image_viewer.set_pixmap` vs `view.set_image("")` | View API 不稳定 |
+| G5 | `album_presenter._row_for_uuid` | 线性扫描找 uuid → row | Model 没提供索引 |
+
+### 缺口
+
+如果决定**不用 Qt MVC**，那需要自己的一套：
+
+- **View 协议**：明确 `set_image / clear_image / set_pixmap` 的稳定契约
+- **Model 层**：即使不是 `QAbstractItemModel`，也要有 `uuid -> row` 索引、变更通知
+- **Delegate / 渲染策略**：裁剪、方形、占位图这类展示策略，应该有一个 `CellRenderer` 或 `ThumbnailSpec` 承载
+
+如果决定**用 Qt MVC**，那 `_center_crop_square` 应该进 delegate，`_row_for_uuid` 进 model。
+
+### 临时妥协
+
+- `_center_crop_square` 先放 Presenter。
+- `_close_viewer` 手工 refresh。
+- 右键菜单手工查状态。
+
+---
+
+## H. 窗口 / 平台基础设施
+
+### 涉及的问题
+
+| 编号 | 位置 | 现象 | 你的说明 |
+|---|---|---|---|
+| H1 | `window_resizer.py` 整个文件 | 无边框窗口拖动、缩放、最大化恢复、光标、事件过滤 | 放在 presenter 包 |
+| H2 | `window_presenter._sync_title_bar_height` | `QTimer.singleShot(0)` + try/except | 布局基础设施缺失 |
+| H3 | `window_presenter.WindowState` | 窗口状态持久化 | 实验功能 |
+
+### 缺口
+
+- `WindowResizer` 应该移到 `ui/platform/` 或 `ui/windowing/`，不属于 presenter。
+- 标题栏高度同步需要布局基础设施提供可靠 API，而不是延时 + try/except。
+- 窗口状态持久化需要 `WindowStateManager`。
+
+---
+
+## I. DTO / 表单映射基础设施
+
+### 涉及的问题
+
+| 编号 | 位置 | 现象 | 你的说明 |
+|---|---|---|---|
+| I1 | `source_presenter._form_to_update_patch` | 手工组装 PATCH DTO | 接口变更后 presenter 没适配 |
+| I2 | `source_presenter._on_apply_requested` | 手工组装 Create DTO | 同上 |
+| I3 | `album_presenter._build_vo` | 手工组装 `TitleBarVO` | 尚可，但和 I1/I2 同类 |
+
+### 缺口
+
+DTO 层应该提供：
+
+- `IngestSourceCreate.from_form(form)`
+- `IngestSourceUpdate.from_form(form)`
+- `TitleBarVO.from_album(album, config)`
+
+Presenter 只做“取表单 → 调工厂 → 调服务”。
+
+### 临时妥协
+
+- 现在 Presenter 手写映射，是接口变更后的过渡态。
+
+---
+
+## J. 错误模型 / 用户可见反馈
+
+### 涉及的问题
+
+| 编号 | 位置 | 现象 | 你的说明 |
+|---|---|---|---|
+| J1 | `manager._construct` | 每个 presenter 构造失败只记日志 | 容器缺失 |
+| J2 | `album_presenter._populate_list` | 拉列表失败 → 空列表 | 服务错误模型缺失 |
+| J3 | `source_presenter.reload` | 加载失败 → 空列表 | 同上 |
+| J4 | `viewer_presenter._on_favorite_toggle` / `_on_trash_requested` | 异常直接 return | 用例层缺错误处理 |
+| J5 | `source_presenter` 各处 `except Exception` | 吞异常 + log | 服务错误模型缺失 |
+
+### 缺口
+
+需要统一错误模型：
+
+- 服务返回 `Result[T, Error]` 或抛领域异常
+- Presenter 只负责把错误翻译成 UI 反馈（toast / banner / 空态）
+- 不需要到处 `except Exception`
+
+### 临时妥协
+
+- 现在到处都是吞异常 + log，用户看不到失败。
+
+---
+
+## 汇总：基础设施 vs 问题编号
+
+| 基础设施 | 问题编号 | 优先级 |
+|---|---|---|
+| A. DI / 容器 / phase | A1 A2 A3 A4 | 高 |
+| B. Wiring / 事件总线 | B1 B2 B3 B4 B5 | 高 |
+| C. Qt 边界 / MainThreadDispatcher | C1 C2 C3 C4 | 高 |
+| D. 缩略图状态机 | D1 D2 D3 D4 D5 D6 | 高 |
+| E. 资源 / 主题 / 配置 | E1 E2 E3 E4 E5 | 中 |
+| F. ViewService 重构 | F1 F2 F3 F4 F5 F6 F7 | 高 |
+| G. View / Model / Delegate | G1 G2 G3 G4 G5 | 中 |
+| H. 窗口 / 平台 | H1 H2 H3 | 低 |
+| I. DTO / 表单映射 | I1 I2 I3 | 中 |
+| J. 错误模型 | J1 J2 J3 J4 J5 | 中 |
+
+---
+
+## 建议的推进顺序
+
+按“解耦收益 / 依赖关系”排：
+
+1. **C（Qt 边界 + MainThreadDispatcher）** —— 它挡住 A、B、D 的很多手工代码，先做收益最大。
+2. **D（缩略图状态机）** —— 直接消灭 `image_presenter` 一半逻辑，且接口清晰。
+3. **B（Wiring / 事件总线）** —— 消灭 Manager 重复连接、跨对象刷新、DirectConnection 依赖。
+4. **A（容器 phase）** —— 让 B、C、D 的注册和生命周期有地方挂。
+5. **F（ViewService 重构）** —— 消灭 Presenter 里的用例编排。
+6. **I（DTO 工厂）** —— 消灭表单映射重复。
+7. **G（View / Model）** —— 决定 MVC 还是自研，然后 `_center_crop_square` / `_row_for_uuid` 归位。
+8. **E（资源 / 主题 / 配置）** —— 有精力再做，目前不影响主流程。
+9. **J（错误模型）** —— 和 F 一起做。
+10. **H（窗口）** —— 最后整理，`WindowResizer` 搬家即可。
+
+---
+
+## 一句话总结
+
+你的项目现在缺的不是“某个具体功能”，而是**四块横切基础设施**：
+
+- **边界层**（C：Qt / 非 Qt、线程调度）
+- **编排层**（B：wiring / 事件总线）
+- **生命周期层**（A：容器 phase）
+- **领域聚合层**（F：ViewService 用例对象）
+
+这四块一旦补上，`album_presenter / image_presenter / manager / source_presenter / viewer_presenter` 里 80% 的“擦屁股”代码会自动消失。其余的 E / G / H / I / J 是收尾。

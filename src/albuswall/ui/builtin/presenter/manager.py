@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 from logging import getLogger
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable, Callable, Sequence
 
-from PySide6.QtCore import QObject, Signal, Qt, QTimer
+from PySide6.QtCore import QObject, Signal, Qt
 
 if TYPE_CHECKING:
     from albuswall.core import Container
@@ -15,9 +15,27 @@ if TYPE_CHECKING:
 _logger = getLogger(__name__)
 
 
+# 模块级 helper
+def _import(module: str, cls_name: str):
+    """延迟 + 相对 import，只在这里写一次。"""
+    import importlib
+    mod = importlib.import_module(module, __package__)
+    return getattr(mod, cls_name)
+
+
+def _thumb_spec():
+    try:
+        from albuswall.dto.thumbnail import ThumbSpec
+        return ThumbSpec.MEDIUM
+    except ImportError:
+        _logger.warning("ThumbSpec unavailable; using default spec.")
+        return None
+
+
 @runtime_checkable
 class Presenter(Protocol):
     def setup(self, container: "Container") -> None: ...
+
     def teardown(self) -> None: ...
 
 
@@ -56,90 +74,81 @@ class PresenterManager(QObject):
         w, c = self._window, self._container
 
         # ---- 1. WindowPresenter（无业务依赖，最优先）----
-        try:
-            from .window_presenter import WindowPresenter
-            self.window_presenter = WindowPresenter(w, w)
-            self.add(self.window_presenter)
-        except Exception as exc:
-            _logger.exception("WindowPresenter construction failed: %s", exc)
-
-        # ---- 探测可选服务（get 带 default 即 try_get）----
-        view_service = c.get("view_service", None)
-        thumbnail_repo = c.get("thumbnail_repo", None)
-        thumbnail_service = c.get("thumbnail_service", None)
-        source_service = c.get("source_service", None)
-        asset_repo = c.get("asset_repo", None)
+        if (p := self._try_presenter(
+                "WindowPresenter",
+                lambda: _import(".window_presenter", "WindowPresenter")(w, w),
+        )) is not None:
+            self.window_presenter = self.add(p)
 
         # ---- 2. AlbumPresenter（依赖 view_service）----
-        if view_service is not None:
-            try:
-                from .album_presenter import AlbumPresenter
-                self.album_presenter = AlbumPresenter(
-                    w.title_bar, w.album.view, view_service, parent=self,
-                )
-                self.add(self.album_presenter)
-            except Exception as exc:
-                _logger.exception(
-                    "AlbumPresenter construction failed: %s", exc)
-        else:
-            _logger.warning(
-                "view_service unavailable; AlbumPresenter skipped.")
+        if (p := self._try_presenter(
+                "AlbumPresenter",
+                lambda: _import(".album_presenter", "AlbumPresenter")(
+                    w.title_bar, w.album.view,
+                    c.require("view_service"), parent=self,
+                ),
+                requires=("view_service",),
+        )) is not None:
+            self.album_presenter = self.add(p)
 
         # ---- 3. ThumbnailGridPresenter（依赖 thumbnail_repo + service）----
-        if thumbnail_repo is not None and thumbnail_service is not None:
-            try:
-                from .image_presenter import ThumbnailGridPresenter
-                spec = None
-                try:
-                    from albuswall.dto.thumbnail import ThumbSpec
-                    spec = ThumbSpec.MEDIUM
-                except ImportError:
-                    _logger.warning(
-                        "ThumbSpec unavailable; using default spec.")
-                self.thumb_presenter = ThumbnailGridPresenter(
+        if (p := self._try_presenter(
+                "ThumbnailGridPresenter",
+                lambda: _import(".image_presenter", "ThumbnailGridPresenter")(
                     w.content,
-                    thumb_repo=thumbnail_repo,
-                    thumb_service=thumbnail_service,
-                    spec=spec,
-                )
-                self.add(self.thumb_presenter)
-            except Exception as exc:
-                _logger.exception(
-                    "ThumbnailGridPresenter construction failed: %s", exc)
-        else:
-            _logger.warning(
-                "thumbnail services unavailable; "
-                "ThumbnailGridPresenter skipped.")
+                    thumb_repo=c.require("thumbnail_repo"),
+                    thumb_service=c.require("thumbnail_service"),
+                    spec=_thumb_spec(),
+                ),
+                requires=("thumbnail_repo", "thumbnail_service"),
+        )) is not None:
+            self.thumb_presenter = self.add(p)
 
         # ---- 4. IngestSourcePresenter（依赖 source_service）----
-        if source_service is not None:
-            try:
-                from .source_presenter import IngestSourcePresenter
-                self.ingest_presenter = IngestSourcePresenter(
-                    w.source, source_service,
-                )
-                self.add(self.ingest_presenter)
-            except Exception as exc:
-                _logger.exception(
-                    "IngestSourcePresenter construction failed: %s", exc)
-        else:
-            _logger.warning(
-                "source_service unavailable; IngestSourcePresenter skipped.")
+        if (p := self._try_presenter(
+                "IngestSourcePresenter",
+                lambda: _import(".source_presenter", "IngestSourcePresenter")(
+                    w.source, c.require("source_service"),
+                ),
+                requires=("source_service",),
+        )) is not None:
+            self.ingest_presenter = self.add(p)
 
-        # ---- 5. ViewerPresenter（依赖 view_service）----
-        if view_service is not None:
-            try:
-                from .viewer_presenter import ViewerPresenter
-                self.viewer_presenter = ViewerPresenter(
-                    w.detail, view_service, thumbnail_service, asset_repo,
-                )
-                self.add(self.viewer_presenter)
-            except Exception as exc:
-                _logger.exception(
-                    "ViewerPresenter construction failed: %s", exc)
-        else:
-            _logger.warning(
-                "view_service unavailable; ViewerPresenter skipped.")
+        # ---- 5. ViewerPresenter（依赖 view_service，可选 thumbnail/asset）----
+        if (p := self._try_presenter(
+                "ViewerPresenter",
+                lambda: _import(".viewer_presenter", "ViewerPresenter")(
+                    w.detail,
+                    c.require("view_service"),
+                    c.get("thumbnail_service", None),
+                    c.get("asset_repo", None),
+                ),
+                requires=("view_service",),
+        )) is not None:
+            self.viewer_presenter = self.add(p)
+
+    def _try_presenter(
+            self,
+            name: str,
+            factory: Callable[[], "Presenter | None"],
+            *,
+            requires: Sequence[str] = (),
+    ) -> "Presenter | None":
+        """声明式构建：缺失依赖或构建失败 → 返回 None。
+
+        - requires 里的每个 key 用 container.get(key, None) 探测
+        - 缺失 → 警告，跳过
+        - 构造抛异常 → 记录完整 traceback，返回 None
+        """
+        missing = [k for k in requires if self._container.get(k, None) is None]
+        if missing:
+            _logger.warning("%s skipped: missing %s", name, missing)
+            return None
+        try:
+            return factory()
+        except Exception:
+            _logger.exception("%s construction failed", name)
+            return None
 
     def _wire(self) -> None:
         if self.thumb_presenter is not None and \
@@ -171,7 +180,7 @@ class PresenterManager(QObject):
             view = self.viewer_presenter.view
             view.asset_navigate_requested.connect(self._on_detail_navigate)
             view.close_requested.connect(self._on_detail_close_requested)
-            view.assets_changed.connect(self._on_assets_changed)   # ← 新增
+            view.assets_changed.connect(self._on_assets_changed)  # ← 新增
 
     # ---------------- slots ----------------
 

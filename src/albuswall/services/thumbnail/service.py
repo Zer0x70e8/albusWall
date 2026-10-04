@@ -50,7 +50,7 @@ from .config import (
 )
 from .paths import build_thumb_paths
 from .renderer import is_permanent_render_error, render
-from .storage import ThumbnailStorage
+from .storage import ThumbnailFormatError, ThumbnailStorage
 
 if TYPE_CHECKING:
     from albuswall.repositories import ThumbnailRepository
@@ -116,6 +116,11 @@ class ThumbnailService:
         # 永久失败冷却：asset_id → 失败时间
         self._failed: dict[int, _FailureRecord] = {}
         self._failed_lock = threading.Lock()
+
+        self._write_max_retries = max(0, int(config.write_max_retries))
+        self._write_retry_backoff_sec = max(
+            0.0, float(config.write_retry_backoff_sec),
+        )
 
     # ------------------------------------------------------------------ #
     # 生命周期
@@ -432,19 +437,38 @@ class ThumbnailService:
                 error=f"render:{type(exc).__name__}", retryable=True,
             )
 
-        # 4. 写盘
+        # 4. 写盘（带有限重试；超出上限或格式不兼容 → 永久失败）
         base_rel, spec_rels = build_thumb_paths(
             uuid=task_input.uuid,
             version=self._version,
             fmt=self._image_format,
         )
         try:
-            base_abs = self._storage.write(base_rel, spec_rels, imgs)
-        except Exception as exc:
-            _logger.error("thumbnail write failed asset=%d: %s", asset_id, exc)
+            base_abs = self._write_with_retry(
+                asset_id, base_rel, spec_rels, imgs,
+            )
+        except ThumbnailFormatError as exc:
+            # 模式/格式不兼容：确定性错误，重试无意义
+            _logger.error(
+                "thumbnail write rejected asset=%d (format): %s",
+                asset_id, exc,
+            )
             return ThumbnailResult(
                 ok=False, asset_id=asset_id,
-                error=f"write:{type(exc).__name__}", retryable=True,
+                error=f"write_format:{type(exc).__name__}",
+                retryable=False,
+            )
+        except Exception as exc:
+            # 本地重试已耗尽：标记为永久失败，让资产进入冷却，
+            # 避免每次 scan_and_submit 重复提交、刷屏。
+            _logger.error(
+                "thumbnail write failed asset=%d after %d retries: %s",
+                asset_id, self._write_max_retries, exc,
+            )
+            return ThumbnailResult(
+                ok=False, asset_id=asset_id,
+                error=f"write:{type(exc).__name__}",
+                retryable=False,
             )
         finally:
             for img in imgs.values():
@@ -476,3 +500,44 @@ class ThumbnailService:
         return ThumbnailResult(
             ok=True, asset_id=asset_id, duration_ms=duration_ms,
         )
+
+    # ------------------------------------------------------------------ #
+    # 写盘：有限重试
+    # ------------------------------------------------------------------ #
+    def _write_with_retry(
+            self,
+            asset_id: int,
+            base_rel: str,
+            spec_rels: dict,
+            imgs: dict,
+    ) -> str:
+        """带有限重试的写盘。
+
+        首次 + write_max_retries 次重试，指数退避。
+        - ThumbnailFormatError：不重试，直接抛
+        - 其它异常：只在 OSError 上重试，其它类型立即抛
+        重试耗尽后把最后一次异常抛给调用方。
+        """
+        attempts = self._write_max_retries + 1
+        last_exc: Optional[BaseException] = None
+
+        for i in range(attempts):
+            try:
+                return self._storage.write(base_rel, spec_rels, imgs)
+            except ThumbnailFormatError:
+                # 永久性失败，重试无意义
+                raise
+            except OSError as exc:
+                last_exc = exc
+                if i + 1 >= attempts:
+                    break
+                backoff = self._write_retry_backoff_sec * (2 ** i)
+                _logger.debug(
+                    "thumbnail write retry %d/%d asset=%d: %s",
+                    i + 1, self._write_max_retries, asset_id, exc,
+                )
+                if backoff > 0:
+                    time.sleep(backoff)
+
+        assert last_exc is not None
+        raise last_exc

@@ -1,5 +1,5 @@
 #
-"""Application 的启动/收尾样板：安装 hook、请求退出、映射退出码。"""
+"""顶层异常 → 退出码映射；SIGINT 优雅退出。"""
 
 import logging
 import signal
@@ -13,33 +13,28 @@ from albuswall.log.handlers import MemoryCacheHandler
 _logger = logging.getLogger(albuswall.__name__)
 
 
-# noinspection broad-exception
 class Runtime:
     def __init__(self, memory_handler: MemoryCacheHandler) -> None:
         self._old_sigint = None
         self._memory_handler = memory_handler
         self._app = Application.instance()
 
-    #
+    # ---------------- 退出码映射 ----------------
     @staticmethod
     def _control_flow_code(et, ev) -> int | str | None:
         if issubclass(et, KeyboardInterrupt):
             return 130
-
         if issubclass(et, SystemExit):
             code = getattr(ev, "code", 0)
             return 0 if code in (0, "0", None) else code
-
         return None
 
-    # ---------- 安装 ----------
+    # ---------------- 安装 ----------------
     def install(self) -> None:
         self._app.handle_exception = self._on_exception
         self._app.thread_exception = self._on_thread_exception
-
         self._old_sigint = signal.signal(signal.SIGINT, self._on_sigint)
 
-    # noinspection unused-parameter
     def _on_sigint(self, signum, frame) -> None:
         _logger.info("SIGINT received, requesting graceful exit")
         self._request_quit(130)
@@ -54,23 +49,21 @@ class Runtime:
             self._request_quit(code)
             return True
 
-        # 只有真正的错误才 CRITICAL + traceback
-        _logger.critical(''.join(format_exception(et, ev, tb)))
+        _logger.critical("".join(format_exception(et, ev, tb)))
         self._request_quit(1)
         return True
 
     def _on_thread_exception(self, args) -> bool:
         return self._on_exception(
-            args.exc_type,
-            args.exc_value,
-            args.exc_traceback,
+            args.exc_type, args.exc_value, args.exc_traceback
         )
 
-    # ---------- 退出主循环（线程安全地回到主线程） ----------
+    # ---------------- 退出请求 ----------------
     def _request_quit(self, code: int | str) -> None:
-        try:
-            loop = self._app.main_loop
-        except Exception:
+        # 用 _main_loop 实例属性；不要触发惰性创建
+        loop = getattr(self._app, "_main_loop", None)
+        if loop is None:
+            _logger.debug("request_quit(%r): no main loop yet", code)
             return
         try:
             loop.code = code
@@ -81,7 +74,7 @@ class Runtime:
         except Exception:
             _logger.exception("Failed to quit main loop")
 
-    # ---------- handlers 收尾 ----------
+    # ---------------- handlers 收尾 ----------------
     def _close_handlers(self) -> None:
         try:
             _logger.removeHandler(self._memory_handler)
@@ -92,15 +85,10 @@ class Runtime:
         except Exception:
             _logger.exception("Error while closing memory_handler")
 
-    # ---------- 顶层异常 → 退出码 ----------
+    # ---------------- 顶层入口 ----------------
     def run(self, body: Callable[[], int | str]) -> int | str:
         try:
-            result = body()
-            # loop = getattr(self._app, "main_loop", None)
-            # code = getattr(loop, "code", None)
-            # if code not in (None, 0, "0", -1):
-            #     return code
-            return result
+            return body()
         except SystemExit as e:
             if e.code not in (0, "0", None):
                 self._close_handlers()

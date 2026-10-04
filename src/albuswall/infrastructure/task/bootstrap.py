@@ -1,7 +1,7 @@
 #
 """"""
 
-from albuswall.core import Container
+from albuswall.core import Container, Application
 from albuswall.configue import ConfigField
 from albuswall.log import getLogger
 
@@ -68,4 +68,4 @@ def register_task_service(
         container.get("task_service").shutdown(wait=True)
 
     # 插到最前：先停任务，再让下游收尾（db 在 on_final 里追加，顺序靠后）
-    container.on_final_insert(0, _shutdown_task_service)
+    Application.on_final(_shutdown_task_service)

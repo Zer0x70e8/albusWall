@@ -1,74 +1,69 @@
 #
 """消除 ``__init__`` 中大量 ``container.reg`` + ``lambda`` 样板代码的工具。
 
-核心思路：**显式传入 ``{字段名: 类型}`` 映射**，不在内部解析 ``__annotations__``。
-好处是：
-* 注册来源一目了然，不依赖反射 / 注解求值；
-* 兼容 ``from __future__ import annotations``，也不怕 TypedDict 被拆散；
-* 可以在测试里传一个临时 map，不动生产代码。
+本模块**不依赖** ``albuswall.core``。
+它对容器的唯一要求是：调用方提供一个签名等价于
+
+    container.reg(name, factory, singleton=True, returns=None)
+
+的注册函数，本模块只负责「遍历 getter 列表 + 转交 register」，
+完全不接触容器对象本身。
 
 用法::
 
-    from .repository_registry import register_repositories
+    from albuswall.utils.registry import build_getters, register_all
 
     REPOSITORIES = {
         "ingest_source_repo": IngestSourceRepository,
         "import_repo": ImportRepository,
         "view_repo": ViewRepository,
         "thumbnail_repo": ThumbnailRepository,
-        "asset": AssetRepository,
+        "asset_repo": AssetRepository,
     }
 
     _ARG_MAP = {
         # "asset": lambda t, c: t(c.get("db"), c.get("fs")),
     }
 
-    def registry_repository(container: "Container"):
-        register_repositories(container, REPOSITORIES, arg_map=_ARG_MAP)
-
-生成的 getter 是**具名函数**（不是 lambda），名字按类的驼峰名蛇形化 + 后缀生成，
-例如 ``IngestSourceRepository`` -> ``ingest_source_repository_getter``。
+    def registry_repository(container):
+        register_all(
+            build_getters(container, REPOSITORIES, arg_map=_ARG_MAP),
+            container.reg,
+        )
 """
 
 from __future__ import annotations
 
 import re
-# from functools import partial
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    Mapping,
-)
-
-if TYPE_CHECKING:
-    from albuswall.core import Container
+from dataclasses import dataclass
+from typing import Any, Callable, Iterable, Mapping
 
 __all__ = [
+    "Getter",
     "snake_case",
     "make_getter_name",
     "build_getters",
-    "register_tool",
+    "register_all",
 ]
 
 
-#
-class _BoundGetter:
-    __slots__ = ("_fn", "_container", "_field", "_returns")
+# --------------------------------------------------------------------------- #
+# 数据结构
+# --------------------------------------------------------------------------- #
 
-    def __init__(self, fn, container, *, field, returns):
-        self._fn = fn
-        self._container = container
-        self._field = field
-        self._returns = returns
+@dataclass(frozen=True)
+class Getter:
+    """一条待注册项。
 
-    def __call__(self):
-        return self._fn(self._container)
-
-    def __repr__(self):
-        name = getattr(self._returns, "__name__", self._returns)
-        return f"<getter {self._field} -> {name}>"
+    - ``field``   : 容器里的键，如 ``"ingest_source_repo"``
+    - ``name``    : 生成的工厂函数名，如 ``"ingest_source_repository_getter"``
+    - ``factory`` : **无参**可调用，``() -> instance``（已经绑定过容器）
+    - ``returns`` : 期望的返回类型，仅作为元数据传给 register
+    """
+    field: str
+    name: str
+    factory: Callable[[], Any]
+    returns: type
 
 
 # --------------------------------------------------------------------------- #
@@ -86,10 +81,7 @@ def snake_case(name: str) -> str:
 
 
 def make_getter_name(cls: type, suffix: str = "getter") -> str:
-    """根据类名生成 getter 的函数名。
-
-    默认后缀 ``"getter"``，也可以传 ``"get"``、``"factory"`` 等。
-    """
+    """根据类名生成 getter 的函数名。"""
     return f"{snake_case(cls.__name__)}_{suffix}"
 
 
@@ -97,90 +89,78 @@ def make_getter_name(cls: type, suffix: str = "getter") -> str:
 # 默认工厂
 # --------------------------------------------------------------------------- #
 
-def _default_factory(type_: Any, container: "Container") -> Any:
-    """默认工厂：用 container 里已注册的 ``db`` 构造仓库。"""
+def _default_factory(type_: Any, container: Any) -> Any:
+    """默认工厂：用 container 里已注册的 ``db`` 构造。"""
     return type_(container.get("db"))
 
 
 # --------------------------------------------------------------------------- #
-# 生成具名 getter
+# 构建 Getter 列表
 # --------------------------------------------------------------------------- #
 
 def build_getters(
-        repositories: Mapping[str, type],
-        *,
-        arg_map: Mapping[str, Callable[[Any, "Container"], Any]] | None = None,
-        default_factory: Callable[[Any, "Container"], Any] | None = None,
-        suffix: str = "getter",
-) -> Dict[str, Callable[["Container"], Any]]:
-    """为 ``repositories`` 里的每个字段生成一个具名 getter。
+    container: Any,
+    repositories: Mapping[str, type],
+    *,
+    arg_map: Mapping[str, Callable[[Any, Any], Any]] | None = None,
+    default_factory: Callable[[Any, Any], Any] | None = None,
+    suffix: str = "getter",
+) -> list[Getter]:
+    """为 ``repositories`` 里每个字段产出一条 :class:`Getter`。
 
-    :param repositories: ``{字段名: 类型}``，显式给出，不做注解解析
-    :param arg_map: ``{字段名: (type_, container) -> instance}``，
-        命中的字段走这里的工厂；未命中的走 ``default_factory``
-    :param default_factory: 未命中时的兜底工厂，默认 ``type_(container.get("db"))``
-    :param suffix: 生成函数名的后缀，默认 ``"getter"``
-    :return: ``{字段名: getter}``，getter 签名是 ``(container) -> instance``
+    ``container`` 仅用于构造实例（调用它的 ``get``）；
+    本函数不做任何注册，纯产出数据。
     """
     arg_map = dict(arg_map or {})
     factory_default = default_factory or _default_factory
 
-    getters: Dict[str, Callable[["Container"], Any]] = {}
+    getters: list[Getter] = []
 
     for field_name, type_ in repositories.items():
         factory = arg_map.get(field_name, factory_default)
 
-        def getter(
-                container: "Container",
-                _factory=factory,
-                _type=type_,
-        ) -> Any:
+        # 用默认参数绑定循环变量，避免闭包 capture 到最后一个值
+        def _build(_factory=factory, _type=type_):
             return _factory(_type, container)
 
         fn_name = make_getter_name(type_, suffix)
-        getter.__name__ = fn_name
-        getter.__qualname__ = fn_name
+        _build.__name__ = fn_name
+        _build.__qualname__ = fn_name
         # noinspection string-conversion-without-dunder-method
-        getter.__doc__ = (
+        _build.__doc__ = (
             f"构造并返回 :class:`{getattr(type_, '__name__', type_)}` 实例。"
         )
-        getters[field_name] = getter
+
+        getters.append(
+            Getter(
+                field=field_name,
+                name=fn_name,
+                factory=_build,
+                returns=type_,
+            )
+        )
 
     return getters
 
 
 # --------------------------------------------------------------------------- #
-# 一次性注册到 container
+# 交给外部注册
 # --------------------------------------------------------------------------- #
 
-def register_tool(
-        container: "Container",
-        repositories: Mapping[str, type],
-        *,
-        arg_map: Mapping[str, Callable[[Any, "Container"], Any]] | None = None,
-        default_factory: Callable[[Any, "Container"], Any] | None = None,
-        suffix: str = "getter",
-) -> Dict[str, Callable[[], Any]]:
-    """把 ``repositories`` 里声明的所有仓库注册到 ``container``。
+def register_all(
+    getters: Iterable[Getter],
+    register: Callable[..., Any],
+) -> None:
+    """逐条把 ``Getter`` 交给 ``register``。
 
-    返回 ``{字段名: 无参 accessor}``，可用于测试或手动调用。
+    ``register`` 需等价于 ``container.reg``：
+
+        (name, factory, singleton=True, returns=None) -> Any
+
+    本函数不持有、也不引用容器；容器只通过 ``register`` 这个回调
+    与工具发生联系。
     """
-    getters = build_getters(
-        repositories,
-        arg_map=arg_map,
-        default_factory=default_factory,
-        suffix=suffix,
-    )
+    for g in getters:
+        register(g.field, g.factory, returns=g.returns)
 
-    accessors: Dict[str, Callable[[], Any]] = {}
-    for field_name, type_ in repositories.items():
-        # bound = partial(getters[field_name], container)
-        # container.reg(field_name, bound, returns=type_)
-        # accessors[field_name] = bound
-        accessors[field_name] = _BoundGetter(
-            getters[field_name], container,
-            field=field_name, returns=type_,
-        )
-        container.reg(field_name, accessors[field_name], returns=type_)
-
-    return accessors
+# lambda getters, register: [register(g.field, g.factory, returns=g.returns) for g in getters]

@@ -3,7 +3,7 @@
 
 from typing import TYPE_CHECKING, Callable, Any, TypedDict
 
-from albuswall.utils.registry import register_tool
+from albuswall.utils.registry import register_all, build_getters
 
 from .source import IngestSourceRepository
 from .import_ import ImportRepository
@@ -31,6 +31,7 @@ _ARG_MAP: dict[str, Callable[[Any, "Container"], Any]] = {
 
 
 def registry_repository(container: "Container"):
-    register_tool(
-        container, Repositories.__annotations__, arg_map=_ARG_MAP
+    register_all(
+        build_getters(container, Repositories.__annotations__, arg_map=_ARG_MAP),
+        container.reg,
     )

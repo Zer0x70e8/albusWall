@@ -14,6 +14,7 @@ Trigger 基础设施的 bootstrap。
 
 from typing import Optional
 
+from albuswall.core import Container, Application
 from albuswall.log import getLogger
 
 from .trigger import (
@@ -29,7 +30,7 @@ _logger = getLogger(__name__)
 
 
 def register_trigger_service(
-        container,
+        container: Container,
         *,
         scheduler_handler: Optional[TriggerHandler] = None,
         device_handler: Optional[DeviceTriggerHandler] = None,
@@ -63,9 +64,10 @@ def register_trigger_service(
         if not container.has_instance("trigger_facade"):
             _logger.debug("trigger_facade was never instantiated; nothing to stop")
             return
+        # noinspection broad-exception
         try:
             container.require("trigger_facade").stop()
         except Exception:
             _logger.exception("Failed to stop trigger facade")
 
-    container.on_final(_shutdown_trigger)
+    Application.on_final(_shutdown_trigger)
