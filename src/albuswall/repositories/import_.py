@@ -227,7 +227,7 @@ class ImportRepository(BaseRepository):
         """在一个事务里完成 create_asset + 候选状态更新。
 
         返回值 / 候选终态：
-        - 插入成功                → 返回 asset_id，候选置 DONE
+        - 插入成功                → 返回 asset_uuid，候选置 DONE
         - 唯一约束冲突（重复导入）→ 返回 None，候选置 SKIPPED
         - 其他异常                → 返回 None，候选置 FAILED
 

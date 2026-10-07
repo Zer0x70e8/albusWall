@@ -190,7 +190,8 @@ class SourceExecutor:
     # log
     def describe(self, *, verbose: bool = False) -> str:
         base = (
-            f"SourceExecutor(source_id={self.source.id}, seq={self.seq}, "
+            f"SourceExecutor(source_id={self.source.id}, "
+            f"seq={self.seq}, "
             f"path={self.source.source_path!r})"
         )
         if verbose:
@@ -596,12 +597,14 @@ class SourceService:
             _logger.debug("write op ignored: SourceService is closed")
             return False
 
-        deleted = self._source_repo.delete(source_id)
-        if deleted:
-            _logger.debug("Deleted source %d, refreshing worker", source_id)
-            self.update_source(source_id)
-            self.source_removed.emit(source_id)
-        return deleted
+        # TODO impl service
+        # deleted = self._source_repo.delete(source_id)
+        # if deleted:
+        #     _logger.debug("Deleted source %d, refreshing worker", source_id)
+        #     self.update_source(source_id)
+        #     self.source_removed.emit(source_id)
+        # return deleted
+        return False
 
     # alias
     create = create_source

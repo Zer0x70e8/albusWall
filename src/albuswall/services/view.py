@@ -3,7 +3,7 @@
 
 from datetime import datetime
 from logging import getLogger
-from typing import TYPE_CHECKING, NamedTuple, Optional, Union, overload
+from typing import TYPE_CHECKING, NamedTuple, Optional, Union
 from uuid import UUID
 
 from albuswall.log import TRACE, Logger
@@ -15,19 +15,16 @@ if TYPE_CHECKING:
 _logger: Logger = getLogger(__name__)  # type: ignore
 _logger.trace = lambda msg, *args: _logger.log(TRACE, msg, *args)
 
-# 模块加载时间，用作虚拟相册的创建/修改时间（在本模块 import 时定格一次）
+# 模块加载时间，用作虚拟相册的创建/修改时间（import 时定格一次）
 _MODULE_STARTED_AT: str = datetime.now().isoformat()
 
 # ======================================================================
-# 公开常量（P2）
+# 公开常量
 # ======================================================================
 
-#: 虚拟相册 “All” 的固定 uuid
 VIRTUAL_ALBUM_ALL_UUID: UUID = UUID("00000000-0000-0000-0000-000000000001")
-#: 虚拟相册 “Trash” 的固定 uuid
 VIRTUAL_ALBUM_TRASH_UUID: UUID = UUID("00000000-0000-0000-0000-000000000002")
 
-#: scope 字面量
 SCOPE_ACTIVE: str = "active"
 SCOPE_DELETED: str = "deleted"
 
@@ -41,19 +38,23 @@ class _VirtualAlbumSpec(NamedTuple):
 
 
 class ViewService:
-    """相簿视图服务。
+    """相簿视图服务（只读组合）。
 
-    职责边界：
-        只做读组合（repo 查询 + 虚拟相册分派）。
-        收藏 / 软删 / 恢复等写操作走独立的 AssetRepository，
-        不要塞进来污染视图职责。
+    接口契约（P1 收敛）：
+        · 全部入参 / 出参只走 uuid；``assets.id`` / ``albums.id`` 不暴露。
+        · 虚拟相册（All / Trash）与物理相册走同一批接口，分派对调用方透明。
+        · 写操作（收藏 / 软删 / 恢复 / 硬删 / 相簿成员增删）见 AssetRepository。
+
+    组合规则：
+        - ``is_virtual(album)  := get_scope(album) is not None``
+        - ``trash_album(album) := get_scope(album) == SCOPE_DELETED``
+        - 因此不再单独提供 is_virtual_album / should_include_deleted。
     """
 
     def __init__(self, repo: "ViewRepository"):
         self._repo = repo
 
     # ---------------- 唯一分派点 ----------------
-    # key: uuid 字符串；value: _VirtualAlbumSpec
     _VIRTUAL: dict[str, _VirtualAlbumSpec] = {
         str(VIRTUAL_ALBUM_ALL_UUID): _VirtualAlbumSpec(
             title="All",
@@ -74,12 +75,7 @@ class ViewService:
 
     @staticmethod
     def _as_uuid_str(value: Union[UUID, str]) -> str:
-        """将 UUID 或字符串统一规范化为标准字符串形式。
-
-        传入 UUID 时转成标准小写带连字符格式；
-        传入字符串时尽量解析成标准 UUID 后再输出，
-        非法字符串则原样透传，交由底层查询返回空结果。
-        """
+        """UUID / 字符串统一规范化为标准字符串形式；非法字符串原样透传。"""
         if isinstance(value, UUID):
             return str(value)
         try:
@@ -88,56 +84,42 @@ class ViewService:
             return str(value)
 
     # ==================================================================
-    # 虚拟相册 / scope 公开出口（P0）
+    # 相册
     # ==================================================================
 
     def get_scope(self, album_uuid: Union[UUID, str]) -> Optional[str]:
-        """返回相册的 scope。
+        """返回相册的 scope；物理相册返回 None。
 
-        Args:
-            album_uuid: 相册 uuid。
+        同时充当虚拟 / Trash 判定的唯一出口：
 
-        Returns:
-            ``"active"`` / ``"deleted"``；物理相册返回 None。
+            is_virtual(album)  := get_scope(album) is not None
+            is_trash(album)    := get_scope(album) == SCOPE_DELETED
         """
         spec = self._spec(album_uuid)
         return spec.scope if spec else None
-
-    def is_virtual_album(self, album_uuid: Union[UUID, str]) -> bool:
-        """判断给定 uuid 是否对应虚拟相册（All / Trash）。"""
-        return self._spec(album_uuid) is not None
-
-    def should_include_deleted(self, album_uuid: Union[UUID, str]) -> bool:
-        """根据相册 uuid 推断是否需要 include_deleted=True 取原图。
-
-        Trash 虚拟相册返回 True；其余一律返回 False。
-        供 DetailPresenter 在调用 get_asset_full_path* 前统一判断。
-        """
-        return self.get_scope(album_uuid) == SCOPE_DELETED
 
     @classmethod
     def list_virtual_album_uuids(cls) -> list[UUID]:
         """按定义顺序返回全部虚拟相册 uuid。"""
         return [UUID(u) for u in cls._VIRTUAL]
 
-    # ==================================================================
-    # 相簿（专辑）
-    # ==================================================================
-
-    def get_active_album_uuids(self) -> list[UUID]:
+    def list_album_uuids(self) -> list[UUID]:
+        """返回所有可见相册 uuid（虚拟在前，物理在后）。"""
         virtual = self.list_virtual_album_uuids()
-        result = virtual + [UUID(i) for i in self._repo.get_active_album_uuids()]
-        _logger.trace("active uuids: virtual=%s, result=%s", virtual, result)
+        physical = [UUID(i) for i in self._repo.list_album_uuids()]
+        result = virtual + physical
+        _logger.trace("album uuids: virtual=%s, result=%s", virtual, result)
         return result
 
-    def get_album_by_uuid(self, uuid) -> Optional[Album]:
-        spec = self._spec(uuid)
+    def get_album(self, album_uuid: Union[UUID, str]) -> Optional[Album]:
+        """取相册 DTO；虚拟相册即时构造，物理相册走 repo。"""
+        spec = self._spec(album_uuid)
         if spec is None:
-            return self._repo.get_album_by_uuid(self._as_uuid_str(uuid))
+            return self._repo.get_album(self._as_uuid_str(album_uuid))
         cover = self._repo.get_cover_asset_by_scope(spec.scope)
         return Album(
             id=spec.sentinel_id,
-            uuid=UUID(self._as_uuid_str(uuid)),
+            uuid=UUID(self._as_uuid_str(album_uuid)),
             title=spec.title,
             description=spec.description,
             cover=UUID(cover.uuid) if cover else None,
@@ -146,43 +128,43 @@ class ViewService:
             modified_at=_MODULE_STARTED_AT,
         )
 
-    def get_album_cover_by_uuid(self, uuid) -> Optional[AssetDTO]:
-        spec = self._spec(uuid)
+    def get_album_cover(
+            self, album_uuid: Union[UUID, str]
+    ) -> Optional[AssetDTO]:
+        """取相册封面资产 DTO（虚拟相册取 scope 首项）。"""
+        spec = self._spec(album_uuid)
         if spec is None:
-            return self._repo.get_album_cover_by_uuid(self._as_uuid_str(uuid))
+            return self._repo.get_album_cover(self._as_uuid_str(album_uuid))
         return self._repo.get_cover_asset_by_scope(spec.scope)
 
-    def get_album_uuids_of_asset(self, asset_uuid: Union[UUID, str]) -> list[UUID]:
+    def get_album_uuids_of_asset(
+            self, asset_uuid: Union[UUID, str]
+    ) -> list[UUID]:
         """返回包含指定资产的全部可见相册 uuid。"""
         rows = self._repo.get_album_uuids_of_asset(self._as_uuid_str(asset_uuid))
         return [UUID(u) for u in (rows or [])]
 
     # ==================================================================
-    # 资产 DTO / 元数据（P0 补全）
+    # 资产（DTO / 列表 / uuid 列表）
     # ==================================================================
 
-    def get_asset_by_id(
-            self, asset_id: int, *, include_deleted: bool = False
+    def get_asset(
+            self,
+            asset_uuid: Union[UUID, str],
+            *,
+            include_deleted: bool = False,
     ) -> Optional[AssetDTO]:
-        """按整数主键取 AssetDTO。
+        """按 uuid 取 AssetDTO。
 
         Args:
-            asset_id: assets.id。
+            asset_uuid: assets.uuid。
             include_deleted: Trash 场景传 True。
         """
-        return self._repo.get_asset_by_id(
-            int(asset_id), include_deleted=include_deleted
-        )
-
-    def get_asset_by_uuid(
-            self, asset_uuid: Union[UUID, str], *, include_deleted: bool = False
-    ) -> Optional[AssetDTO]:
-        """按 uuid 取 AssetDTO。"""
-        return self._repo.get_asset_by_uuid(
+        return self._repo.get_asset(
             self._as_uuid_str(asset_uuid), include_deleted=include_deleted
         )
 
-    def list_asset_dtos_by_album(
+    def list_assets(
             self,
             album_uuid: Union[UUID, str],
             *,
@@ -191,227 +173,121 @@ class ViewService:
     ) -> list[AssetDTO]:
         """列出相册内资产 DTO。
 
-        - 物理相册：分页，走 repo.list_asset_dtos_by_album。
-        - 虚拟相册：忽略 offset/limit，直接返回 scope 全量（分页由上层做）。
+        - 物理相册：分页，走 repo。
+        - 虚拟相册：忽略 offset/limit，全量返回（分页由上层自行处理）。
         """
         spec = self._spec(album_uuid)
         if spec is not None:
-            return self._repo.list_asset_dtos_by_scope(spec.scope) or []
-        return self._repo.list_asset_dtos_by_album(
+            return self._repo.list_assets_by_scope(spec.scope) or []
+        return self._repo.list_assets(
             self._as_uuid_str(album_uuid), offset=offset, limit=limit
         ) or []
 
-    def list_asset_dtos_by_scope(self, scope: str) -> list[AssetDTO]:
-        """按 scope（active / deleted）列出全部资产 DTO。"""
-        return self._repo.list_asset_dtos_by_scope(scope) or []
+    def get_asset_uuids(self, album: Union[Album, UUID, str]) -> list[UUID]:
+        """按相册列出可见 asset uuid。
 
-    def get_asset_metadata(
-            self, asset_uuid: Union[UUID, str], *, include_deleted: bool = False
-    ) -> Optional[dict]:
-        """返回资产元数据浅层 dict（等同 AssetDTO.to_dict()）。"""
-        return self._repo.get_asset_metadata(
+        排序契约由 ViewRepository._ASSET_ORDER_SQL 单点决定，
+        本方法与 list_assets / get_asset_neighbours 完全同源。
+        """
+        uuid = album.uuid if isinstance(album, Album) else album
+        spec = self._spec(uuid)
+        if spec is None:
+            rows = self._repo.list_asset_uuids_by_album(self._as_uuid_str(uuid))
+        else:
+            rows = self._repo.list_asset_uuids_by_scope(spec.scope)
+        return [UUID(u) for u in (rows or [])]
+
+    # ==================================================================
+    # 磁盘完整路径
+    # ==================================================================
+
+    def get_asset_full_path(
+            self,
+            asset_uuid: Union[UUID, str],
+            *,
+            include_deleted: bool = False,
+    ) -> Optional[str]:
+        """按资产 uuid 取磁盘完整路径。
+
+        Args:
+            asset_uuid: 资产 uuid。
+            include_deleted: True 时连同软删资产一起返回路径（Trash 用）。
+        """
+        return self._repo.get_asset_path(
             self._as_uuid_str(asset_uuid), include_deleted=include_deleted
         )
 
-    # ==================================================================
-    # 磁盘完整路径（P0 Trash 支持）
-    # ==================================================================
-
-    @overload
-    def get_asset_full_path(
-            self, asset: AssetDTO, *, include_deleted: bool = ...
-    ) -> Optional[str]:
-        ...
-
-    @overload
-    def get_asset_full_path(
-            self, asset: Union[UUID, str], *, include_deleted: bool = ...
-    ) -> Optional[str]:
-        ...
-
-    def get_asset_full_path(
-            self,
-            asset: Union[UUID, str, AssetDTO],
-            *,
-            include_deleted: bool = False,
-    ) -> Optional[str]:
-        """根据资产（DTO 或 UUID）获取磁盘上的完整路径。
-
-        Args:
-            asset: 资产 UUID（UUID 对象或字符串）或 AssetDTO 实例。
-            include_deleted: 为 True 时连同软删资产一起返回路径，
-                供 Trash（回收站）中打开原图使用。
-
-        Returns:
-            完整路径 str；无法定位时返回 None。
-        """
-        if isinstance(asset, AssetDTO):
-            asset_uuid = getattr(asset, "uuid", None)
-            if not asset_uuid:
-                return None
-            return self._repo.get_asset_full_path(
-                str(asset_uuid), include_deleted=include_deleted
-            )
-        return self._repo.get_asset_full_path(
-            self._as_uuid_str(asset), include_deleted=include_deleted
-        )
-
-    def get_asset_full_path_by_id(
-            self, asset_id: int, *, include_deleted: bool = False
-    ) -> Optional[str]:
-        """按 asset 整数主键取磁盘完整路径。
-
-        供 ThumbnailGridPresenter 的 item_activated 消费；
-        Trash 场景由调用方按 should_include_deleted() 决定是否传 True。
-        """
-        return self._repo.get_asset_full_path_by_id(
-            int(asset_id), include_deleted=include_deleted
-        )
-
-    # ==================================================================
-    # 封面路径
-    # ==================================================================
-
-    @overload
     def get_cover_full_path(
-            self, album: Album, *, include_deleted: bool = ...
-    ) -> Optional[str]:
-        ...
-
-    @overload
-    def get_cover_full_path(
-            self, album: Union[UUID, str], *, include_deleted: bool = ...
-    ) -> Optional[str]:
-        ...
-
-    def get_cover_full_path(
-            self,
-            album: Union[UUID, str, Album],
-            *,
-            include_deleted: bool = False,
-    ) -> Optional[str]:
-        """根据相簿（DTO 或 UUID）获取其封面资产的完整磁盘路径。
-
-        组合流程：
-            相簿 → 封面 AssetDTO → 资产 UUID → 完整路径
-
-        P1 修复：
-            此前当 ``album.cover`` 为空时，误将 ``album.uuid`` 当作
-            asset uuid 去查路径。现在回退到按 album uuid 查其封面资产。
-        """
-        if isinstance(album, Album):
-            cover_uuid = getattr(album, "cover", None)
-            if cover_uuid:
-                return self._repo.get_asset_full_path(
-                    str(cover_uuid), include_deleted=include_deleted
-                )
-            # 回退：按相册 uuid 查其封面资产（此前是错误地用 album.uuid 当 asset uuid）
-            return self._get_cover_path_by_album_uuid(
-                album.uuid, include_deleted=include_deleted
-            )
-        return self._get_cover_path_by_album_uuid(
-            album, include_deleted=include_deleted
-        )
-
-    def _get_cover_path_by_album_uuid(
             self,
             album_uuid: Union[UUID, str],
             *,
             include_deleted: bool = False,
     ) -> Optional[str]:
-        cover = self._repo.get_album_cover_by_uuid(self._as_uuid_str(album_uuid))
+        """按相册 uuid 取封面磁盘完整路径。
+
+        组合流程：album_uuid → 封面 AssetDTO → asset uuid → 完整路径。
+        """
+        cover = self.get_album_cover(album_uuid)
         if cover is None:
             return None
-        cover_uuid = getattr(cover, "uuid", None)
-        if not cover_uuid:
-            return None
-        return self._repo.get_asset_full_path(
-            str(cover_uuid), include_deleted=include_deleted
+        return self.get_asset_full_path(
+            cover.uuid, include_deleted=include_deleted
         )
 
     # ==================================================================
-    # 供 ThumbnailGridPresenter 使用
-    # ==================================================================
-
-    def get_asset_ids(self, album: Union[Album, UUID, str]) -> list[int]:
-        """按相册列出可见的 asset 整数 id。
-
-        排序契约（P1）：
-            虚拟相册走 repo 的 scope 排序（active / deleted）；
-            物理相册走 repo 的相册内排序。两者在 repo 层已同源
-            （见 ViewRepository._ASSET_ORDER_SQL），本方法不再干预排序。
-            返回 [] 表示无 asset。
-
-        Args:
-            album: Album DTO、UUID 或 uuid 字符串。
-        """
-        uuid = album.uuid if isinstance(album, Album) else album
-        spec = self._spec(uuid)
-        if spec is None:
-            return self._repo.list_asset_ids_by_album(
-                self._as_uuid_str(uuid)
-            ) or []
-        return self._repo.list_asset_ids_by_scope(spec.scope) or []
-
-    # ==================================================================
-    # 上/下一张定位（供 DetailPresenter / 缩略图网格使用）
+    # 上/下一张定位
     # ==================================================================
 
     def get_asset_neighbours(
             self,
             album_uuid: Union[UUID, str],
-            current_asset_id: int,
-    ) -> tuple[Optional[int], Optional[int], int, int]:
+            current_asset_uuid: Union[UUID, str],
+    ) -> tuple[Optional[UUID], Optional[UUID], int, int]:
         """定位资产在相册中的上/下一张。
 
-        分派规则与 get_asset_ids / list_asset_dtos_by_album 完全一致：
-            虚拟相册 → 走 scope（active / deleted）
-            物理相册 → 走 album_assets JOIN
-
-        排序契约由 ViewRepository._ASSET_ORDER_SQL 单点决定，
-        本方法与缩略图网格翻页看到的顺序永远一致。
-
-        Args:
-            album_uuid: 相册 uuid（UUID 或字符串），虚拟 / 物理均可。
-            current_asset_id: 当前资产的整数主键（assets.id）。
+        分派规则与 get_asset_uuids / list_assets 完全一致；排序契约由
+        ViewRepository._ASSET_ORDER_SQL 单点决定。
 
         Returns:
-            (prev_id, next_id, index, total)
-              - index 为 1-based 位置；
-              - 当前资产不在相册中时 index=0、prev/next 为 None、total=0；
-              - 相册为空或不存在时返回 (None, None, 0, 0)。
+            (prev_uuid, next_uuid, index, total)
+              - index 1-based；
+              - 当前资产不在相册中时 (None, None, 0, 0)；
+              - 相册为空或不存在时同样返回 (None, None, 0, 0)。
         """
         spec = self._spec(album_uuid)
         if spec is not None:
-            return self._repo.get_asset_neighbours_by_scope(
-                spec.scope, int(current_asset_id)
+            prev_s, next_s, index, total = self._repo.get_neighbours_by_scope(
+                spec.scope, self._as_uuid_str(current_asset_uuid)
             )
-        return self._repo.get_asset_neighbours_by_album(
-            self._as_uuid_str(album_uuid), int(current_asset_id)
+        else:
+            prev_s, next_s, index, total = self._repo.get_neighbours_by_album(
+                self._as_uuid_str(album_uuid),
+                self._as_uuid_str(current_asset_uuid),
+            )
+        return (
+            UUID(prev_s) if prev_s else None,
+            UUID(next_s) if next_s else None,
+            index,
+            total,
         )
 
     def locate_in_album(
             self,
             album_uuid: Union[UUID, str],
-            asset_id: int,
+            asset_uuid: Union[UUID, str],
     ) -> Optional[int]:
-        """轻量版：只返回资产在相册中的 1-based 位置。
+        """只返回资产在相册中的 1-based 位置；不在相册中返回 None。
 
-        用于只关心“第几张 / 共几张”的 UI（例如状态栏），
-        不需要邻居信息时避免走 get_asset_neighbours 的多列窗口计算。
-
-        Args:
-            album_uuid: 相册 uuid（UUID 或字符串），虚拟 / 物理均可。
-            asset_id: 资产的整数主键（assets.id）。
-
-        Returns:
-            1-based index；资产不在相册中或相册为空时返回 None。
+        用于只关心「第几张 / 共几张」的 UI，避免走 get_asset_neighbours
+        的多列窗口计算。
         """
         spec = self._spec(album_uuid)
         if spec is not None:
-            return self._repo.locate_in_scope(spec.scope, int(asset_id))
+            return self._repo.locate_in_scope(
+                spec.scope, self._as_uuid_str(asset_uuid)
+            )
         return self._repo.locate_in_album(
-            self._as_uuid_str(album_uuid), int(asset_id)
+            self._as_uuid_str(album_uuid), self._as_uuid_str(asset_uuid)
         )
 
     # ==================================================================
@@ -424,11 +300,5 @@ class ViewService:
             "\t_VIRTUAL: [",
             *[f"\t\t{i}," for i in self._VIRTUAL],
             "\t]",
-            ")"
+            ")",
         ))
-
-    # alias
-    get_asset_full_path_by_uuid = get_asset_full_path
-    get_album_cover_full_path = get_cover_full_path
-    get_cover_full_path_by_album_uuid = get_cover_full_path
-    get_asset_full_path_by_asset_id = get_asset_full_path_by_id

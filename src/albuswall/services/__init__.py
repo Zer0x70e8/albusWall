@@ -1,6 +1,6 @@
 #
 """"""
-
+from datetime import datetime
 from typing import TypedDict, Dict, Callable, Any
 
 from albuswall.core import Container, Application
@@ -12,6 +12,8 @@ from .trigger_sync import TriggerSyncService
 from .thumbnail import ThumbnailService
 from .view import ViewService
 from .import_ import ImportService
+from .trash import TrashService, utcnow, TrashCleanupScheduler
+from .source_deletion import SourceTrashService
 
 
 # ---------- 类型表：唯一事实来源 ----------
@@ -21,6 +23,9 @@ class Services(TypedDict):
     thumbnail_service: ThumbnailService
     view_service: ViewService
     import_service: ImportService
+    trash_service: TrashService  # 被动服务
+    trash_cleanup_scheduler: TrashCleanupScheduler
+    source_trash_service: SourceTrashService
 
 
 # ---------- 构建表：声明每个服务"怎么造" ----------
@@ -49,7 +54,22 @@ _ARG_MAP: Dict[str, Callable[[Any, Container], Any]] = {
     "import_service": lambda cls, c: cls(
         c.get("import_repo"),
         c.get("task_service")
-    )
+    ),
+    "trash_service": lambda cls, c: cls(
+        c.get("trash_repo"),
+        c.get("trash_state_repo"),
+        c.get("trash_clock"),
+    ),
+    "trash_cleanup_scheduler": lambda cls, c: cls(
+        c.get("trash_service"),
+        c.get("task_service"),
+    ),
+    "source_trash_service": lambda cls, c: cls(
+        source_repo=c.get("source_repository"),
+        thumbnail_repo=c.get("thumbnail_repository"),
+        task_service=c.get("task_service"),
+        reconciler=c.get("reconciler"),
+    ),
 }
 
 
@@ -63,6 +83,12 @@ def register_service(container: Container):
         "trigger_refresh_signal",
         lambda: Signal(name="TriggerRefreshRequested"),
         returns=Signal,
+    )
+    # 默认时钟：返回函数本身（不是调用结果），由 TrashService 决定何时调用。
+    container.register(
+        "trash_clock",
+        lambda: utcnow,
+        returns=Callable[[], datetime],
     )
 
     register_all(
@@ -104,8 +130,10 @@ def register_service(container: Container):
     Application.on_boot(lambda: container.get("source_service").start())
     Application.on_boot(lambda: container.get("import_service").start())
     Application.on_boot(lambda: container.get("thumbnail_service").start())
+    Application.on_boot(lambda: container.get("trash_cleanup_scheduler").start())
 
     # ── on_final：注册顺序 = 拆除顺序.reversed ──────────────────
+    Application.on_final(lambda: container.get("trash_cleanup_scheduler").stop(wait=True))
     Application.on_final(lambda: container.get("thumbnail_service").stop(wait=True))
     Application.on_final(lambda: container.get("import_service").stop_worker())
     Application.on_final(lambda: container.get("trigger_sync_service").stop())

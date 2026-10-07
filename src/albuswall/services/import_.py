@@ -483,7 +483,7 @@ class ImportService:
 
         if asset_id:
             totals["ok"] += 1
-            _logger.debug("候选 %s → asset_id=%s", cand.uuid, asset_id)
+            _logger.debug("候选 %s → asset_uuid=%s", cand.uuid, asset_id)
             return
 
         # repo 判定为永久失败（唯一约束冲突 → skipped，其余 → failed）。

@@ -59,6 +59,7 @@ class Runtime:
         )
 
     # ---------------- 退出请求 ----------------
+    # noinspection broad-exception
     def _request_quit(self, code: int | str) -> None:
         # 用 _main_loop 实例属性；不要触发惰性创建
         loop = getattr(self._app, "_main_loop", None)
@@ -66,11 +67,17 @@ class Runtime:
             _logger.debug("request_quit(%r): no main loop yet", code)
             return
         try:
-            loop.code = code
-        except Exception:
-            pass
-        try:
-            loop.quit()
+            loop.quit(code)
+        except TypeError:
+            # 兼容未升级签名的自定义 MainLoop
+            try:
+                loop.code = code
+            except Exception:
+                pass
+            try:
+                loop.quit()
+            except Exception:
+                _logger.exception("Failed to quit main loop")
         except Exception:
             _logger.exception("Failed to quit main loop")
 

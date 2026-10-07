@@ -37,7 +37,7 @@ class AssetDTO:
         thumb* 字段自行拼接：
 
             # 推荐
-            paths = thumb_repo.get_paths(asset_id)
+            paths = thumb_repo.get_paths(asset_uuid)
             full  = paths.resolve(ThumbSpec.MEDIUM)
 
             # 不推荐：自行拼接，容易与仓储的路径口径脱节

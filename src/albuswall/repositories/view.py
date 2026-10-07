@@ -10,18 +10,19 @@ from albuswall.dto.album import Album, AssetDTO
 from .base import BaseRepository
 
 
+# noinspection SpellCheckingInspection
 class ViewRepository(BaseRepository):
-    """相簿（专辑）视图仓储。
+    """相簿（专辑）视图仓储（只读）。
 
-    职责边界（P1）：
-        本仓储只做“读”查询。收藏 / 软删 / 恢复 / 硬删等写操作
-        应放到独立的 ``AssetRepository``，不要塞进来污染视图职责。
+    接口契约（P1 收敛）：
+        · 所有面向资产的公开方法只接受 uuid、只返回 uuid；
+          ``assets.id`` 仅作为内部索引 seek / tie-break 使用。
+        · 所有「资产列表」ORDER BY 从 ``_ASSET_ORDER_SQL`` 单点派生，
+          保证 scope 与 album 内的「上/下一张」顺序一致。
+        · 写操作（收藏 / 软删 / 恢复 / 硬删 / 相簿成员）见 ``AssetRepository``。
     """
 
     # ---------------- 排序契约（单一来源） ----------------
-    # 所有面向“资产列表”的 ORDER BY 必须从 _ASSET_ORDER_SQL 派生，
-    # 这样 scope（active/deleted）与 album 内列表的“上/下一张”顺序才能一致。
-    #
     # {p} 会被替换成表别名前缀（例如 "a." 或 ""）。
     _ASSET_ORDER_SQL: dict[str, str] = {
         "active": "{p}taken_at IS NULL, {p}taken_at DESC, {p}id DESC",
@@ -30,34 +31,26 @@ class ViewRepository(BaseRepository):
 
     _SCOPE_WHERE = {"active": "is_deleted = 0", "deleted": "is_deleted = 1"}
 
-    # 物理相册的统一 FROM/JOIN，所有查询共用
     _PHYSICAL_ALBUM_FROM = (
         "assets a "
-        "JOIN album_assets aa ON aa.asset_id = a.id "
+        "JOIN album_assets aa ON aa.asset_uuid = a.id "
         "JOIN albums AS al ON al.id = aa.album_id"
     )
     _PHYSICAL_ALBUM_WHERE = (
         "al.uuid = ? AND al.is_deleted = 0 AND a.is_deleted = 0"
     )
-    # 排序键列按 scope 分派（与 _ASSET_ORDER_SQL 的键一一对应）
     _SCOPE_KEY_COL = {"active": "taken_at", "deleted": "deleted_at"}
 
     _ALLOWED_PREFIXES = frozenset(("", "a."))
 
     @classmethod
     def _order_by(cls, scope: str, prefix: str = "") -> str:
-        """返回给定 scope 下的 ORDER BY 片段。
-
-        Args:
-            scope: ``"active"`` 或 ``"deleted"``。
-            prefix: 列名表别名前缀（如 ``"a."``），默认无别名。
-        """
-        if prefix not in cls._ALLOWED_PREFIXES:  # assist
+        if prefix not in cls._ALLOWED_PREFIXES:
             raise ValueError(f"unsupported prefix: {prefix!r}")
         return cls._ASSET_ORDER_SQL[scope].format(p=prefix)
 
     # ==================================================================
-    # 虚拟相册（All / Trash）封面与 id 列表
+    # 虚拟相册（scope）封面 / 列表
     # ==================================================================
 
     def get_cover_asset_by_scope(self, scope: str) -> Optional[AssetDTO]:
@@ -68,20 +61,7 @@ class ViewRepository(BaseRepository):
         )
         return AssetDTO.from_row(row) if row else None
 
-    def list_asset_ids_by_scope(self, scope: str) -> List[int]:
-        """按 scope（active / deleted）列出 asset 的整数 id。
-
-        与 get_cover_asset_by_scope 使用同一套 WHERE / ORDER BY。
-        """
-        where = self._SCOPE_WHERE[scope]
-        order = self._order_by(scope)
-        rows = self._fetchall(
-            f"SELECT id FROM assets WHERE {where} ORDER BY {order}"
-        )
-        return [int(r["id"]) for r in (rows or [])]
-
-    def list_asset_dtos_by_scope(self, scope: str) -> List[AssetDTO]:
-        """按 scope 列出 asset 的完整 DTO（供虚拟相册内容视图使用）。"""
+    def list_assets_by_scope(self, scope: str) -> List[AssetDTO]:
         where = self._SCOPE_WHERE[scope]
         order = self._order_by(scope)
         rows = self._fetchall(
@@ -89,16 +69,20 @@ class ViewRepository(BaseRepository):
         )
         return [AssetDTO.from_row(r) for r in (rows or [])]
 
+    def list_asset_uuids_by_scope(self, scope: str) -> List[str]:
+        where = self._SCOPE_WHERE[scope]
+        order = self._order_by(scope)
+        rows = self._fetchall(
+            f"SELECT uuid FROM assets WHERE {where} ORDER BY {order}"
+        )
+        return [r["uuid"] for r in (rows or [])]
+
     # ==================================================================
-    # 相簿（专辑）
+    # 相册
     # ==================================================================
 
-    def get_active_album_uuids(self) -> List[str]:
-        """获取所有未被软删除的相簿 uuid 列表。
-
-        Returns:
-            相簿 uuid 列表；若不存在则返回空列表。
-        """
+    def list_album_uuids(self) -> List[str]:
+        """所有未被软删除的相簿 uuid（按 sort_order, id 排序）。"""
         sql = """
                 SELECT uuid
                   FROM albums
@@ -117,12 +101,11 @@ class ViewRepository(BaseRepository):
             return []
         return [row["uuid"] for row in rows]
 
-    def get_album_by_uuid(self, album_uuid: str) -> Optional[Album]:
-        """根据 uuid 获取未被软删除的相簿 DTO。
+    def get_album(self, album_uuid: str) -> Optional[Album]:
+        """按 uuid 获取未被软删除的相簿 DTO。
 
-        封面语义与 get_album_cover_by_uuid 保持一致（P1）：
-            ``cover.is_deleted = 0`` 作为 LEFT JOIN 的 ON 条件，
-            软删封面只会让 cover_uuid 变成 NULL，不会把整行相簿过滤掉。
+        封面语义：``cover.is_deleted = 0`` 作为 LEFT JOIN 的 ON 条件，
+        软删封面只会让 cover_uuid 变 NULL，不会过滤整行相簿。
         """
         row = self._fetchone(
             """
@@ -156,11 +139,8 @@ class ViewRepository(BaseRepository):
             modified_at=row["modified_at"],
         )
 
-    def get_album_cover_by_uuid(self, album_uuid: str) -> Optional[AssetDTO]:
-        """根据相簿 uuid 获取其封面资产。
-
-        仅当相簿存在、未被软删除、且封面资产本身也未被软删除时才返回。
-        """
+    def get_album_cover(self, album_uuid: str) -> Optional[AssetDTO]:
+        """按相簿 uuid 获取其封面资产（相簿与资产都必须未软删）。"""
         row = self._fetchone(
             """
             SELECT asset.*
@@ -173,18 +153,16 @@ class ViewRepository(BaseRepository):
             """,
             (album_uuid,),
         )
-        if row is None:
-            return None
-        return AssetDTO.from_row(row)
+        return AssetDTO.from_row(row) if row else None
 
     def get_album_uuids_of_asset(self, asset_uuid: str) -> List[str]:
-        """返回包含该资产的所有可见相簿 uuid（排序与 get_active_album_uuids 一致）。"""
+        """包含该资产的所有可见相簿 uuid（排序同 list_album_uuids）。"""
         rows = self._fetchall(
             """
             SELECT al.uuid
               FROM album_assets AS aa
               JOIN albums AS al ON al.id = aa.album_id
-              JOIN assets AS a  ON a.id = aa.asset_id
+              JOIN assets AS a  ON a.id = aa.asset_uuid
              WHERE a.uuid = ?
                AND al.is_deleted = 0
                AND a.is_deleted = 0
@@ -194,18 +172,13 @@ class ViewRepository(BaseRepository):
         )
         return [r["uuid"] for r in (rows or [])]
 
-    # ==================================================================
-    # 相簿内的资产
-    # ==================================================================
-
     def count_assets(self, album_uuid: str) -> int:
-        """统计相簿内未被软删除的资产数量。"""
         row = self._fetchone(
             """
             SELECT COUNT(*) AS cnt
               FROM album_assets AS aa
               JOIN albums AS al ON al.id = aa.album_id
-              JOIN assets AS a  ON a.id = aa.asset_id
+              JOIN assets AS a  ON a.id = aa.asset_uuid
              WHERE al.uuid = ?
                AND al.is_deleted = 0
                AND a.is_deleted = 0
@@ -214,17 +187,19 @@ class ViewRepository(BaseRepository):
         )
         return int(row["cnt"]) if row else 0
 
+    # ==================================================================
+    # 相册内资产
+    # ==================================================================
+
     def list_assets(
             self,
             album_uuid: str,
             offset: int = 0,
             limit: int = 100,
     ) -> List[AssetDTO]:
-        """按唯一确定顺序分页获取相簿内资产。
+        """按唯一确定顺序分页获取相簿内资产 DTO。
 
-        排序直接读 ``assets.taken_at``（而不是冗余的
-        ``album_assets.asset_taken_at``），与 scope 排序同源，避免
-        “上/下一张顺序不一致”。
+        排序读 ``assets.taken_at``（与 scope 排序同源）。
 
         TODO(P2): 大 OFFSET 后续可改为 cursor 分页。
         """
@@ -234,7 +209,7 @@ class ViewRepository(BaseRepository):
             SELECT a.*
               FROM album_assets AS aa
               JOIN albums AS al ON al.id = aa.album_id
-              JOIN assets AS a  ON a.id = aa.asset_id
+              JOIN assets AS a  ON a.id = aa.asset_uuid
              WHERE al.uuid = ?
                AND al.is_deleted = 0
                AND a.is_deleted = 0
@@ -245,21 +220,15 @@ class ViewRepository(BaseRepository):
         )
         return [AssetDTO.from_row(row) for row in (rows or [])]
 
-    # 语义化别名，与 list_asset_dtos_by_scope 对称。
-    list_asset_dtos_by_album = list_assets
-
-    def list_asset_ids_by_album(self, album_uuid: str) -> List[int]:
-        """列出物理相册内所有可见 asset 的整数 id。
-
-        与 list_assets 使用同一套 JOIN + ORDER BY 契约。
-        """
+    def list_asset_uuids_by_album(self, album_uuid: str) -> List[str]:
+        """物理相册内所有可见 asset 的 uuid（同 JOIN / ORDER BY 契约）。"""
         order = self._order_by("active", prefix="a.")
         rows = self._fetchall(
             f"""
-            SELECT a.id
+            SELECT a.uuid
               FROM album_assets AS aa
               JOIN albums AS al ON al.id = aa.album_id
-              JOIN assets AS a  ON a.id = aa.asset_id
+              JOIN assets AS a  ON a.id = aa.asset_uuid
              WHERE al.uuid = ?
                AND al.is_deleted = 0
                AND a.is_deleted = 0
@@ -267,161 +236,114 @@ class ViewRepository(BaseRepository):
             """,
             (album_uuid,),
         )
-        return [int(r["id"]) for r in (rows or [])]
+        return [r["uuid"] for r in (rows or [])]
 
     # ==================================================================
-    # 资产 DTO / 元数据
+    # 单个资产
     # ==================================================================
 
-    def get_asset_by_id(
-            self, asset_id: int, include_deleted: bool = False
-    ) -> Optional[AssetDTO]:
-        """按整数主键取 AssetDTO。
-
-        Args:
-            asset_id: assets.id。
-            include_deleted: 为 True 时不过滤软删（供 Trash / 恢复流程使用）。
-        """
-        where = "id = ?"
-        if not include_deleted:
-            where += " AND is_deleted = 0"
-        row = self._fetchone(
-            f"SELECT * FROM assets WHERE {where}",
-            (int(asset_id),),
-        )
-        return AssetDTO.from_row(row) if row else None
-
-    def get_asset_by_uuid(
+    def get_asset(
             self, asset_uuid: str, include_deleted: bool = False
     ) -> Optional[AssetDTO]:
         """按 uuid 取 AssetDTO。
 
         Args:
             asset_uuid: assets.uuid。
-            include_deleted: 为 True 时不过滤软删（供 Trash / 恢复流程使用）。
+            include_deleted: True 时不过滤软删（Trash / 恢复流程使用）。
         """
         where = "uuid = ?"
         if not include_deleted:
             where += " AND is_deleted = 0"
         row = self._fetchone(
-            f"SELECT * FROM assets WHERE {where}",
-            (asset_uuid,),
+            f"SELECT * FROM assets WHERE {where}", (asset_uuid,)
         )
         return AssetDTO.from_row(row) if row else None
 
-    def get_asset_metadata(
-            self, asset_uuid: str, include_deleted: bool = False
-    ) -> Optional[dict[str, Any]]:
-        """返回资产元数据的浅层 dict（等同 AssetDTO.to_dict()）。
-
-        对于只关心 exif / 宽高 / 拍摄时间等字段的调用方，避免暴露整个 DTO。
-        """
-        dto = self.get_asset_by_uuid(asset_uuid, include_deleted=include_deleted)
-        return dto.to_dict() if dto else None
-
     # ==================================================================
-    # 上/下一张定位（P2）
+    # 上/下一张定位（P2）——入参出参全是 uuid
     # ==================================================================
     # 契约：
-    #   - 排序必须与 list_asset_ids_by_album / list_asset_ids_by_scope 完全同源，
-    #     否则缩略图网格翻页会出现“错位一张”。
-    #   - 返回 (prev_id, next_id, index, total)：
-    #       · index 为 1-based 位置；
-    #       · 目标行缺失（相册为空 / 资产不属于该相册）时返回 (None, None, 0, 0)。
-    #   - 实现走基于排序键的索引 seek（O(log N)），不做窗口函数全表物化。
-    #     排序契约 = `(key IS NULL) ASC, key DESC, id DESC`，其中 NULL 段在末尾。
-    #     SQLite 的 DESC 索引里 NULL 天然聚在末尾、段内 id DESC 有序，
-    #     因此 prev/next/index/total 全部能落在
-    #     idx_assets_active_taken_id / idx_assets_deleted_deleted_at_id 上。
+    #   - 入参 current_asset_uuid：资产 uuid。
+    #   - 返回 (prev_uuid, next_uuid, index, total)：
+    #       · prev/next 是 uuid 字符串；
+    #       · index 为 1-based；目标行缺失返回 (None, None, 0, 0)。
+    #   - 内部 tie-break 走 assets.id，保证与 list_asset_uuids_by_*
+    #     完全同源。索引：idx_assets_active_taken_id / _deleted_deleted_at_id。
 
-    def get_asset_neighbours_by_scope(
-            self, scope: str, current_asset_id: int
-    ) -> tuple[Optional[int], Optional[int], int, int]:
-        """虚拟相册（All / Trash）内的上/下一张定位。
-
-        Args:
-            scope: ``"active"`` 或 ``"deleted"``（见 _SCOPE_WHERE）。
-            current_asset_id: 目标资产的整数主键。
-        """
+    def get_neighbours_by_scope(
+            self, scope: str, current_asset_uuid: str
+    ) -> tuple[Optional[str], Optional[str], int, int]:
         return self._neighbours(
-            cur_id=int(current_asset_id),
+            cur_uuid=current_asset_uuid,
             from_clause="assets",
             where_clause=self._SCOPE_WHERE[scope],
             where_params=(),
             id_col="id",
+            uuid_col="uuid",
             key_col=self._SCOPE_KEY_COL[scope],
         )
 
-    def get_asset_neighbours_by_album(
-            self, album_uuid: str, current_asset_id: int
-    ) -> tuple[Optional[int], Optional[int], int, int]:
-        """物理相册内的上/下一张定位。
-
-        排序读 ``assets.taken_at``（与 list_assets 同源），
-        不用冗余的 ``album_assets.asset_taken_at``。
-        """
+    def get_neighbours_by_album(
+            self, album_uuid: str, current_asset_uuid: str
+    ) -> tuple[Optional[str], Optional[str], int, int]:
         return self._neighbours(
-            cur_id=int(current_asset_id),
+            cur_uuid=current_asset_uuid,
             from_clause=self._PHYSICAL_ALBUM_FROM,
             where_clause=self._PHYSICAL_ALBUM_WHERE,
             where_params=(album_uuid,),
             id_col="a.id",
+            uuid_col="a.uuid",
             key_col="a.taken_at",
         )
 
-    def locate_in_scope(self, scope: str, asset_id: int) -> Optional[int]:
-        """只返回 1-based index；资产不在该 scope 中返回 None。"""
+    def locate_in_scope(self, scope: str, asset_uuid: str) -> Optional[int]:
         return self._locate(
-            cur_id=int(asset_id),
+            cur_uuid=asset_uuid,
             from_clause="assets",
             where_clause=self._SCOPE_WHERE[scope],
             where_params=(),
             id_col="id",
+            uuid_col="uuid",
             key_col=self._SCOPE_KEY_COL[scope],
         )
 
-    def locate_in_album(
-            self, album_uuid: str, asset_id: int
-    ) -> Optional[int]:
-        """只返回 1-based index；资产不在该相册中返回 None。"""
+    def locate_in_album(self, album_uuid: str, asset_uuid: str) -> Optional[int]:
         return self._locate(
-            cur_id=int(asset_id),
+            cur_uuid=asset_uuid,
             from_clause=self._PHYSICAL_ALBUM_FROM,
             where_clause=self._PHYSICAL_ALBUM_WHERE,
             where_params=(album_uuid,),
             id_col="a.id",
+            uuid_col="a.uuid",
             key_col="a.taken_at",
         )
 
     # ------------------------------------------------------------------ #
     # 邻居 / 定位 —— 私有分派器
     # ------------------------------------------------------------------ #
-    def _neighbours(
-            self, *, cur_id, from_clause, where_clause, where_params,
-            id_col, key_col,
-    ) -> tuple[Optional[int], Optional[int], int, int]:
-        """统一的邻居聚合入口。
 
-        - 当前项不在集合内 → (None, None, 0, 0)。
-        - 集合为空 → 当前项必然不在集合内，同样返回 (None, None, 0, 0)。
-        """
-        found, cur_key = self._fetch_key(
+    def _neighbours(
+            self, *, cur_uuid, from_clause, where_clause, where_params,
+            id_col, uuid_col, key_col,
+    ) -> tuple[Optional[str], Optional[str], int, int]:
+        """统一邻居聚合入口。当前项不在集合内 / 集合为空 → (None, None, 0, 0)。"""
+        found, cur_id, cur_key = self._fetch_key(
             from_clause=from_clause, where_clause=where_clause,
-            where_params=where_params, id_col=id_col, key_col=key_col,
-            cur_id=cur_id,
+            where_params=where_params, id_col=id_col, uuid_col=uuid_col,
+            key_col=key_col, cur_uuid=cur_uuid,
         )
         if not found:
             return None, None, 0, 0
 
-        prev_id = self._find_prev(
+        prev_uuid = self._find_prev(
             from_clause=from_clause, where_clause=where_clause,
-            where_params=where_params, id_col=id_col, key_col=key_col,
-            cur_id=cur_id, cur_key=cur_key,
+            where_params=where_params, id_col=id_col, uuid_col=uuid_col,
+            key_col=key_col, cur_id=cur_id, cur_key=cur_key,
         )
-        next_id = self._find_next(
+        next_uuid = self._find_next(
             from_clause=from_clause, where_clause=where_clause,
-            where_params=where_params, id_col=id_col, key_col=key_col,
-            cur_id=cur_id, cur_key=cur_key,
+            where_params=where_params, id_col=id_col, uuid_col=uuid_col,
+            key_col=key_col, cur_id=cur_id, cur_key=cur_key,
         )
         index = self._count_before(
             from_clause=from_clause, where_clause=where_clause,
@@ -432,17 +354,16 @@ class ViewRepository(BaseRepository):
             from_clause=from_clause, where_clause=where_clause,
             where_params=where_params,
         )
-        return prev_id, next_id, index, total
+        return prev_uuid, next_uuid, index, total
 
     def _locate(
-            self, *, cur_id, from_clause, where_clause, where_params,
-            id_col, key_col,
+            self, *, cur_uuid, from_clause, where_clause, where_params,
+            id_col, uuid_col, key_col,
     ) -> Optional[int]:
-        """统一的位置定位入口。当前项不在集合内 → None。"""
-        found, cur_key = self._fetch_key(
+        found, cur_id, cur_key = self._fetch_key(
             from_clause=from_clause, where_clause=where_clause,
-            where_params=where_params, id_col=id_col, key_col=key_col,
-            cur_id=cur_id,
+            where_params=where_params, id_col=id_col, uuid_col=uuid_col,
+            key_col=key_col, cur_uuid=cur_uuid,
         )
         if not found:
             return None
@@ -455,28 +376,32 @@ class ViewRepository(BaseRepository):
     # ------------------------------------------------------------------ #
     # 邻居 / 定位 —— 私有工具（索引 seek，不物化全表）
     # ------------------------------------------------------------------ #
+
     def _fetch_key(self, *, from_clause, where_clause, where_params,
-                   id_col, key_col, cur_id):
-        """按主键取当前项的排序键；当前项不在集合内返回哨兵。"""
+                   id_col, uuid_col, key_col, cur_uuid):
+        """按 uuid 取当前项的 (id, 排序键)。
+
+        返回的 cur_id 仅供内部 seek 使用，不向上层暴露。
+        当前项不在集合内时返回 (False, None, None)。
+        """
         row = self._fetchone(
-            f"SELECT {key_col} AS k FROM {from_clause} "
-            f"WHERE {where_clause} AND {id_col} = ?",
-            (*where_params, cur_id),
+            f"SELECT {id_col} AS rid, {key_col} AS k FROM {from_clause} "
+            f"WHERE {where_clause} AND {uuid_col} = ?",
+            (*where_params, cur_uuid),
         )
         if row is None:
-            return False, None
-        return True, row["k"]
+            return False, None, None
+        return True, row["rid"], row["k"]
 
     def _find_prev(self, *, from_clause, where_clause, where_params,
-                   id_col, key_col, cur_id, cur_key):
-        """严格排在 cur 前一项的 id；没有返回 None。
+                   id_col, uuid_col, key_col, cur_id, cur_key):
+        """严格排在 cur 前一项的 uuid；没有返回 None。
 
         集合排序：`(key IS NULL) ASC, key DESC, id DESC`。
         """
         if cur_key is not None:
-            # 非 NULL 段：key 更大（或 key 相等且 id 更大）的最近一项
             row = self._fetchone(
-                f"""SELECT {id_col} AS nid FROM {from_clause}
+                f"""SELECT {uuid_col} AS nuuid FROM {from_clause}
                      WHERE {where_clause}
                        AND {key_col} IS NOT NULL
                        AND ({key_col} > ? OR ({key_col} = ? AND {id_col} > ?))
@@ -484,11 +409,10 @@ class ViewRepository(BaseRepository):
                      LIMIT 1""",
                 (*where_params, cur_key, cur_key, cur_id),
             )
-            return row["nid"] if row else None
+            return row["nuuid"] if row else None
 
-        # cur 落在 NULL 段：先找 NULL 段中 id 更大的
         row = self._fetchone(
-            f"""SELECT {id_col} AS nid FROM {from_clause}
+            f"""SELECT {uuid_col} AS nuuid FROM {from_clause}
                  WHERE {where_clause}
                    AND {key_col} IS NULL
                    AND {id_col} > ?
@@ -496,24 +420,22 @@ class ViewRepository(BaseRepository):
             (*where_params, cur_id),
         )
         if row:
-            return row["nid"]
-        # 否则落到非 NULL 段的最后一项
+            return row["nuuid"]
         row = self._fetchone(
-            f"""SELECT {id_col} AS nid FROM {from_clause}
+            f"""SELECT {uuid_col} AS nuuid FROM {from_clause}
                  WHERE {where_clause}
                    AND {key_col} IS NOT NULL
                  ORDER BY {key_col} ASC, {id_col} ASC LIMIT 1""",
             where_params,
         )
-        return row["nid"] if row else None
+        return row["nuuid"] if row else None
 
     def _find_next(self, *, from_clause, where_clause, where_params,
-                   id_col, key_col, cur_id, cur_key):
-        """严格排在 cur 后一项的 id；没有返回 None。"""
+                   id_col, uuid_col, key_col, cur_id, cur_key):
+        """严格排在 cur 后一项的 uuid；没有返回 None。"""
         if cur_key is not None:
-            # 非 NULL 段：key 更小（或 key 相等且 id 更小）的最近一项
             row = self._fetchone(
-                f"""SELECT {id_col} AS nid FROM {from_clause}
+                f"""SELECT {uuid_col} AS nuuid FROM {from_clause}
                      WHERE {where_clause}
                        AND {key_col} IS NOT NULL
                        AND ({key_col} < ? OR ({key_col} = ? AND {id_col} < ?))
@@ -522,27 +444,25 @@ class ViewRepository(BaseRepository):
                 (*where_params, cur_key, cur_key, cur_id),
             )
             if row:
-                return row["nid"]
-            # 非 NULL 段之后紧邻 NULL 段的第一项
+                return row["nuuid"]
             row = self._fetchone(
-                f"""SELECT {id_col} AS nid FROM {from_clause}
+                f"""SELECT {uuid_col} AS nuuid FROM {from_clause}
                      WHERE {where_clause}
                        AND {key_col} IS NULL
                      ORDER BY {id_col} DESC LIMIT 1""",
                 where_params,
             )
-            return row["nid"] if row else None
+            return row["nuuid"] if row else None
 
-        # cur 落在 NULL 段：找 NULL 段中 id 更小的
         row = self._fetchone(
-            f"""SELECT {id_col} AS nid FROM {from_clause}
+            f"""SELECT {uuid_col} AS nuuid FROM {from_clause}
                  WHERE {where_clause}
                    AND {key_col} IS NULL
                    AND {id_col} < ?
                  ORDER BY {id_col} DESC LIMIT 1""",
             (*where_params, cur_id),
         )
-        return row["nid"] if row else None
+        return row["nuuid"] if row else None
 
     def _count_before(self, *, from_clause, where_clause, where_params,
                       id_col, key_col, cur_id, cur_key) -> int:
@@ -557,7 +477,6 @@ class ViewRepository(BaseRepository):
             )
             return int(row["cnt"]) if row else 0
 
-        # cur 在 NULL 段：所有非 NULL 项 + NULL 段中 id 更大的
         row = self._fetchone(
             f"""SELECT COUNT(*) AS cnt FROM {from_clause}
                  WHERE {where_clause} AND {key_col} IS NOT NULL""",
@@ -584,25 +503,15 @@ class ViewRepository(BaseRepository):
     # 资产磁盘路径
     # ==================================================================
 
-    def get_asset_full_path(
+    def get_asset_path(
             self, asset_uuid: str, include_deleted: bool = False
     ) -> Optional[str]:
-        """根据资产 uuid 获取其磁盘上的完整路径。
+        """按 uuid 取磁盘完整路径。
 
-        路径拼接规则：
-          - 若资产关联的导入源存在（source_path 非空），使用
-            ``Path(source_path) / file_path`` 拼接（file_path 为相对路径）。
-          - 若资产未关联导入源（source_id 为空或 source_path 为 NULL），
-            则 ``file_path`` 被视为绝对路径直接返回。
-          - 若资产本身不存在（或被软删且未开启 include_deleted），返回 None。
-
-        Args:
-            asset_uuid: 资产 UUID（字符串形式）。
-            include_deleted: 为 True 时连同软删资产一起返回，
-                供 Trash（回收站）中展示原图使用。
-
-        Returns:
-            资产完整路径字符串；无法定位时返回 None。
+        路径规则：
+          · 有 source_path → ``Path(source_path) / file_path``；
+          · 否则 file_path 视为绝对路径直接返回；
+          · 资产不存在（或软删且未 include_deleted）→ None。
         """
         where = "a.uuid = ?"
         if not include_deleted:
@@ -620,37 +529,12 @@ class ViewRepository(BaseRepository):
         )
         return self._resolve_full_path(row)
 
-    def get_asset_full_path_by_id(
-            self, asset_id: int, include_deleted: bool = False
-    ) -> Optional[str]:
-        """按 asset 整数主键取磁盘完整路径。拼路径规则与 get_asset_full_path 一致。"""
-        where = "a.id = ?"
-        if not include_deleted:
-            where += " AND a.is_deleted = 0"
-        row = self._fetchone(
-            f"""
-            SELECT a.file_path   AS file_path,
-                   s.source_path AS source_path
-              FROM assets AS a
-              LEFT JOIN ingest_source AS s
-                     ON s.id = a.source_id
-             WHERE {where}
-            """,
-            (int(asset_id),),
-        )
-        return self._resolve_full_path(row)
-
     @staticmethod
     def _resolve_full_path(row: Any) -> Optional[str]:
-        """根据查询行拼接磁盘完整路径。两条 get_asset_full_path* 共用同一套规则。"""
         if row is None or not row["file_path"]:
             return None
-
         file_path = Path(row["file_path"])
         source_path = row["source_path"]
-
-        # file_path 已为绝对路径，或没有可用的源路径起点时，直接返回
         if file_path.is_absolute() or not source_path:
             return str(file_path)
-
         return str(Path(source_path) / file_path)

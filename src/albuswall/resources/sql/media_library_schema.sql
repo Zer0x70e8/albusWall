@@ -36,9 +36,10 @@ CREATE TABLE IF NOT EXISTS ingest_source (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
     title                   TEXT    NOT NULL,                    -- 显示名称
     description             TEXT,                                -- 备注说明，可空
-    source_path             TEXT    NOT NULL,                    -- 源目录绝对路径；特殊源为空串
-    target_path             TEXT,                                -- 处理后落盘目录，可空（沿用默认）
-    mount_point             TEXT,                                -- 挂载点，可空（非挂载源为空）
+    source_path  TEXT,                                           -- 扫描起始目录的绝对路径；挂载源的路径通常位于 target_path 之下
+    mount_point  TEXT,                                           -- 挂载源：设备 / NAS 路径；非挂载源为 NULL
+    target_path  TEXT,                                           -- 挂载目标目录：auto_mount 把 mount_point 挂到此处；可空。
+    -- TODO target_path 目前只能在unix有文件系统抽象的才能用
     auto_mount              INTEGER NOT NULL DEFAULT 0,          -- 0/1 布尔：是否自动挂载
     file_type_check         TEXT    NOT NULL DEFAULT 'suffix',   -- 'suffix' 按扩展名 / 'magic' 按文件头
     file_types              TEXT    NOT NULL DEFAULT '[]',       -- JSON 数组字符串，如 '["jpg","png"]'
@@ -47,12 +48,15 @@ CREATE TABLE IF NOT EXISTS ingest_source (
     subfolder_recursion_depth INTEGER,                           -- 递归深度；NULL 表示不限
     trigger_config          TEXT,                                -- JSON 对象，见下方结构示例
     disabled                INTEGER NOT NULL DEFAULT 0,          -- 0/1 布尔：用户显式禁用（不参与调度）
+    is_deleted              INTEGER NOT NULL DEFAULT 0,          -- 软删除标记，标记了代表需要删除数据，但不删除源文件
+    deleted_at              TEXT,
     created_at              TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
     modified_at             TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
     CONSTRAINT chk_file_type_check CHECK (file_type_check IN ('suffix', 'magic')),
     CONSTRAINT chk_auto_mount_bool CHECK (auto_mount IN (0,1)),
     CONSTRAINT chk_subfolder_recursion_bool CHECK (subfolder_recursion IN (0,1)),
     CONSTRAINT chk_ingest_source_disabled_bool CHECK (disabled IN (0,1))
+    CONSTRAINT chk_ingest_source_deleted_bool CHECK (is_deleted IN (0,1))
 );
 
 -- 特殊源：id = 0，虚拟根 / 手动导入入口
@@ -61,15 +65,17 @@ INSERT OR IGNORE INTO ingest_source (
     id, title, description, source_path, target_path, mount_point,
     auto_mount, file_type_check, file_types, tags,
     subfolder_recursion, subfolder_recursion_depth, trigger_config,
-    disabled
+    disabled, is_deleted, deleted_at
 ) VALUES (
     0,
     '__manual__',
-    '手动导入 / 虚拟根；file_path 语义见应用层',
+    'Manual import / virtual root; the meaning of file_path is defined at the application layer.',
     '',
     NULL, NULL, 0, 'suffix', '[]', '[]', 0, NULL,
     '{"update_mode":"manual"}',
-    0
+    0,        -- disabled
+    0,        -- is_deleted
+    NULL      -- deleted_at
 );
 
 -- trigger_config JSON 结构示例
@@ -185,6 +191,27 @@ CREATE TABLE IF NOT EXISTS asset_candidate_cache (
     ),
     FOREIGN KEY (source_id) REFERENCES ingest_source(id) ON DELETE CASCADE
 );
+-- -----------------------------------------------------------------------------
+-- 6. 垃圾箱清理状态表（单例，id 恒为 1）
+--    语义：全库唯一的清理水位线，用于缓解系统时钟被篡改的破坏。
+--      - last_observed_at       ：见过的最大挂钟时间，只增不减；
+--                                 时钟回拨时以它作为"现在"的兜底
+--      - last_cleanup_at        ：上次清理完成的挂钟时间（观察用）
+--      - last_cleanup_deleted   ：上次清理物理删除的资产数（观察用）
+--      - suspicious_clock_jumps ：检测到的可疑时钟跳变累计次数
+--    单例约束由 CHECK (id = 1) 保证；行由下面的 INSERT OR IGNORE 初始化。
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS trash_state (
+    id                     INTEGER PRIMARY KEY CHECK (id = 1),
+    last_observed_at       TEXT    NOT NULL,
+    last_cleanup_at        TEXT,
+    last_cleanup_deleted   INTEGER NOT NULL DEFAULT 0,
+    suspicious_clock_jumps INTEGER NOT NULL DEFAULT 0
+);
+
+-- 单例初始化，幂等
+INSERT OR IGNORE INTO trash_state (id, last_observed_at)
+VALUES (1, strftime('%Y-%m-%dT%H:%M:%f','now'));
 
 -- =============================================================================
 -- 索引 —— 覆盖所有常用查询与排序，确保大数据量下的性能
@@ -255,6 +282,9 @@ CREATE INDEX IF NOT EXISTS idx_album_assets_taken ON album_assets(album_id, asse
 -- ingest_source 常用查询
 CREATE INDEX IF NOT EXISTS idx_ingest_source_title       ON ingest_source(title);
 CREATE INDEX IF NOT EXISTS idx_ingest_source_source_path ON ingest_source(source_path);
+CREATE INDEX IF NOT EXISTS idx_ingest_source_deleted
+    ON ingest_source(deleted_at DESC, id DESC)
+    WHERE is_deleted = 1;
 
 -- asset_candidate_cache：
 --   按 source 过滤候选列表

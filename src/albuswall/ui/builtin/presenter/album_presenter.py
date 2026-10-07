@@ -49,6 +49,7 @@ class _CoverJob(QRunnable):
         super().__init__()
         self._fn = fn
 
+    # noinspection broad-exception
     def run(self) -> None:
         try:
             self._fn()
@@ -188,6 +189,13 @@ class AlbumPresenter(QObject):
     - 列表点击 → ``set_album`` → 刷 TitleBar + 高亮网格
     - 外部 ``set_album`` → 刷 TitleBar + 高亮网格
 
+    接口契约（与 ViewService 收敛对齐）：
+        · 视图服务只以 uuid 为键：
+              list_album_uuids() -> list[UUID]
+              get_album(uuid)    -> Album | None
+              get_cover_full_path(uuid) -> str | None
+        · 本 presenter 不接触 Album.id / asset id。
+
     依赖 ``AlbumModel`` 至少提供以下接口::
 
         append(uuid: str, pixmap: QPixmap | None = None) -> int
@@ -231,7 +239,8 @@ class AlbumPresenter(QObject):
 
     # ---------------- 生命周期 ----------------
 
-    def setup(self, container) -> None:
+    def setup(self, _) -> None:
+        # arg is container
         self._populate_list()
         self._load_default_album()
         self.refresh()
@@ -240,7 +249,8 @@ class AlbumPresenter(QObject):
             "view_service=%r module=%s",
             self._view_service, type(self._view_service).__module__)
 
-    def teardown(self):...
+    def teardown(self):
+        ...
 
     def refresh(self) -> None:
         """重绘 TitleBar + 重新同步网格选中。"""
@@ -257,11 +267,12 @@ class AlbumPresenter(QObject):
 
     # ---------------- 网格数据 ----------------
 
+    # noinspection broad-exception
     def _populate_list(self) -> None:
         """拉活动专辑列表，先塞占位，再异步回填封面。"""
         self._model.clear()
         try:
-            uuids = self._view_service.get_active_album_uuids()
+            uuids = self._view_service.list_album_uuids()
         except Exception:  # noqa: BLE001
             _logger.exception("拉取活动专辑列表失败")
             return
@@ -273,14 +284,15 @@ class AlbumPresenter(QObject):
             self._load_cover_async(u)
 
     def _load_cover_async(self, album_uuid: UUID | str) -> None:
-        """在后台把封面读成 QPixmap，回主线程按 uuid 回填。"""
+        """在后台把封面读成 QPixmap，回主线程按 uuid 回填。
+
+        ``ViewService.get_cover_full_path`` 直接以 album uuid 为键，
+        内部完成「album → cover asset → 磁盘路径」的组合，这里无需
+        先查 album DTO。
+        """
 
         def job() -> None:
-            album = self._view_service.get_album_by_uuid(album_uuid)
-            path = (
-                self._view_service.get_cover_full_path(album)
-                if album is not None else None
-            )
+            path = self._view_service.get_cover_full_path(album_uuid)
             pm = QPixmap(str(path)) if path else QPixmap()
             QMetaObject.invokeMethod(
                 self, "_on_cover_ready",
@@ -313,7 +325,7 @@ class AlbumPresenter(QObject):
         uuid_val = index.data(AlbumRole.Uuid)
         if not uuid_val:
             return
-        album = self._view_service.get_album_by_uuid(uuid_val)
+        album = self._view_service.get_album(uuid_val)
         if album is None:
             _logger.debug("点击的专辑 %s 查询为空", uuid_val)
             return
@@ -336,13 +348,13 @@ class AlbumPresenter(QObject):
     def _load_default_album(self) -> None:
         """解析顺序：
             1. 偏好 ``album.default_album_uuid``；
-            2. 缺失时取 ``ViewService.get_active_album_uuids()`` 的第一个；
+            2. 缺失时取 ``ViewService.list_album_uuids()`` 的第一个；
             3. 都没有则保持 ``None``。
         """
         album_uuid: UUID | str | None = self._config.default_album_uuid
 
         if not album_uuid:
-            active = self._view_service.get_active_album_uuids()
+            active = self._view_service.list_album_uuids()
             _logger.debug("presenter active = %r", active)
             album_uuid = active[0] if active else None
 
@@ -351,7 +363,7 @@ class AlbumPresenter(QObject):
             _logger.debug("未解析到默认专辑，标题栏将以空专辑渲染")
             return
 
-        self._current_album = self._view_service.get_album_by_uuid(album_uuid)
+        self._current_album = self._view_service.get_album(album_uuid)
         if self._current_album is None:
             _logger.debug("默认专辑 %s 查询为空", album_uuid)
 
@@ -373,7 +385,7 @@ class AlbumPresenter(QObject):
     def _album_cover_path(self, album: Album | None) -> Optional[str]:
         if album is None:
             return None
-        return self._view_service.get_cover_full_path(album)
+        return self._view_service.get_cover_full_path(album.uuid)
 
     def _build_vo(self, album: Album | None) -> TitleBarVO:
         return TitleBarVO(

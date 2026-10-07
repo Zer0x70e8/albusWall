@@ -1,27 +1,31 @@
 #
 """"""
 
+import sys
 import logging
 import logging.config
-from typing import TYPE_CHECKING, Union
-from pprint import pformat
 from pathlib import Path
+from pprint import pformat
+from typing import TYPE_CHECKING, Union
 
 import albuswall
 from albuswall.core import Container
 from albuswall.configue import ConfigField
 from albuswall.configue.utils import get_user_config_dir
 
-from .common import TRACE
 from .handlers import MemoryCacheHandler
 
 if TYPE_CHECKING:
     from albuswall.configue import Configue
 
-logging.addLevelName(TRACE, "TRACE")
-_logger = logging.getLogger(f"{albuswall.__name__}.log")
+# _logger = logging.getLogger(f"{albuswall.__name__}.log")
+_logger = logging.getLogger(__package__)
 
 LOG_HEAD = "[Log]"
+
+_DEFAULT_LOG_FORMAT = (
+    "%(asctime)s [%(levelname)s] %(name)s:%(lineno)d - %(message)s"
+)
 
 
 # noinspection bad-assignment
@@ -34,8 +38,6 @@ class LogConf:
 
 def setup_log(container: Container):
     config: Configue = container.get("config")
-    # ensure method is not enable in frozen namespace
-    # _config.static.ensure("log", Namespace)
     config.static.path.ensure("config", Path)
     config.static.files.ensure("log", None)
     confs = config.static.log
@@ -48,44 +50,47 @@ def setup_log(container: Container):
         log_conf_file = Path(get_user_config_dir(
             albuswall.__title__, albuswall.__author__)) / "log_config.ini"
 
-    # 用类型查找，别用 handlers[0]
     root_logger = logging.getLogger(albuswall.__name__)
     buffer_handler: MemoryCacheHandler | None = next(
         (h for h in root_logger.handlers if isinstance(h, MemoryCacheHandler)),
         None,
     )
 
-    if isinstance(buffer_handler, MemoryCacheHandler):  # 收窄
+    if isinstance(buffer_handler, MemoryCacheHandler):
         root_logger.removeHandler(buffer_handler)
+
         if log_conf_file.is_file():
-            msg = f"Loaded log file: {log_conf_file}"
-            _logger.debug(msg)
-            logging.getLogger(albuswall.__name__).removeHandler(buffer_handler)
-            logging.config.fileConfig(log_conf_file, disable_existing_loggers=False)
+            _logger.debug("Loaded log file: %s", log_conf_file)
+            logging.config.fileConfig(
+                log_conf_file, disable_existing_loggers=False
+            )
         else:
-            msg = f"Not found log _config: {log_conf_file}"
-            _logger.warning(msg)
-            logging.getLogger(albuswall.__name__).removeHandler(buffer_handler)
-    # print(log_conf_file.read_text())
+            # ★ 关键修复：配置缺失时必须有替代 handler，
+            #   否则缓冲移除后启动日志将没有任何落点。
+            fallback = logging.StreamHandler(sys.stderr)
+            fallback.setLevel(logging.NOTSET)
+            fallback.setFormatter(logging.Formatter(
+                _DEFAULT_LOG_FORMAT, datefmt="%Y-%m-%d %H:%M:%S"
+            ))
+            root_logger.addHandler(fallback)
+            _logger.warning(
+                "Not found log _config: %s; "
+                "falling back to stderr StreamHandler",
+                log_conf_file,
+            )
 
     if log_level is not None:
         try:
             logging.getLogger(albuswall.__name__).setLevel(log_level)
         except ValueError as e:
             msg = pformat(f"{LOG_HEAD} Set root logger log level failed: {e}")
-            # noinspection PyNoneFunctionAssignment
+            # noinspection none-function-assignment
             [_logger.warning(l) for l in msg.split("\n")]
 
-    # clear buffer 重放缓冲区（关键修复）
-    # handle() 不做级别过滤，必须自己用 isEnabledFor 检查
+    # 重放缓冲区
     if buffer_handler is not None and hasattr(buffer_handler, "buffer"):
         for record in list(buffer_handler.buffer):
             source_logger = logging.getLogger(record.name)
             if source_logger.isEnabledFor(record.levelno):
                 source_logger.handle(record)
         buffer_handler.buffer.clear()
-    # # print(_config.static.files)
-    # print(f"_logger.level = {_logger.level}")
-    # print(f"_logger.propagate = {_logger.propagate}")
-    # print(f"root handlers = {logging.getLogger().handlers}")
-    # print(f"albuswall handlers = {logging.getLogger('albuswall').handlers}")

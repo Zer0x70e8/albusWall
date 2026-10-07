@@ -22,7 +22,7 @@ import sqlite3
 import threading
 import uuid
 from pathlib import Path
-from typing import Optional, Set, Tuple
+from typing import Optional, Set
 
 import albuswall
 from albuswall.log import getLogger
@@ -38,7 +38,7 @@ PRAGMA_BUSY_TIMEOUT = "PRAGMA busy_timeout = 5000"
 PRAGMA_RESOURCE_TRIGGERS = "PRAGMA recursive_triggers = OFF"
 
 # 当前 schema 版本；每次结构变化时 +1，并在 _run_migrations 里补一段
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 0  # NOTE: 在第一个可用版本发布之前都不改
 
 _package_name = __name__.split('.', 2)[-1] if '.' in __name__ else __name__
 
@@ -60,9 +60,9 @@ class Connector:
       提供：``with connector.connect() as conn: ...``
     """
 
-    # 进程级：同一进程内多个 Connector 共用，避免重复初始化同一文件
-    # key = (resolved_path_or_memory_uri, SCHEMA_VERSION)
-    _initialized_dbs: Set[Tuple[str, int]] = set()
+    # 进程级：同一进程内多个 Connector 共用，避免重复初始化同一文件。
+    # key 为解析后的路径（文件库）或每实例唯一的内存库 URI。
+    _initialized_dbs: Set[str] = set()
     _init_dbs_lock = threading.Lock()
 
     logger = logger
@@ -179,74 +179,20 @@ class Connector:
 
     # --------------------------------------------------------- initialization
     def _ensure_initialized(self, conn: sqlite3.Connection, resolved: str) -> None:
-        # 内存库用每实例唯一的 URI 作 key → 不同实例互不影响
-        # 文件库用解析后的路径作 key → 同一文件在同进程内只初始化一次
+        # 内存库：每实例唯一 URI → 不同实例互不影响
+        # 文件库：解析后的路径 → 同一文件在同进程内只初始化一次
         #
-        # key 不含 schema_sql 内容：schema 内容变化必须通过 SCHEMA_VERSION += 1
-        # 来显式宣告，这样初始化和迁移走同一套版本契约，不会出现
-        # "schema 悄悄改了但 key 撞上旧记录" 的隐性跳初始化。
-        key = (resolved, SCHEMA_VERSION)
-
+        # 初始化本身完全幂等（schema 里全部是 CREATE TABLE/INDEX/TRIGGER
+        # IF NOT EXISTS + INSERT OR IGNORE）。_initialized_dbs 只是为了避免
+        # 在同进程内对同一库重复 executescript，纯粹的性能优化，去掉也不
+        # 影响正确性。
         with Connector._init_dbs_lock:
-            if key in Connector._initialized_dbs:
+            if resolved in Connector._initialized_dbs:
                 return
             self.logger.info("Initializing database: %s", resolved)
             conn.executescript(self._schema_sql)
-            self._run_migrations(conn)
-            Connector._initialized_dbs.add(key)
+            Connector._initialized_dbs.add(resolved)
             self.logger.info("Database ready: %s", resolved)
-
-    def _run_migrations(self, conn: sqlite3.Connection) -> None:
-        """
-        在 schema 之后执行，只处理非幂等结构变更。
-
-        新增迁移时:
-          1. SCHEMA_VERSION += 1
-          2. 在下面追加 `if current < N:` 分支
-          3. 同步更新 schema 文件里的 CREATE TABLE 定义（给新库用）
-             —— schema 文件应始终反映 *最新版本*，迁移代码只负责补齐旧库
-        """
-        current = conn.execute("PRAGMA user_version").fetchone()[0]
-        if current >= SCHEMA_VERSION:
-            return
-
-        self.logger.info("Migrating schema: %d -> %d", current, SCHEMA_VERSION)
-
-        if current < 1:
-            self._add_column_if_not_exists(
-                conn, 'asset_candidate_cache', 'status',
-                "TEXT NOT NULL DEFAULT 'pending'"
-            )
-            self._add_column_if_not_exists(
-                conn, 'asset_candidate_cache', 'claimed_by', "TEXT"
-            )
-            self._add_column_if_not_exists(
-                conn, 'asset_candidate_cache', 'claimed_at', "TEXT"
-            )
-
-        if current < 2:
-            # 用户显式禁用导入源：以前是内存 set，现在落库。
-            #
-            # 注意：SQLite 的 ALTER TABLE ADD COLUMN 不支持携带 CHECK 约束，
-            # 所以迁移路径补出来的 disabled 列没有 CHECK 兜底，仅靠
-            # DEFAULT 0 + 应用层 PatchField[bool] 保证取值合法。
-            # 新库走 schema 文件时会带上 CHECK（见 media_library_schema.sql）。
-            self._add_column_if_not_exists(
-                conn, 'ingest_source', 'disabled',
-                "INTEGER NOT NULL DEFAULT 0"
-            )
-
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        self.logger.info("Migration done, schema version = %d", SCHEMA_VERSION)
-
-    @staticmethod
-    def _add_column_if_not_exists(conn, table, column_name, column_definition):
-        columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
-        if column_name not in columns:
-            conn.execute(
-                f"ALTER TABLE {table} ADD COLUMN {column_name} {column_definition}"
-            )
-            Connector.logger.debug("Added column %s.%s", table, column_name)
 
     # ------------------------------------------------------------------ close
     def close(self):

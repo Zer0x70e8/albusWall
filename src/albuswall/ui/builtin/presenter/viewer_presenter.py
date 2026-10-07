@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from logging import getLogger
 from typing import TYPE_CHECKING, Optional
 from uuid import UUID, uuid4
 
 from PySide6.QtGui import QPixmap
 
 from albuswall.dto.thumbnail import ThumbSpec
+from albuswall.services.view import SCOPE_DELETED
 
 from ..widgets.image_loader import ImageLoader, PixmapCache
 
@@ -17,40 +19,38 @@ if TYPE_CHECKING:
     from concurrent.futures import Future
 
     from albuswall.services import (
-        ViewService,  # 提供虚拟相簿抽象
+        ViewService,
         ThumbnailService,
     )
     from albuswall.repositories import AssetRepository
 
     from ..window.detail import Detail
 
+_logger = getLogger(__name__)
+
 
 @dataclass(slots=True)
 class ViewerContext:
     """进入详情页的统一上下文。
 
-    调用方（缩略图网格、收藏列表、搜索结果等）只需构造此 dataclass
-    再调用 ``ViewerPresenter.open(ctx)``，即可进入详情页。
+    与 PresenterManager 契约一致：presenter 只通过 uuid 与服务层交互。
 
     Attributes:
-        album_uuid: 当前所在相册的 uuid（物理 / 虚拟均可），
-            供上/下一张定位与缩略图导航栏复用同一排序契约。
-        current_asset_id: 要展示资产的整数主键（``assets.id``）。
+        album_uuid: 当前所在相册的 uuid（物理 / 虚拟均可）。
+        current_asset_uuid: 要展示资产的 uuid（``assets.uuid``）。
         include_deleted: 是否连同软删资产一起查询。
             Trash 虚拟相册应为 True；其余场景一般 False。
-            ``open()`` 内部会与 ``ViewService.should_include_deleted`` 取或，
-            所以调用方即使漏传，Trash 场景也会被兜住。
+            ``open()`` 内部会与 ``ViewService.get_scope`` 取或。
     """
 
     album_uuid: UUID
-    current_asset_id: int
+    current_asset_uuid: str
     include_deleted: bool = False
 
 
 class ViewerPresenter:
-    """详情页 Presenter（异步加载版）。"""
+    """详情页 Presenter（异步加载版，uuid-only）。"""
 
-    # 预加载：进入详情后自动预热 prev / next 的原图
     PREFETCH_NEIGHBOURS = True
 
     def __init__(
@@ -72,12 +72,8 @@ class ViewerPresenter:
         self._cache = cache if cache is not None else get_cache()
 
         self._ctx: Optional[ViewerContext] = None
-
-        # 当前资产的收藏状态（open 时从 dto 同步）
         self._is_favorite: bool = False
-
-        # 本次导航的下一张 id（trash 后用于决定跳哪 / 是否关闭）
-        self._next_id: Optional[int] = None
+        self._next_uuid: Optional[str] = None
 
         self._inflight: list["Future"] = []
         self._load_token: Optional[str] = None
@@ -91,11 +87,8 @@ class ViewerPresenter:
     def open(self, ctx: ViewerContext) -> bool:
         """进入详情页并展示 ``ctx`` 指定的资产。
 
-        与旧版差异：大图改为 ``ImageLoader.load_full`` 异步加载，
-        结果通过 ``_on_full_loaded`` 回到 GUI 线程后 ``view.set_pixmap(...)``。
-
         返回：
-            True:  图片已从缓存**同步**命中并已推给视图。
+            True:  大图已从缓存同步命中并推给视图。
             False: 已提交异步请求 / 路径缺失（视图侧走占位）。
         """
         # 0) 丢弃上一个资产遗留的结果
@@ -108,42 +101,65 @@ class ViewerPresenter:
         self._ensure_connected()
         self._ensure_loader_connected()
 
+        # 与 PresenterManager 同口径：Trash 判定走 get_scope（ViewService
+        # 不提供 should_include_deleted）。
         include_deleted = (
                 ctx.include_deleted
-                or self.view_service.should_include_deleted(ctx.album_uuid)
+                or self.view_service.get_scope(ctx.album_uuid) == SCOPE_DELETED
         )
 
-        # ---- 1) 定位：当前资产在相册里的上/下一张与序号 --------------
-        prev_id, next_id, index, total = self.view_service.get_asset_neighbours(
-            ctx.album_uuid, ctx.current_asset_id,
-        )
-        self._next_id = next_id
+        asset_uuid = str(ctx.current_asset_uuid)
+
+        # ---- 1) 定位：直接走 ViewService.get_asset_neighbours ---------
+        prev_uuid, next_uuid, index, total = \
+            self.view_service.get_asset_neighbours(
+                ctx.album_uuid, asset_uuid,
+            )
+        self._next_uuid = str(next_uuid) if next_uuid else None
+        prev_uuid_s = str(prev_uuid) if prev_uuid else None
+        next_uuid_s = str(next_uuid) if next_uuid else None
 
         # ---- 2) 导航栏缩略图 -----------------------------------------
-        asset_ids: list[int] = self.view_service.get_asset_ids(ctx.album_uuid)
-        thumb_map: dict[int, str] = {}
-        if asset_ids:
+        asset_uuids: list[str] = [
+            str(u)
+            for u in self.view_service.get_asset_uuids(ctx.album_uuid)
+        ]
+        thumb_map: dict[str, str] = {}
+        if asset_uuids:
             thumb_map = self.thumbnail_service.get_thumbnail_paths(
-                asset_ids, ThumbSpec.SMALL,
+                asset_uuids, ThumbSpec.SMALL,
             )
 
         # ---- 3) 大图路径 ---------------------------------------------
-        full_path: Optional[str] = self.view_service.get_asset_full_path_by_id(
-            ctx.current_asset_id,
-            include_deleted=include_deleted,
+        full_path: Optional[str] = self.view_service.get_asset_full_path(
+            asset_uuid, include_deleted=include_deleted,
         )
 
         # ---- 4) 元信息 -----------------------------------------------
-        metadata: Optional[dict] = None
-        dto = self.view_service.get_asset_by_id(
-            ctx.current_asset_id, include_deleted=include_deleted,
+        # ViewService 没有 get_asset_metadata；直接从 AssetDTO 取字段。
+        # 若 Detail.set_metadata 需要更多字段，在这里按需扩展即可。
+        dto = self.view_service.get_asset(
+            asset_uuid, include_deleted=include_deleted,
         )
+        metadata: Optional[dict] = None
         if dto is not None:
-            metadata = self.view_service.get_asset_metadata(
-                dto.uuid, include_deleted=include_deleted,
-            )
+            metadata = {
+                "uuid": str(getattr(dto, "uuid", asset_uuid)),
+                "title": getattr(dto, "title", None),
+                "description": getattr(dto, "description", None),
+                "file_path": getattr(dto, "file_path", None),
+                "file_size": getattr(dto, "file_size", None),
+                "mime_type": getattr(dto, "mime_type", None),
+                "width": getattr(dto, "width", None),
+                "height": getattr(dto, "height", None),
+                "taken_at": getattr(dto, "taken_at", None),
+                "created_at": getattr(dto, "created_at", None),
+                "modified_at": getattr(dto, "modified_at", None),
+                "is_favorite": bool(getattr(dto, "is_favorite", False)),
+                "is_deleted": bool(getattr(dto, "is_deleted", False)),
+            }
 
-        # 收藏状态：优先取 dto，取不到就当作未收藏
+        # 收藏状态
         self._is_favorite = bool(
             getattr(dto, "is_favorite", False) if dto is not None else False
         )
@@ -151,44 +167,40 @@ class ViewerPresenter:
 
         # ---- 5) 推导航栏 / 元信息 -----------------------------------
         self.view.set_navigation_items(
-            asset_ids=asset_ids,
+            asset_uuids=asset_uuids,
             thumb_map=thumb_map,
-            current_asset_id=ctx.current_asset_id,
+            current_asset_uuid=asset_uuid,
+            include_deleted=include_deleted,  # ← 新增
+            thumb_service=self.thumbnail_service,  # ← 新增
         )
-        self.view.set_navigation_position(
-            index=index, total=total,
-            prev_id=prev_id, next_id=next_id,
-        )
-        if metadata is not None:
-            self.view.set_metadata(metadata)
 
-        # ---- 6) 大图：异步加载，每个请求一个新 token ----------------
+        # ---- 6) 大图：异步加载 --------------------------------------
         token = uuid4().hex
         self._load_token = token
 
         if not full_path:
-            # 路径缺失 → 直接切占位图
             self.view.set_image("")
             loaded_sync = False
         else:
             cached = self._cache.get_full(full_path)
-            # 命中缓存时 load_full 会同步 emit full_loaded → _on_full_loaded
             self._loader.load_full(full_path, token)
             loaded_sync = cached is not None
 
         # ---- 7) 预取 prev / next 原图 --------------------------------
         if self.PREFETCH_NEIGHBOURS:
-            self._prefetch_neighbours(prev_id, next_id, include_deleted)
+            self._prefetch_neighbours(
+                prev_uuid_s, next_uuid_s, include_deleted,
+            )
 
         return loaded_sync
 
-    def navigate(self, asset_id: int) -> bool:
+    def navigate(self, asset_uuid: str) -> bool:
         """在当前上下文的相册内切换资产。"""
         if self._ctx is None:
             return False
         return self.open(ViewerContext(
             album_uuid=self._ctx.album_uuid,
-            current_asset_id=int(asset_id),
+            current_asset_uuid=str(asset_uuid),
             include_deleted=self._ctx.include_deleted,
         ))
 
@@ -211,7 +223,7 @@ class ViewerPresenter:
 
         self._ctx = None
         self._is_favorite = False
-        self._next_id = None
+        self._next_uuid = None
         self.view.clear_image()
 
     # ------------------------------------------------------------------ #
@@ -219,17 +231,17 @@ class ViewerPresenter:
     # ------------------------------------------------------------------ #
     def _prefetch_neighbours(
             self,
-            prev_id: Optional[int],
-            next_id: Optional[int],
+            prev_uuid: Optional[str],
+            next_uuid: Optional[str],
             include_deleted: bool,
     ) -> None:
         """进入详情后预取上/下一张原图，翻页时可直接命中缓存。"""
-        for neighbour_id in (prev_id, next_id):
-            if neighbour_id is None:
+        for neighbour_uuid in (prev_uuid, next_uuid):
+            if neighbour_uuid is None:
                 continue
             try:
-                path = self.view_service.get_asset_full_path_by_id(
-                    neighbour_id, include_deleted=include_deleted,
+                path = self.view_service.get_asset_full_path(
+                    neighbour_uuid, include_deleted=include_deleted,
                 )
             except Exception:
                 # 预加载是 best-effort，任何异常都不该影响当前展示
@@ -308,72 +320,55 @@ class ViewerPresenter:
             self._loader.cancel(self._load_token)
             self._load_token = None
 
-    # ---- 图片加载回调 ------------------------------------------------------
+    # ---- 图片加载回调 --------------------------------------------------
 
     def _on_full_loaded(self, token: str, pixmap: QPixmap) -> None:
-        """大图加载完成。过期 token 直接丢弃。"""
         if token != self._load_token:
             return
         self.view.image_viewer.set_pixmap(pixmap)
 
     def _on_load_failed(self, token: str, path: str) -> None:
-        """大图加载失败 / 路径缺失 → 切占位图。"""
         if token != self._load_token:
             return
         self.view.set_image("")
 
-    # ---- 写操作回调 --------------------------------------------------------
+    # ---- 写操作回调 ----------------------------------------------------
 
     def _on_favorite_toggle(self) -> None:
         """收藏按钮点击 → 取反写库 → 刷新按钮 + 广播刷新。"""
         if self._ctx is None:
             return
-        asset_id = self._ctx.current_asset_id
+        asset_uuid = self._ctx.current_asset_uuid
         target = not self._is_favorite
 
         try:
-            affected = self.asset_service.set_favorite(asset_id, target)
+            affected = self.asset_service.set_favorite(asset_uuid, target)
         except Exception:
+            _logger.exception("set_favorite failed: uuid=%s", asset_uuid)
             return
         if affected <= 0:
-            # 资产不存在：不刷按钮，也不广播
             return
 
         self._is_favorite = target
         self.view.set_favorite_state(target)
-        self.view.notify_assets_changed([asset_id])
+        self.view.notify_assets_changed([asset_uuid])
 
     def _on_trash_requested(self) -> None:
-        """垃圾桶按钮 → 软删 + 缩略图清理 → 跳下一张 / 关闭详情。
-
-        顺序（与需求一致）：
-            1) asset_service.soft_delete(id)
-            2) thumbnail_service.purge_bulk([id])
-            3) 广播 assets_changed
-            4) 有下一张 → navigate(next_id)；没有 → close_requested
-        """
+        """垃圾桶按钮 → 软删 → 广播 → 跳下一张 / 关闭详情。"""
         if self._ctx is None:
             return
-        asset_id = self._ctx.current_asset_id
-        next_id = self._next_id  # 本帧导航时的下一张，删除后仍以它为准
+        asset_uuid = self._ctx.current_asset_uuid
+        next_uuid = self._next_uuid
 
         try:
-            self.asset_service.soft_delete(asset_id)
+            self.asset_service.soft_delete(asset_uuid)
         except Exception:
+            _logger.exception("soft_delete failed: uuid=%s", asset_uuid)
             return
 
-        # NOTE: 软删除不purge_bulk
-        # # 缩略图清理是 best-effort：库里行删了就该走完流程，
-        # # 不要因为某张缩略图文件删失败而卡住 UI。
-        # try:
-        #     self.thumbnail_service.purge_bulk([asset_id])
-        # except Exception:
-        #     pass
+        self.view.notify_assets_changed([asset_uuid])
 
-        self.view.notify_assets_changed([asset_id])
-
-        if next_id is not None:
-            self.navigate(next_id)
+        if next_uuid is not None:
+            self.navigate(next_uuid)
         else:
-            # 已经到头：让上层把详情弹掉
             self.view.close_requested.emit()

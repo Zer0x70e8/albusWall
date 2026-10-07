@@ -270,7 +270,7 @@ class _Application:
         """由 __main__ 提供：把所有东西 register 进 container。"""
         self._boot_fn = fn
 
-    def exec(self) -> int:
+    def exec(self) -> int | str:
         self._phase_boot()
         try:
             self._phase_setup()
@@ -315,7 +315,7 @@ class _Application:
                 traceback.print_exc()
 
     # ---------- phase 4: run ----------
-    def _phase_run(self) -> int:
+    def _phase_run(self) -> int | str:
         loop = self.main_loop
         for fn in self._loop_hooks:
             try:
@@ -403,7 +403,7 @@ class Application:
         cls._object.boot(fn)
 
     @classmethod
-    def exec(cls) -> int:
+    def exec(cls) -> int | str:
         return cls._object.exec()
 
     @classmethod

@@ -10,6 +10,7 @@ from .import_ import ImportRepository
 from .thumbnail import ThumbnailRepository
 from .view import ViewRepository
 from .asset import AssetRepository
+from .trash import TrashRepository, TrashStateRepository
 
 if TYPE_CHECKING:
     from albuswall.core import Container
@@ -21,6 +22,8 @@ class Repositories(TypedDict):
     thumbnail_repo: ThumbnailRepository
     view_repo: ViewRepository
     asset_repo: AssetRepository
+    trash_repo: TrashRepository
+    trash_state_repo: TrashStateRepository
 
 
 # 只有「需要特殊参数」的仓库才写进来，其余走默认工厂

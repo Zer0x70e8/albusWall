@@ -1,45 +1,42 @@
 #
-"""虚拟滚动网格 ⇄ 缩略图仓储/服务的呈现器。
+"""虚拟滚动网格 ⇄ 缩略图仓储/服务的呈现器（uuid 唯一对外键）。
 
-职责边界：
-    * 只通过 ``VirtualScrollWidget`` 的公开 API 与之交互
-      (``set_pixmap`` / ``has_pixmap`` / ``reset_source`` / ``clear_cache`` /
-       ``refresh_visible_range`` / 两个信号)。
-    * 不关心缩略图从哪来 —— 依赖注入 ``thumb_repo`` 与可选的 ``thumb_service``。
-      约定接口（协议级，无需继承）：
-          thumb_repo.get_paths(asset_id) -> object | None
-              返回对象需具备 base / small / medium / large 四个属性
-              （即 ThumbnailPaths 的形状）。
-          thumb_repo.resolve_path(base, spec_path) -> str | None
-          thumb_service.submit(asset_id, *, include_deleted: bool = False)
-                -> concurrent.futures.Future
-              future.result() 需具备 .ok: bool 属性。
+契约（P1 收敛）：
+    · set_assets 收 uuid 列表；两个对外信号也吐 uuid。
+    · 内部 `_asset_uuids` 是唯一索引；`assets.id` 不进入本模块。
+    · 依赖注入接口：
+          thumb_repo.get_paths_by_uuid(uuid) -> ThumbnailPaths | None
+          thumb_service.submit_by_uuid(uuid, *, include_deleted=False)
+              -> concurrent.futures.Future | None
+          thumb_service.thumbnail_ready  # 自定义 Signal，广播 uuid
 
-展示约定：
-    * 网格 cell 要求方形图像，而磁盘上的缩略图保持源图长宽比（无损、通用）。
-      方形是 *UI 布局约束*，因此在这里（加载线程内、写 pixmap 之前）做
-      居中裁剪；不落盘，需求变化时改这一处即可，缩略图文件不用重跑。
+循环防御（P1）：
+    · 加载线程区分「加载异常」与「图不存在」：
+        - 异常       → emit(item_failed, reason)，**不触发生成**；
+        - 图不存在   → 才走 _submit_generation。
+      否则一旦加载链路上出现持久性错误（签名变动 / 权限 / 解码失败），
+      生成成功 → 广播回来 → 再次加载失败 会形成无限循环。
+    · `_attempts` 只在 submit 成功（result.ok）时清零；
+      `_on_thumbnail_ready` 不清 zero，避免广播路径把重试上限架空。
+    · 连续失败 ≥ _MAX_ATTEMPTS 后走 item_failed("max_attempts")，循环终止。
 
-线程模型：
-    * 磁盘 I/O + QImage 加载 + 方形裁剪：跑在独立线程池。
-    * 生成任务：交给 ThumbnailService 自己的线程池，不阻塞加载线程。
-    * 所有 ``set_pixmap`` / 信号槽回调：都在主线程（靠 QueuedConnection 保证）。
+其余职责 / 线程模型 / 展示约定与旧版相同：
+    - 磁盘 I/O + QImage 加载 + 方形裁剪跑在独立线程池；
+    - 生成任务交给 ThumbnailService；
+    - set_pixmap / 信号槽回调都在主线程（QueuedConnection）。
 
 对外信号：
-    item_loaded(int)              —— index 已成功写入 pixmap
-    item_failed(int, str)         —— index 最终无法加载（reason）
+    item_loaded(str)          —— index 已成功写入 pixmap（载荷 uuid）
+    item_failed(str, str)     —— 载荷 (uuid, reason)
+    item_activated(str)       —— 载荷 uuid
 
 用法::
 
     presenter = ThumbnailGridPresenter(
-        view=grid,
-        thumb_repo=thumb_repo,
-        thumb_service=thumb_service,
+        view=grid, thumb_repo=thumb_repo, thumb_service=thumb_service,
         spec="small",
     )
-    presenter.set_assets([101, 102, 103, ...])   # 触发首次加载
-    ...
-    presenter.shutdown()
+    presenter.set_assets([str(u1), str(u2), ...])
 """
 
 from __future__ import annotations
@@ -70,18 +67,18 @@ _logger.trace = lambda msg, *args: _logger.log(TRACE, msg, *args)
 class ThumbnailGridPresenter(QObject):
     """把缩略图按需渲染到 ``VirtualScrollWidget`` 上。"""
 
-    item_loaded = Signal(int)
-    item_failed = Signal(int, str)
-    item_activated = Signal(int)
+    item_loaded = Signal(str)  # asset_uuid
+    item_failed = Signal(str, str)  # (asset_uuid, reason)
+    item_activated = Signal(str)  # asset_uuid
 
-    # 跨线程投递（沿用 _load_result 的模式）
-    _load_result = Signal(int, int, object)  # (index, generation, QImage|None)
-    _gen_done = Signal(int)  # asset_id
-    # 新增：把 ThumbnailService 的 worker 线程 emit 桥接回主线程
-    _thumb_ready = Signal(int)
+    # 跨线程投递：
+    #   (index, generation, QImage|None, error_str)
+    #   error_str 非空 ⇒ 加载侧异常；image 为 None 且 error 为空 ⇒ 图不存在
+    _load_result = Signal(int, int, object, str)
+    _gen_done = Signal(str)  # asset_uuid
+    _thumb_ready = Signal(str)  # asset_uuid
 
-    #: 居中偏好，(x, y) ∈ [0, 1]。0.5/0.5 = 正中心；
-    #: 想“顶部优先”（人像、证件）可改 (0.5, 0.3) 之类。
+    #: 居中偏好，(x, y) ∈ [0, 1]。
     _CROP_CENTER: tuple[float, float] = (0.5, 0.5)
 
     def __init__(
@@ -104,7 +101,9 @@ class ThumbnailGridPresenter(QObject):
         self._service = thumb_service
         self._spec = spec
 
-        self._attempts: dict[int, int] = {}
+        # 每个 asset 的生成尝试计数；只在 submit 成功时清零，
+        # 由 _MAX_ATTEMPTS 兜底终止循环。
+        self._attempts: dict[str, int] = {}
 
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers,
@@ -112,14 +111,13 @@ class ThumbnailGridPresenter(QObject):
         )
 
         # 数据源
-        self._asset_ids: list[int] = []
+        self._asset_uuids: list[str] = []
         self._generation = 0
-        # 当前视图是否包含已删除资产（由 set_assets 设置）
         self._include_deleted: bool = False
 
         # 去抖
-        self._inflight: set[int] = set()  # 正在磁盘加载的 asset_id
-        self._submitted: set[int] = set()  # 已提交生成的 asset_id
+        self._inflight: set[str] = set()
+        self._submitted: set[str] = set()
         self._visible_range: tuple[int, int] = (0, -1)
 
         # 跨线程回调切到主线程
@@ -135,63 +133,54 @@ class ThumbnailGridPresenter(QObject):
             self._on_thumbnail_ready,
             Qt.ConnectionType.QueuedConnection,
         )
-        # 订阅 custom Signal，emit 到 Qt signal，让 Qt 负责 marshal
-        if self._service is not None and hasattr(self._service, "thumbnail_ready"):
+        if self._service is not None and hasattr(
+                self._service, "thumbnail_ready"
+        ):
             self._service.thumbnail_ready.connect(
-                lambda aid: self._thumb_ready.emit(aid)
+                lambda auuid: self._thumb_ready.emit(auuid)
             )
 
         view.visible_range_changed.connect(self._on_visible_range_changed)
         view.cache_cleared.connect(self._on_cache_cleared)
         view.unit_clicked.connect(self._on_unit_clicked)
 
-    @Slot(int)
-    def _on_thumbnail_ready(self, asset_id: int) -> None:
-        """主线程执行：后台（backfill）缩略图就绪后重载。"""
-        self._submitted.discard(asset_id)
-        self._attempts.pop(asset_id, None)
-        try:
-            index = self._asset_ids.index(asset_id)
-        except ValueError:
-            return
-        if not self._view.has_pixmap(index):
-            self._start_load(index)
-
     # ------------------------------------------------------------------ #
     # 公开 API
     # ------------------------------------------------------------------ #
-    def setup(self, _):...
+    def setup(self, _):
+        ...
 
-    def teardown(self):...
+    def teardown(self):
+        ...
 
     def set_assets(
             self,
-            asset_ids: list[int],
+            asset_uuids: list[str],
             *,
             include_deleted: bool = False,
     ) -> None:
         """重置数据源并滚回顶部，触发一次可见范围重新计算。
 
         Args:
-            asset_ids: 当前视图里的 asset 整数 id 列表。
+            asset_uuids: 当前视图里的 asset uuid 列表（str / UUID 均可）。
             include_deleted:
                 当前视图是否为 Trash（scope=deleted）。
                 True  —— 缺失缩略图时允许触发生成，生成侧 include_deleted=True。
                 False —— Active 视图，生成侧 include_deleted=False。
-                默认 False，保持向后兼容。
         """
+        uuids = [str(u) for u in asset_uuids]
         _logger.info(
             "set_assets called: n=%d, include_deleted=%s",
-            len(asset_ids), include_deleted,
+            len(uuids), include_deleted,
         )
         self._generation += 1
-        self._asset_ids = list(asset_ids)
+        self._asset_uuids = uuids
         self._include_deleted = include_deleted
         self._inflight.clear()
         self._submitted.clear()
         self._visible_range = (0, -1)
 
-        self._view.reset_source(len(self._asset_ids) - 1)
+        self._view.reset_source(len(self._asset_uuids) - 1)
 
         self._attempts.clear()
 
@@ -203,7 +192,6 @@ class ThumbnailGridPresenter(QObject):
             return
         self._spec = spec
         self._inflight.clear()
-        # clear_cache 会发 cache_cleared；refresh_visible_range 强制重发范围
         self._view.clear_cache()
         self._view.refresh_visible_range()
 
@@ -215,123 +203,164 @@ class ThumbnailGridPresenter(QObject):
     # 槽：控件事件
     # ------------------------------------------------------------------ #
     @Slot(int, int, int)
-    def _on_visible_range_changed(self, start: int, end: int, request_id: int) -> None:
-        _logger.trace("visible range: %d-%d (n=%d)", start, end, len(self._asset_ids))
+    def _on_visible_range_changed(
+            self, start: int, end: int, request_id: int
+    ) -> None:
+        _logger.trace(
+            "visible range: %d-%d (n=%d)",
+            start, end, len(self._asset_uuids),
+        )
         self._visible_range = (start, end)
-        if not self._asset_ids:
+        if not self._asset_uuids:
             return
 
-        n = len(self._asset_ids)
+        n = len(self._asset_uuids)
         for index in range(start, end + 1):
             if 0 <= index < n and not self._view.has_pixmap(index):
                 self._start_load(index)
 
     @Slot()
     def _on_cache_cleared(self) -> None:
-        # 缓存没了，正在飞行中的工作也不必阻塞后续重试
         self._inflight.clear()
 
     @Slot(int)
     def _on_unit_clicked(self, index: int) -> None:
-        if 0 <= index < len(self._asset_ids):
-            self.item_activated.emit(self._asset_ids[index])
+        if 0 <= index < len(self._asset_uuids):
+            self.item_activated.emit(self._asset_uuids[index])
 
     # ------------------------------------------------------------------ #
     # 槽：加载/生成结果（主线程）
     # ------------------------------------------------------------------ #
-    @Slot(int, int, object)
-    def _on_load_result(self, index: int, generation: int, image: object) -> None:
+    @Slot(int, int, object, str)
+    def _on_load_result(
+            self, index: int, generation: int, image: object, error: str
+    ) -> None:
         if generation != self._generation:
             return  # 数据源已更换，丢弃过期结果
-        if not 0 <= index < len(self._asset_ids):
+        if not 0 <= index < len(self._asset_uuids):
             return
 
-        asset_id = self._asset_ids[index]
-        self._inflight.discard(asset_id)
+        asset_uuid = self._asset_uuids[index]
+        self._inflight.discard(asset_uuid)
 
         if isinstance(image, QImage) and not image.isNull():
             self._view.set_pixmap(index, QPixmap.fromImage(image))
-            self.item_loaded.emit(index)
-        else:
-            # 磁盘上还没有 → 交给生成服务
-            self._submit_generation(asset_id, index)
+            self.item_loaded.emit(asset_uuid)
+            return
 
-    @Slot(int)
-    def _on_generation_done(self, asset_id: int) -> None:
-        self._submitted.discard(asset_id)
+        if error:
+            # 加载侧异常（resolve 失败 / QImage 解码失败 / 权限 …）：
+            # 直接上报，不再触发生成 —— 否则会形成
+            # “生成成功 → 广播回来 → 再次加载失败” 的无限循环。
+            _logger.debug(
+                "load failed asset=%s reason=%s (no regen)", asset_uuid, error,
+            )
+            self.item_failed.emit(asset_uuid, error)
+            return
+
+        # 真正“磁盘上没有” → 交给生成服务
+        self._submit_generation(asset_uuid, index)
+
+    @Slot(str)
+    def _on_generation_done(self, asset_uuid: str) -> None:
+        self._submitted.discard(asset_uuid)
 
         try:
-            index = self._asset_ids.index(asset_id)
+            index = self._asset_uuids.index(asset_uuid)
         except ValueError:
-            return  # 已经不在当前数据源里
+            return  # 已不在当前数据源里
 
         start, end = self._visible_range
         if start <= index <= end and not self._view.has_pixmap(index):
+            self._start_load(index)
+
+    @Slot(str)
+    def _on_thumbnail_ready(self, asset_uuid: str) -> None:
+        """主线程执行：后台（backfill）缩略图就绪后重载。
+
+        契约：
+            · 本方法**不管理** `_submitted` / `_attempts` —— 那两项只由
+              本模块自己发起的提交路径（`_submit_generation` /
+              `_on_submit_finished`）维护。
+            · 广播可能来自第三方 backfill，与本模块的计数语义无关；
+              越权重置会让 `_MAX_ATTEMPTS` 形同虚设，进而掩盖循环。
+            · 只负责「发现变可用 → 重载一次」，重载失败由
+              `_on_load_result` 的 error 分支处理。
+        """
+        try:
+            index = self._asset_uuids.index(asset_uuid)
+        except ValueError:
+            return  # 已经不在当前数据源里
+        if not self._view.has_pixmap(index):
             self._start_load(index)
 
     # ------------------------------------------------------------------ #
     # 内部：加载
     # ------------------------------------------------------------------ #
     def _start_load(self, index: int) -> None:
-        asset_id = self._asset_ids[index]
-        if asset_id in self._inflight:
+        asset_uuid = self._asset_uuids[index]
+        if asset_uuid in self._inflight:
             return
-        self._inflight.add(asset_id)
+        self._inflight.add(asset_uuid)
         gen = self._generation
         spec = self._spec  # 快照，避免 set_spec 竞争
-        self._executor.submit(self._load_worker, index, asset_id, gen, spec)
+        self._executor.submit(
+            self._load_worker, index, asset_uuid, gen, spec,
+        )
 
     def _load_worker(
-            self, index: int, asset_id: int, generation: int, spec: ThumbSpec
+            self, index: int, asset_uuid: str, generation: int, spec: ThumbSpec
     ) -> None:
         image: Optional[QImage] = None
+        error: str = ""
         try:
-            image = self._try_load_image(asset_id, spec)
+            image = self._try_load_image(asset_uuid, spec)
         except Exception as exc:  # noqa: BLE001 —— worker 顶层兜底
-            _logger.error("thumbnail load error asset=%d: %s", asset_id, exc)
-        # 通过信号回到主线程
-        self._load_result.emit(index, generation, image)
+            error = f"load:{type(exc).__name__}"
+            _logger.error(
+                "thumbnail load error asset=%s: %s", asset_uuid, exc,
+            )
+        # 通过信号回到主线程；error 非空表示加载侧异常
+        self._load_result.emit(index, generation, image, error)
 
     def _try_load_image(
-            self, asset_id: int, spec: ThumbSpec) -> Optional[QImage]:
-        paths = self._repo.get_paths(asset_id)
+            self, asset_uuid: str, spec: ThumbSpec
+    ) -> Optional[QImage]:
+        """返回 QImage 或 None。
+
+        - None    —— 磁盘上没有该 spec 的缩略图（可安全触发生成）；
+        - 抛异常 —— 加载侧异常（resolve / 文件系统 / 解码等问题），
+                    调用方（_load_worker）捕获后会带 error 上报，
+                    主线程据此走 item_failed，不再触发生成。
+        """
+        paths = self._repo.get_paths_by_uuid(asset_uuid)
         if paths is None:
             return None
 
-        rel = paths.for_spec(spec)
-        base = paths.base
-        if not rel:
+        # ThumbnailPaths 自带 resolve：base + spec 组合由它单点负责。
+        full = paths.resolve(spec)
+        if not full:
             return None
-
-        full = self._repo.resolve_path(base, rel)
-        if not full or not os.path.isfile(full):
+        if not os.path.isfile(full):
             return None
 
         image = QImage(full)
         if image.isNull():
             return None
 
-        # 网格 cell 要求方形；裁剪在加载线程里做，只影响展示、不落盘。
         return self._center_crop_square(image)
 
     @classmethod
     def _center_crop_square(cls, image: QImage) -> QImage:
-        """把 QImage 按 ``_CROP_CENTER`` 居中裁成方形。
-
-        * 纯裁剪、不缩放：不引入二次重采样，磁盘缩略图的清晰度原样保留。
-        * 已是方形时直接原样返回，避免一次多余的深拷贝。
-        * 返回的是 ``QImage.copy(rect)``，深拷贝、跨线程 emit 安全。
-        """
+        """把 QImage 按 ``_CROP_CENTER`` 居中裁成方形（纯裁剪不缩放）。"""
         w, h = image.width(), image.height()
         if w == h:
             return image
 
         side = min(w, h)
         cx, cy = cls._CROP_CENTER
-        # 用 round 保证 (0.5,0.5) 时居中对称，(0.5,0.0) 时贴顶
         x = int(round((w - side) * cx))
         y = int(round((h - side) * cy))
-        # 夹回合法范围，避免浮点偏好把 rect 顶出图像边界
         x = max(0, min(x, w - side))
         y = max(0, min(y, h - side))
 
@@ -340,59 +369,70 @@ class ThumbnailGridPresenter(QObject):
     # ------------------------------------------------------------------ #
     # 内部：生成
     # ------------------------------------------------------------------ #
-    def _submit_generation(self, asset_id: int, index: int) -> None:
+    def _submit_generation(self, asset_uuid: str, index: int) -> None:
         if self._service is None:
-            self.item_failed.emit(index, "no_thumbnail")
+            self.item_failed.emit(asset_uuid, "no_thumbnail")
             return
-        if asset_id in self._submitted:
+        if asset_uuid in self._submitted:
             return
 
-        n = self._attempts.get(asset_id, 0)
+        n = self._attempts.get(asset_uuid, 0)
         if n >= _MAX_ATTEMPTS:
-            self.item_failed.emit(index, "max_attempts")
+            _logger.warning(
+                "thumbnail generation hit max attempts asset=%s, giving up",
+                asset_uuid,
+            )
+            self.item_failed.emit(asset_uuid, "max_attempts")
             return
-        self._attempts[asset_id] = n + 1
+        self._attempts[asset_uuid] = n + 1
 
         try:
-            future: Future | None = self._service.submit(
-                asset_id,
+            future: Future | None = self._service.submit_by_uuid(
+                asset_uuid,
                 include_deleted=self._include_deleted,
             )
         except Exception as exc:
-            _logger.error("submit thumbnail failed asset=%d: %s", asset_id, exc)
-            self.item_failed.emit(index, f"submit:{type(exc).__name__}")
+            _logger.error(
+                "submit thumbnail failed asset=%s: %s", asset_uuid, exc,
+            )
+            self.item_failed.emit(
+                asset_uuid, f"submit:{type(exc).__name__}"
+            )
             return
 
-        # 关键：submit 命中 inflight 去重时会返回 None。
-        # 不要在这里 add_done_callback；那次任务的完成会通过
-        # ThumbnailService.thumbnail_ready 信号广播回来。
+        # submit 命中 inflight 去重时返回 None；
+        # 该任务的完成会经 ThumbnailService.thumbnail_ready 广播回来。
         if future is None:
             _logger.trace(
-                "thumbnail submit deduped asset=%d, waiting for broadcast", asset_id,
+                "thumbnail submit deduped asset=%s, waiting for broadcast",
+                asset_uuid,
             )
-            self._submitted.add(asset_id)
+            self._submitted.add(asset_uuid)
             return
 
-        self._submitted.add(asset_id)
+        self._submitted.add(asset_uuid)
         future.add_done_callback(
-            lambda fut, aid=asset_id: self._on_submit_finished(aid, fut)
+            lambda fut, au=asset_uuid: self._on_submit_finished(au, fut)
         )
 
-    def _on_submit_finished(self, asset_id: int, future: Future) -> None:
+    def _on_submit_finished(self, asset_uuid: str, future: Future) -> None:
         try:
             result = future.result()
             if getattr(result, "ok", False):
-                self._attempts.pop(asset_id, None)  # 成功 → 清计数
+                # 唯一合法清零点：本次生成确实成功。
+                self._attempts.pop(asset_uuid, None)
             else:
                 error = getattr(result, "error", "?")
                 retryable = bool(getattr(result, "retryable", True))
                 _logger.warning(
-                    "thumbnail generation failed asset=%d: %s (retryable=%s)",
-                    asset_id, error, retryable,
+                    "thumbnail generation failed asset=%s: %s (retryable=%s)",
+                    asset_uuid, error, retryable,
                 )
                 if not retryable:
                     return
         except Exception as exc:
-            _logger.error("thumbnail future error asset=%d: %s", asset_id, exc)
+            _logger.error(
+                "thumbnail future error asset=%s: %s", asset_uuid, exc,
+            )
 
-        self._gen_done.emit(asset_id)
+        self._gen_done.emit(asset_uuid)

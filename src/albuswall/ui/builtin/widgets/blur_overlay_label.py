@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import (
     QPixmap, QPainter,
-    QPaintEvent, QCloseEvent, QImage#, QRegion, QShowEvent, QResizeEvent
+    QPaintEvent, QCloseEvent, QImage, QShowEvent#, QRegion, QResizeEvent
 )
 
 DRAW_LABEL_CONTENT = True
@@ -201,10 +201,10 @@ class BlurLabel(QLabel):
 
     # ---------- Event overrides (modified) ----------
 
-    # def showEvent(self, event: QShowEvent) -> None:
-    #     """Update the blur when shown. No longer forces geometry to match target."""
-    #     self._update_blur()
-    #     super().showEvent(event)
+    def showEvent(self, event: QShowEvent) -> None:
+        """Update the blur when shown. No longer forces geometry to match target."""
+        self._update_blur()
+        super().showEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         """

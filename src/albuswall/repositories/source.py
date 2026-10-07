@@ -8,6 +8,7 @@ from albuswall.dto.source import (
     IngestSource,
     IngestSourceCreate,
     IngestSourceUpdate,
+    SourcePurgeReport,
     MANUAL_SOURCE_ID,
 )
 from albuswall.dto.trigger import TriggerConfig
@@ -17,6 +18,7 @@ from ..dto.sentinel import UNSET
 from ..utils.time import now_iso
 
 
+# noinspection SpellCheckingInspection
 class IngestSourceRepository(BaseRepository):
     """Ingest source repository.
 
@@ -43,10 +45,13 @@ class IngestSourceRepository(BaseRepository):
     """
 
     _ALL_COLUMNS: Final[str] = """
-        id, title, description, source_path, target_path, mount_point,
-        auto_mount, disabled, file_type_check, file_types, tags,
+        id, title, description, tags, 
+        source_path, target_path, mount_point,
+        auto_mount, file_type_check, file_types, 
         subfolder_recursion, subfolder_recursion_depth,
-        trigger_config, created_at, modified_at
+        trigger_config, 
+        disabled, is_deleted, 
+        deleted_at, created_at, modified_at
     """
 
     # copy exactly
@@ -82,7 +87,7 @@ class IngestSourceRepository(BaseRepository):
         query = f"""
             SELECT {self._ALL_COLUMNS}
             FROM ingest_source
-            WHERE id != 0
+            WHERE id != 0 AND is_deleted = 0
             ORDER BY id ASC
         """
         rows = self._fetchall(query)
@@ -97,7 +102,7 @@ class IngestSourceRepository(BaseRepository):
         query = f"""
             SELECT {self._ALL_COLUMNS}
             FROM ingest_source
-            WHERE id = ?
+            WHERE id = ? AND is_deleted = 0
         """
         row = self._fetchone(query, (source_id,))
         if row is None:
@@ -108,20 +113,33 @@ class IngestSourceRepository(BaseRepository):
         """列出所有导入源（含 id=0 虚拟根），按 id 升序。"""
         query = f"""
             SELECT {self._ALL_COLUMNS}
-            FROM ingest_source
-            ORDER BY id ASC
+              FROM ingest_source
+             WHERE is_deleted = 0
+             ORDER BY id ASC
         """
         rows = self._fetchall(query)
         if not rows:
             return []
         return [IngestSource.from_row(row) for row in rows]
 
+    def list_pending_purge_ids(self) -> List[int]:
+        """列出所有 is_deleted=1 但物理行仍存在的 source id。
+        用于启动时补交中断的清理任务。
+        排除 id=0（虚拟源不会被标删）。
+        """
+        rows = self._fetchall("""
+            SELECT id FROM ingest_source
+             WHERE is_deleted = 1 AND id != 0
+             ORDER BY id ASC
+        """)
+        return [r["id"] for r in rows] if rows else []
+
     def get_view_dto(self, source_id: int) -> Optional[IngestSource]:
         """单条查询导入源；不存在返回 ``None``。"""
         query = f"""
             SELECT {self._ALL_COLUMNS}
             FROM ingest_source
-            WHERE id = ?
+            WHERE id = ? AND is_deleted = 0
         """
         row = self._fetchone(query, (source_id,))
         if row is None:
@@ -129,7 +147,12 @@ class IngestSourceRepository(BaseRepository):
         return IngestSource.from_row(row)
 
     def get_id_list(self) -> List[int]:
-        rows = self._fetchall("SELECT id FROM ingest_source ORDER BY id ASC")
+        rows = self._fetchall("""
+        SELECT id 
+          FROM ingest_source 
+         WHERE is_deleted = 0
+         ORDER BY id ASC 
+        """)
         if not rows:
             return []
         return [row["id"] for row in rows]
@@ -160,8 +183,8 @@ class IngestSourceRepository(BaseRepository):
         """
         query = """
             SELECT id, trigger_config
-            FROM ingest_source
-            WHERE trigger_config IS NOT NULL
+             FROM ingest_source
+            WHERE trigger_config IS NOT NULL AND is_deleted = 0
               AND TRIM(trigger_config) != ''
             ORDER BY id ASC
         """
@@ -200,7 +223,9 @@ class IngestSourceRepository(BaseRepository):
         * ``trigger_config`` 为 NULL / 空串；
         * 解析失败（此时会打 WARNING）。
         """
-        query = "SELECT id, trigger_config FROM ingest_source WHERE id = ?"
+        query = "SELECT id, trigger_config " \
+                "  FROM ingest_source " \
+                " WHERE id = ? AND is_deleted = 0"
         row = self._fetchone(query, (source_id,))
         if row is None:
             return None
@@ -312,10 +337,11 @@ class IngestSourceRepository(BaseRepository):
     # 存在性 / 引用计数
     # ==================================================================
 
-    def exists(self, source_id: int) -> bool:
+    def exists(self, source_id: int, *, include_deleted: bool = False) -> bool:
         """判断指定 id 的导入源是否存在。"""
+        where = "id = ?" if include_deleted else "id = ? AND is_deleted = 0"
         row = self._fetchone(
-            "SELECT 1 FROM ingest_source WHERE id = ? LIMIT 1",
+            f"SELECT 1 FROM ingest_source WHERE {where} LIMIT 1",
             (source_id,),
         )
         return row is not None
@@ -340,35 +366,92 @@ class IngestSourceRepository(BaseRepository):
     # ==================================================================
     # 删除
     # ==================================================================
+    def purge(self, source_id: int) -> SourcePurgeReport:
+        """硬删源及旗下所有 assets 行，返回被删资产清单。
 
-    def delete(self, source_id: int) -> bool:
-        """硬删除指定导入源。
+        只在源仍处于 is_deleted=1 时生效——restore 后本方法空转，
+        保证「误删 → 恢复」不丢数据。
 
-        * ``MANUAL_SOURCE_ID`` -> ``ValueError``；
-        * 若仍有 assets 引用  -> ``ValueError``（显式预检查，给出可读信息）；
-          并发窗口内由 ``assets.source_id`` 的 FK RESTRICT 兜底；
-        * 返回是否实际删除（``rowcount > 0``）。
-
-        注意：禁用（``disabled=1``）与删除是两回事——
-        * 禁用：行保留，仅从调度跟踪集移除（service 侧 ``disable_source``）；
-        * 删除：行消失，且有 assets 引用时直接被拒。
-        因此本方法不会因为 ``disabled=1`` 而放宽 assets 检查。
+        整个操作在一个事务里完成：
+            1. 校验源仍被软删
+            2. 读 assets 的 id/uuid 清单
+            3. 删 assets 行（FK 是 RESTRICT，必须先删）
+            4. 删 source 行（asset_candidate_cache 由 CASCADE 顺带清）
         """
         if source_id == MANUAL_SOURCE_ID:
             raise ValueError(
-                f"Cannot delete manual/virtual source "
-                f"(id={MANUAL_SOURCE_ID})"
+                f"Cannot purge manual/virtual source (id={MANUAL_SOURCE_ID})"
             )
 
-        asset_count = self.count_assets(source_id)
-        if asset_count > 0:
+        with self._transaction() as conn:
+            # 1. 校验
+            row = conn.execute(
+                "SELECT 1 FROM ingest_source WHERE id = ? AND is_deleted = 1",
+                (source_id,),
+            ).fetchone()
+            if row is None:
+                return SourcePurgeReport(
+                    source_id=source_id, purged=False,
+                    asset_ids=[], asset_uuids=[],
+                )
+
+            # 2. 收清单
+            rows = conn.execute(
+                "SELECT id, uuid FROM assets WHERE source_id = ?",
+                (source_id,),
+            ).fetchall()
+            asset_ids = [r["id"] for r in rows]
+            asset_uuids = [r["uuid"] for r in rows]
+
+            # 3. 删 assets
+            conn.execute("DELETE FROM assets WHERE source_id = ?", (source_id,))
+
+            # 4. 删 source
+            conn.execute("DELETE FROM ingest_source WHERE id = ?", (source_id,))
+
+        return SourcePurgeReport(
+            source_id=source_id, purged=True,
+            asset_ids=asset_ids, asset_uuids=asset_uuids,
+        )
+
+    #
+    def list_deleted_dtos(self) -> List[IngestSource]:
+        """回收站列表：所有 is_deleted=1 的源，按删除时间倒序。"""
+        rows = self._fetchall(
+            f"""
+            SELECT {self._ALL_COLUMNS}
+            FROM ingest_source
+            WHERE is_deleted = 1 AND id != 0
+            ORDER BY deleted_at DESC, id DESC
+            """
+        )
+        return [IngestSource.from_row(r) for r in rows] if rows else []
+
+    def soft_delete(self, source_id: int) -> bool:
+        """标记软删。已是删除态 / 不存在 / id=0 时返回 False。"""
+        if source_id == MANUAL_SOURCE_ID:
             raise ValueError(
-                f"Cannot delete ingest source {source_id}: "
-                f"{asset_count} asset(s) still reference it"
+                f"Cannot delete manual/virtual source (id={MANUAL_SOURCE_ID})"
             )
-
+        now = now_iso()
         cursor = self._execute(
-            "DELETE FROM ingest_source WHERE id = ?",
-            (source_id,),
+            """
+            UPDATE ingest_source
+               SET is_deleted = 1, deleted_at = ?, modified_at = ?
+             WHERE id = ? AND is_deleted = 0
+            """,
+            (now, now, source_id),
+        )
+        return cursor.rowcount > 0
+
+    def restore(self, source_id: int) -> bool:
+        """撤销软删。行已硬删或从未被软删时返回 False。"""
+        cursor = self._execute(
+            """
+            UPDATE ingest_source
+               SET is_deleted = 0, deleted_at = NULL, modified_at = ?
+             WHERE id = ? AND is_deleted = 1
+            """,
+            (now_iso(), source_id),
         )
         return cursor.rowcount > 0

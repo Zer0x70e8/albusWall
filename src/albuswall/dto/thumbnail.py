@@ -3,6 +3,7 @@
 
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
+from uuid import UUID
 
 from albuswall.common.enums import ThumbSpec
 from albuswall.utils.path import join_path
@@ -203,7 +204,7 @@ class ThumbnailTask:
 class ThumbnailTaskInput:
     """单个缩略图任务所需的全部上下文。
 
-    由 ThumbnailRepository.get_task_input(asset_id)
+    由 ThumbnailRepository.get_task_input(asset_uuid)
     或 ThumbnailRepository.get_task_input_by_uuid(uuid) 构造。
     """
     asset_id: int
@@ -215,7 +216,7 @@ class ThumbnailTaskInput:
     @classmethod
     def from_row(cls, row: Any) -> "ThumbnailTaskInput":
         return cls(
-            asset_id=_get(row, "id") or _get(row, "asset_id"),
+            asset_id=_get(row, "id") or _get(row, "asset_uuid"),
             uuid=_get(row, "uuid"),
             source_id=_get(row, "source_id"),
             source_path=_get(row, "source_path"),
@@ -231,7 +232,7 @@ class ThumbnailResult:
     """_work_one() 的执行结果。
 
     ok          —— 是否成功
-    asset_id    —— 对应资产 id
+    asset_uuid    —— 对应资产 id
     error       —— 失败标记，形如 "render:UnidentifiedImageError"
     duration_ms —— 成功耗时（毫秒）
     retryable   —— False 表示重试没有意义（资产已删、源丢失、非法图片）；
@@ -239,7 +240,7 @@ class ThumbnailResult:
                    TaskService 应以此决定是否入重试队列。
     """
     ok: bool
-    asset_id: int
+    asset_uuid: UUID
     error: Optional[str] = None
     duration_ms: Optional[int] = None
     retryable: bool = False

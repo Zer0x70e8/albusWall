@@ -23,7 +23,7 @@ import json
 from dataclasses import dataclass, field, fields
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Dict, Final, List, Mapping, Optional, Self
+from typing import Any, Dict, Final, List, Mapping, Optional, Self, TypedDict
 
 from albuswall.common.enums import FileTypeCheckMode, UpdateMode
 from albuswall.utils.path import is_valid_mount_point
@@ -43,6 +43,7 @@ __all__ = [
     "IngestSourceUpdate",
     "IngestSourceFormData",
     "SourceScanFinished",
+    "SourcePurgeReport",
 ]
 
 
@@ -163,10 +164,14 @@ class IngestSource:
     # 二者任一为真，SourceService 都会把该源从跟踪集里剔除。
     disabled: bool = False
 
+    # 删除标记，会在之后后台清理而不是立即完成
+    is_deleted: bool = False
+
     # ---- 展示字段（UI 需要；轻查询时为空）----
     title: str = ""
     description: Optional[str] = None
     tags: List[str] = field(default_factory=list)
+    deleted_at: Optional[str] = None
     created_at: Optional[str] = None
     modified_at: Optional[str] = None
 
@@ -192,6 +197,9 @@ class IngestSource:
             subfolder_recursion_depth=_row_get(row, "subfolder_recursion_depth"),
             trigger_config=json_loads_dict(_row_get(row, "trigger_config")),
             disabled=bool(_row_get(row, "disabled", 0)),
+            is_deleted=bool(_row_get(row, "is_deleted", 0)),
+
+            deleted_at=_row_get(row, "deleted_at"),
             created_at=_row_get(row, "created_at"),
             modified_at=_row_get(row, "modified_at"),
         )
@@ -597,3 +605,19 @@ class SourceScanFinished:
     def is_noop(self) -> bool:
         """扫描成功但无新内容。"""
         return self.ok and not self.has_new_content
+
+
+class SourcePurgeReport(TypedDict):
+    """``IngestSourceRepository.purge`` 的返回。
+
+    * ``purged=False``  → source 不存在（幂等，不是错误）
+    * ``purged=True``   → source 已删，``asset_ids`` / ``asset_uuids``
+                          列出**同时被物理删除**的资产，供 service 层
+                          清理缩略图目录。
+    * ``asset_ids`` / ``asset_uuids`` 在 ``purged=True`` 且 source 下
+      无资产时为空列表——不是 None，调用方可以无条件迭代。
+    """
+    source_id: int
+    purged: bool
+    asset_ids: List[int]
+    asset_uuids: List[str]

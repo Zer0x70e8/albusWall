@@ -15,11 +15,7 @@ from albuswall.configue import (
     get_user_config_dir, get_user_data_dir
 )
 from albuswall.log.bootstrap import setup_log
-from albuswall.infrastructure import (
-    register_database,
-    register_task_service,
-    register_trigger_service
-)
+from albuswall.infrastructure import registry_infrastructure
 from albuswall.repositories import registry_repository
 from albuswall.services import register_service
 from albuswall.ui import registry_ui
@@ -36,7 +32,6 @@ memory_handler = MemoryCacheHandler()
 runtime = Runtime(memory_handler)
 
 
-# noinspection bad-assignment
 class Conf:
     debug: bool = ConfigField("debug", default=False)
 
@@ -89,9 +84,7 @@ def _boot(app: Application) -> None:
     setup_dynamic_config(container)
 
     # phase5 infrastructure
-    register_database(container)
-    register_task_service(container)
-    register_trigger_service(container)
+    registry_infrastructure(container)
     registry_repository(container)
 
     # phase6 service
@@ -103,6 +96,7 @@ def _boot(app: Application) -> None:
     # phase others
     # dbg msg
     _logger.debug("Program boot registry finished.")
+    app.on_final(lambda: _logger.debug("Program stop."))
     if _config.debug:
         _logger.info(
             "Debugging is turned on, "

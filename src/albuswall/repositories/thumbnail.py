@@ -26,7 +26,7 @@ ALL_SPECS / SPEC_TO_COLUMN / BASE_COLUMN / ALL_THUMB_COLUMNS
 均来自 albuswall.dto.thumbnail，本模块不再就地定义，避免多处漂移。
 """
 
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence, Iterator
 
 from albuswall.log import getLogger
 from albuswall.dto.sentinel import UnsetType, UNSET
@@ -42,7 +42,7 @@ from albuswall.dto.thumbnail import (
     ThumbnailTaskInput,
     ThumbSpec,
 )
-from albuswall.utils.path import join_path
+# from albuswall.utils.path import join_path
 
 from .base import BaseRepository
 
@@ -60,7 +60,7 @@ class ThumbnailRepository(BaseRepository):
     - base_dir 单独维护，不走 spec 映射。
 
     标识约定：
-        - asset_id (INTEGER PRIMARY KEY) 是内部标识，用于 JOIN、排序、批量操作。
+        - asset_uuid (INTEGER PRIMARY KEY) 是内部标识，用于 JOIN、排序、批量操作。
           id 反映插入顺序，等价于导入顺序。
         - uuid 是对外标识，用于跨模块/跨设备/持久化任务中的引用。
         业务层有 asset 行时用 id 版本；只有 uuid 时用 uuid 版本。
@@ -92,7 +92,7 @@ class ThumbnailRepository(BaseRepository):
                       传 None 表示清空；不传则保持不变。
 
         Returns:
-            受影响行数（0 表示 asset_id 不存在或无字段可更新）。
+            受影响行数（0 表示 asset_uuid 不存在或无字段可更新）。
         """
         return self._update_where("id", asset_id, paths, base_dir=base_dir)
 
@@ -117,8 +117,8 @@ class ThumbnailRepository(BaseRepository):
 
         Args:
             rows: 可迭代的
-                  · (asset_id, {spec: rel_path})          —— 只更 spec
-                  · (asset_id, {spec: rel_path}, base_dir) —— 同时更 base
+                  · (asset_uuid, {spec: rel_path})          —— 只更 spec
+                  · (asset_uuid, {spec: rel_path}, base_dir) —— 同时更 base
                   base_dir 传 None 表示清空；不传则保持原值。
 
         Returns:
@@ -139,7 +139,7 @@ class ThumbnailRepository(BaseRepository):
                     )
 
                 sets, params = self._build_update_sets(
-                    paths, base_dir=base_dir, context=f"asset_id={asset_id}"
+                    paths, base_dir=base_dir, context=f"asset_uuid={asset_id}"
                 )
                 if not sets:
                     continue
@@ -210,7 +210,7 @@ class ThumbnailRepository(BaseRepository):
         """永久删除时调用：清空该资产所有缩略图列，返回清空前的路径快照。
 
         仓储不触碰文件系统；调用方拿到返回值后按 paths 里的
-        base + spec 组合自行 unlink 文件。返回 None 表示 asset_id 不存在。
+        base + spec 组合自行 unlink 文件。返回 None 表示 asset_uuid 不存在。
 
         与 clear_paths 的区别：
           - clear_paths 是「重建前置空」，粒度可只挑若干 spec；
@@ -230,7 +230,7 @@ class ThumbnailRepository(BaseRepository):
             f"UPDATE assets SET {set_clause} WHERE id = ?", (asset_id,)
         )
         logger.info(
-            "cleared thumbnail paths asset_id=%d base=%r",
+            "cleared thumbnail paths asset_uuid=%d base=%r",
             asset_id, snapshot.base,
         )
         return snapshot
@@ -238,7 +238,7 @@ class ThumbnailRepository(BaseRepository):
     def clear_and_snapshot_bulk(
             self, asset_ids: Sequence[int]
     ) -> dict[int, ThumbnailPaths]:
-        """批量清空并返回快照；返回 {asset_id: 清空前的路径快照}。
+        """批量清空并返回快照；返回 {asset_uuid: 清空前的路径快照}。
 
         用于 Trash 批量清空。仓储只清库；文件删除由调用方遍历返回值执行。
         不存在的 id 不出现在结果里。
@@ -254,6 +254,59 @@ class ThumbnailRepository(BaseRepository):
                 conn.execute(sql, (aid,))
         logger.info("cleared thumbnail paths: %d assets", len(snapshots))
         return snapshots
+
+    def clear_and_snapshot_by_uuid(
+            self, uuid: str
+    ) -> Optional[ThumbnailPaths]:
+        """clear_and_snapshot 的 uuid 版。返回清空前的路径快照或 None。"""
+        snapshot = self.get_paths_by_uuid(uuid)
+        if snapshot is None:
+            return None
+
+        set_clause = ", ".join(f"{c} = NULL" for c in ALL_THUMB_COLUMNS)
+        self._execute(
+            f"UPDATE assets SET {set_clause} WHERE uuid = ?", (uuid,)
+        )
+        logger.info(
+            "cleared thumbnail paths uuid=%s base=%r", uuid, snapshot.base,
+        )
+        return snapshot
+
+    def clear_and_snapshot_bulk_by_uuid(
+            self, uuids: Sequence[str]
+    ) -> dict[str, ThumbnailPaths]:
+        """批量清空并返回快照（uuid 版）。返回 {uuid: 清空前的路径快照}。"""
+        snapshots = self.get_paths_bulk_by_uuid(uuids)
+        if not snapshots:
+            return {}
+
+        set_clause = ", ".join(f"{c} = NULL" for c in ALL_THUMB_COLUMNS)
+        sql = f"UPDATE assets SET {set_clause} WHERE uuid = ?"
+        with self._transaction() as conn:
+            for u in snapshots:
+                conn.execute(sql, (u,))
+        logger.info("cleared thumbnail paths: %d assets (uuid)", len(snapshots))
+        return snapshots
+
+    def delete_assets_by_source(self, source_id: int) -> int:
+        """硬删除某 source 下所有 assets 行。
+
+        TODO: 若单源 assets 量级 > 10^4，改为分批 DELETE（LIMIT 循环），
+              避免长时间持写锁（PRAGMA busy_timeout = 5000，其他写者
+              最多阻塞 5s）。
+        """
+        cursor = self._execute(
+            """
+            DELETE FROM assets
+             WHERE source_id = ?
+               AND EXISTS (
+                     SELECT 1 FROM ingest_source
+                      WHERE id = ? AND is_deleted = 1
+                   )
+            """,
+            (source_id, source_id),
+        )
+        return cursor.rowcount
 
     # ------------------------------------------------------------------ #
     # 读取（不过滤 is_deleted，含回收站场景）
@@ -288,7 +341,7 @@ class ThumbnailRepository(BaseRepository):
         """批量读缩略图路径。
 
         不区分 is_deleted：读取侧（含回收站）都走这里。
-        返回 {asset_id: ThumbnailPaths}，缺失的 id 不在结果里。
+        返回 {asset_uuid: ThumbnailPaths}，缺失的 id 不在结果里。
         """
         if not asset_ids:
             return {}
@@ -310,6 +363,54 @@ class ThumbnailRepository(BaseRepository):
             for r in rows:
                 result[r["id"]] = ThumbnailPaths.from_row(r)
         return result
+
+    def get_paths_bulk_by_uuid(
+            self, uuids: Sequence[str]
+    ) -> dict[str, ThumbnailPaths]:
+        """批量读缩略图路径（uuid 版）。
+
+        返回 {asset_uuid: ThumbnailPaths}，缺失的 uuid 不在结果里。
+        与 get_paths_bulk 语义相同，仅换键。
+        """
+        if not uuids:
+            return {}
+
+        result: dict[str, ThumbnailPaths] = {}
+        values = list(uuids)
+        cols = self._path_columns()
+        for start in range(0, len(values), _IN_CLAUSE_CHUNK):
+            chunk = values[start:start + _IN_CLAUSE_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            rows = self._fetchall(
+                f"""
+                SELECT uuid, {cols}
+                  FROM assets
+                 WHERE uuid IN ({placeholders})
+                """,
+                chunk,
+            ) or []
+            for r in rows:
+                result[r["uuid"]] = ThumbnailPaths.from_row(r)
+        return result
+
+    def get_paths_by_source(
+            self, source_id: int
+    ) -> dict[str, ThumbnailPaths]:
+        """读某 source 下所有资产的缩略图路径快照，键是 asset uuid。
+
+        供 SourceTrashService 在 purge 前调用——purge 之后 assets 行
+        会被删除，届时无法再查到 thumb_path。
+        **不过滤 is_deleted**（源清理场景下，软删资产也要一起处理）。
+        """
+        rows = self._fetchall(
+            f"""
+            SELECT uuid, {self._path_columns()}
+              FROM assets
+             WHERE source_id = ?
+            """,
+            (source_id,),
+        ) or []
+        return {r["uuid"]: ThumbnailPaths.from_row(r) for r in rows}
 
     # ------------------------------------------------------------------ #
     # 预热 / 巡检
@@ -381,6 +482,49 @@ class ThumbnailRepository(BaseRepository):
             (limit, offset),
         ) or []
         return [ThumbnailHashRow.from_row(r) for r in rows]
+
+    # def list_asset_uuids_by_source(self, source_id: int) -> list[str]:
+    #     ...
+
+    def iter_all_paths(
+            self,
+            *,
+            include_deleted: bool = False,
+            batch_size: int = 1000,
+    ) -> Iterator[ThumbnailPaths]:
+        """流式迭代所有资产的缩略图路径 DTO。
+
+        - 内部用 id 游标分页，避免一次性 fetchall 全表。
+        - 不过滤 is_deleted 是默认 False（与 list_missing 一致），
+          但参数可开，因为回收站清理也常要全量遍历。
+        """
+        last_id = 0
+        cols = self._path_columns()
+        where = "id > ?" if include_deleted else "id > ? AND is_deleted = 0"
+        while True:
+            rows = self._fetchall(
+                f"""
+                SELECT id, {cols}
+                  FROM assets
+                 WHERE {where}
+                 ORDER BY id
+                 LIMIT ?
+                """,
+                (last_id, batch_size),
+            )
+            if not rows:
+                return
+            for r in rows:
+                last_id = r["id"]
+                yield ThumbnailPaths.from_row(r)
+
+    # Eg:
+    # def iter_abs_paths(self) -> Iterator[tuple[ThumbSpec, str]]:
+    #     if not self.base:
+    #         return
+    #     for spec, rel in self.items():        # {spec: rel_path}
+    #         if rel:
+    #             yield spec, join_path(self.base, rel)
 
     def count_by_status(self) -> ThumbnailStats:
         """统计有/无缩略图的数量，用于监控面板。只统计活跃资产。"""
@@ -491,7 +635,9 @@ class ThumbnailRepository(BaseRepository):
                        s.source_path   AS source_path,
                        a.file_path     AS file_path
                   FROM assets a
-                  LEFT JOIN ingest_source s ON s.id = a.source_id
+                  LEFT JOIN ingest_source s
+                         ON s.id = a.source_id
+                        AND s.is_deleted = 0
                  WHERE {where}
                 """,
             (where_val,),
@@ -543,15 +689,18 @@ class ThumbnailRepository(BaseRepository):
             return None
         return ThumbnailPaths.from_row(row)
 
-    # ------------------------------------------------------------------ #
-    # 向后兼容别名（一个版本周期后删除）
-    # ------------------------------------------------------------------ #
-    # 旧名 → 新名
-    purge = clear_and_snapshot
-    purge_bulk = clear_and_snapshot_bulk
-    clear_all_for_missing_base = clear_paths_under_base_prefix
-
-    @staticmethod
-    def resolve_path(base_dir: Optional[str], spec_path: Optional[str]) -> Optional[str]:
-        """[deprecated] 用 ThumbnailPaths.resolve 或 utils.path.join_path 代替。"""
-        return join_path(base_dir, spec_path)
+    # # ------------------------------------------------------------------ #
+    # # 向后兼容别名（一个版本周期后删除）
+    # # ------------------------------------------------------------------ #
+    # # 旧名 → 新名
+    # purge = clear_and_snapshot
+    # purge_bulk = clear_and_snapshot_bulk
+    # clear_all_for_missing_base = clear_paths_under_base_prefix
+    #
+    # purge_by_uuid = clear_and_snapshot_by_uuid
+    # purge_bulk_by_uuid = clear_and_snapshot_bulk_by_uuid
+    #
+    # @staticmethod
+    # def resolve_path(base_dir: Optional[str], spec_path: Optional[str]) -> Optional[str]:
+    #     """[deprecated] 用 ThumbnailPaths.resolve 或 utils.path.join_path 代替。"""
+    #     return join_path(base_dir, spec_path)
