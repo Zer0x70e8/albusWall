@@ -41,7 +41,7 @@ DRAFT_SOURCE_ID: Final[int] = -1
 if TYPE_CHECKING:
     # ★ 读模型 IngestSource 与窗口类同名，这里重命名避免 TYPE_CHECKING 冲突
     from ..window.source.core import IngestSource as IngestSourceView
-    from albuswall.services.source import SourceService
+    from albuswall.services import SourceService, SourceTrashService
 
 _logger = logging.getLogger(__name__)
 
@@ -50,14 +50,16 @@ _logger = logging.getLogger(__name__)
 class IngestSourcePresenter(QObject):
     """IngestSource 的 presenter。"""
 
-    # ★ 线程桥：后端 SourceExecutor 在工作线程 emit scan_finished，
-    #   我们在这里把它转成一个 Qt 信号，让 UI 槽函数在主线程执行。
+    # 线程桥：后端 SourceExecutor 在工作线程 emit scan_finished，
+    # 我们在这里把它转成一个 Qt 信号，让 UI 槽函数在主线程执行。
     _scan_finished_queued = QtSignal(object)
+    _refresh_queued = QtSignal()  # 无载荷刷新桥
 
     def __init__(
             self,
             view: "IngestSourceView",
             source_service: Optional["SourceService"] = None,
+            trash_service: Optional["SourceTrashService"] = None,
             parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -67,6 +69,7 @@ class IngestSourcePresenter(QObject):
 
         # ---- 业务服务（唯一数据入口）----
         self._service: Optional["SourceService"] = source_service
+        self._trash: Optional["SourceTrashService"] = trash_service
 
         # ---- container 引用（setup 里保存，供后续懒取依赖；可空）----
         self._container: Optional[Any] = None
@@ -84,10 +87,11 @@ class IngestSourcePresenter(QObject):
 
         # ---- 跨线程桥接（先接信号，再挂后端信号）----
         self._scan_finished_queued.connect(self._on_scan_finished_on_ui)
+        self._refresh_queued.connect(self._on_refresh_on_ui)
 
         # ---- 连线 ----
         self._wire_view_signals()
-        self._bind_service(self._service)
+        self._bind_service(self._service, self._trash)
 
         # ---- 首次从数据库加载 ----
         self.reload()
@@ -113,9 +117,9 @@ class IngestSourcePresenter(QObject):
         """
         if self._service is service:
             return
-        self._unbind_service(self._service)
+        self._unbind_service(self._service, self._trash)
         self._service = service
-        self._bind_service(service)
+        self._bind_service(service, self._trash)
         self.reload()
 
     # ------------------------------------------------------- manager 生命周期
@@ -138,8 +142,15 @@ class IngestSourcePresenter(QObject):
                 service = None
             if service is not None:
                 self._service = service
-                self._bind_service(service)
+                self._bind_service(service, self._trash)
                 self.reload()
+
+        if self._trash is None:
+            try:
+                self._trash = container.get("source_trash_service")
+            except Exception:
+                _logger.debug("container 未提供 source_trash_service（忽略）",
+                              exc_info=True)
 
     def teardown(self) -> None:
         """manager 调用：断开信号、清空会话状态。幂等。
@@ -151,7 +162,7 @@ class IngestSourcePresenter(QObject):
             return
         self._torn_down = True
 
-        self._unbind_service(self._service)
+        self._unbind_service(self._service, self._trash)
 
         # 丢弃未 apply 的草稿与会话指针，避免误用
         self._draft_dto = None
@@ -159,22 +170,39 @@ class IngestSourcePresenter(QObject):
         self._row_source_ids = []
 
     # ------------------------------------------------------------ 服务绑定
-    def _bind_service(self, service: Optional["SourceService"]) -> None:
-        if service is None:
+    def _bind_service(
+            self,
+            service: Optional["SourceService"],
+            trash_service: Optional["SourceTrashService"],
+    ) -> None:
+        if service is None or trash_service is None:
             return
         try:
             service.scan_finished.connect(self._on_scan_finished_backend)
         except Exception:
             _logger.debug("service.scan_finished 订阅失败（忽略）", exc_info=True)
+        # ★ 新增
+        try:
+            trash_service.sources_changed.connect(self._on_sources_changed_backend)
+        except Exception:
+            _logger.debug("service.sources_changed 订阅失败（忽略）", exc_info=True)
 
-    def _unbind_service(self, service: Optional["SourceService"]) -> None:
-        if service is None:
+    def _unbind_service(
+            self,
+            service: Optional["SourceService"],
+            trash_service: Optional["SourceTrashService"],
+    ) -> None:
+        if service is None or trash_service is None:
             return
         try:
             service.scan_finished.disconnect(self._on_scan_finished_backend)
         except Exception:
-            # 自定义 Signal 若没有 disconnect / 未连接过，静默忽略
             _logger.debug("service.scan_finished 退订失败（忽略）", exc_info=True)
+        # ★ 新增
+        try:
+            trash_service.sources_changed.disconnect(self._on_sources_changed_backend)
+        except Exception:
+            _logger.debug("service.sources_changed 退订失败（忽略）", exc_info=True)
 
     # ------------------------------------------------------------ 数据加载
     def reload(self) -> None:
@@ -308,17 +336,30 @@ class IngestSourcePresenter(QObject):
 
     def delete_source(self, source_id: int) -> bool:
         """删除导入源（虚拟根会被服务层拒绝）。"""
-        if self._service is None:
-            return False
         if source_id == MANUAL_SOURCE_ID:
             _logger.warning("拒绝删除虚拟根 source(id=0)")
             return False
-        try:
-            ok = self._service.delete_source(source_id)
-        except Exception:
-            # 常见：assets 外键 RESTRICT 触发 DB 异常
-            _logger.exception("删除导入源失败 (id=%s)", source_id)
+
+        # ok = False
+        if self._trash is not None:
+            try:
+                ok = self._trash.delete_source(source_id)
+            except ValueError:
+                # MANUAL_SOURCE_ID 已在上面挡掉，走到这里说明状态不一致
+                _logger.warning("trash 拒绝删除 source(id=%s)", source_id)
+                return False
+            except Exception:
+                _logger.exception("回收站删除失败 (id=%s)", source_id)
+                return False
+        elif self._service is not None:
+            try:
+                ok = self._service.delete_source(source_id)
+            except Exception:
+                _logger.exception("删除导入源失败 (id=%s)", source_id)
+                return False
+        else:
             return False
+
         if ok:
             if source_id == self._current_source_id:
                 self._current_source_id = None
@@ -592,3 +633,18 @@ class IngestSourcePresenter(QObject):
             _logger.debug("切换禁用状态时源已不存在 (id=%s)", source_id)
             return
         self.set_source_disabled(source_id, not dto.disabled)
+
+    # ---- 后端线程调用：只 emit，绝不碰 UI ----
+    def _on_sources_changed_backend(self, *_args, **_kwargs) -> None:
+        """数据变更 → 转 Qt 信号搬回主线程。
+
+        * 用 *args/**kwargs 吞掉信号可能携带的任何参数——
+          `Signal.send(sender, **kwargs)` 会按 `cb(sender, **kwargs)` 调用，
+          这里不关心具体载荷。
+        * emit 会因线程不同自动走 QueuedConnection，槽函数在 UI 线程执行。
+        """
+        self._refresh_queued.emit()
+
+    # ---- 主线程槽：安全刷新 ----
+    def _on_refresh_on_ui(self) -> None:
+        self.reload()

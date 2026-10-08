@@ -69,6 +69,15 @@ class ThumbnailPaths:
     medium: Optional[str] = None
     large: Optional[str] = None
 
+    def items(self):
+        """迭代 (spec 名, 相对路径) 对，顺序由 ALL_SPECS 决定。
+
+        只产出 spec 子路径，不含 base —— base 由调用方单独处理
+        （见 source_trash._remove_thumbnail_files）。
+        """
+        for spec in ALL_SPECS:
+            yield spec.value, self.for_spec(spec)
+
     def for_spec(self, spec: "ThumbSpec | str") -> Optional[str]:
         """取某个 spec 的相对路径；未知 spec 返回 None。"""
         key = spec.value if isinstance(spec, ThumbSpec) else spec

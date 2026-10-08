@@ -29,7 +29,21 @@ class ViewRepository(BaseRepository):
         "deleted": "{p}deleted_at IS NULL, {p}deleted_at DESC, {p}id DESC",
     }
 
-    _SCOPE_WHERE = {"active": "is_deleted = 0", "deleted": "is_deleted = 1"}
+    _ACTIVE_WHERE = (
+        "is_deleted = 0 "
+        "AND EXISTS (SELECT 1 FROM ingest_source AS s "
+        "            WHERE s.id = assets.source_id AND s.is_deleted = 0)"
+    )
+    _ACTIVE_WHERE_A = (
+        "a.is_deleted = 0 "
+        "AND EXISTS (SELECT 1 FROM ingest_source AS s "
+        "            WHERE s.id = a.source_id AND s.is_deleted = 0)"
+    )
+
+    _SCOPE_WHERE = {
+        "active": _ACTIVE_WHERE,  # 原来就是 "is_deleted = 0"
+        "deleted": "is_deleted = 1",
+    }
 
     _PHYSICAL_ALBUM_FROM = (
         "assets a "
@@ -376,7 +390,6 @@ class ViewRepository(BaseRepository):
     # ------------------------------------------------------------------ #
     # 邻居 / 定位 —— 私有工具（索引 seek，不物化全表）
     # ------------------------------------------------------------------ #
-
     def _fetch_key(self, *, from_clause, where_clause, where_params,
                    id_col, uuid_col, key_col, cur_uuid):
         """按 uuid 取当前项的 (id, 排序键)。
@@ -538,3 +551,24 @@ class ViewRepository(BaseRepository):
         if file_path.is_absolute() or not source_path:
             return str(file_path)
         return str(Path(source_path) / file_path)
+
+    # utils
+    @staticmethod
+    def _active_asset_where(alias: str = "") -> str:
+        """活跃资产的可见性条件。
+
+        活跃 = 资产自身未软删 AND 所属 source 未软删。
+
+        用 EXISTS 子查询而非 JOIN：
+          - 不改动 FROM / ORDER BY 结构，现有 partial index 继续命中；
+          - ingest_source 通常只有几行，EXISTS 代价可忽略；
+          - 对已写死 `a.is_deleted = 0` 的查询也能无缝替换。
+
+        alias 传 "a" 或 ""；空串时引用表名 assets。
+        """
+        p = f"{alias}." if alias else "assets."
+        return (
+            f"{p}is_deleted = 0 "
+            f"AND EXISTS (SELECT 1 FROM ingest_source AS s "
+            f"WHERE s.id = {p}source_id AND s.is_deleted = 0)"
+        )

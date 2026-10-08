@@ -61,7 +61,7 @@ from albuswall.dto.source import (
     IngestSourceUpdate,
     SourceScanFinished,
 )
-from albuswall.utils.signal import Signal
+from albuswall.utils.signals import Signal
 from albuswall.utils.mount import auto_mount
 from albuswall.utils.path import iter_files_depth_first
 

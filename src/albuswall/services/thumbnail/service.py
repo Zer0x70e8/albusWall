@@ -47,7 +47,7 @@ from albuswall.dto.thumbnail import (
 )
 from albuswall.log import getLogger
 from albuswall.utils import path as path_util
-from albuswall.utils.signal import Signal
+from albuswall.utils.signals import Signal
 
 from .config import (
     config,

@@ -27,7 +27,7 @@ from concurrent.futures import (
 from albuswall.configue import ConfigField
 from albuswall.dto.import_ import AssetCandidateCacheDTO, AssetCreateDTO
 from albuswall.log import getLogger
-from albuswall.utils.signal import Signal
+from albuswall.utils.signals import Signal
 
 try:
     # 统一 EXIF 解析入口；缺失时不影响导入主流程。

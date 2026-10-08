@@ -3,9 +3,10 @@
 from datetime import datetime
 from typing import TypedDict, Dict, Callable, Any
 
+from albuswall.log import getLogger
 from albuswall.core import Container, Application
 from albuswall.utils.registry import register_all, build_getters
-from albuswall.utils.signal import Signal
+from albuswall.utils.signals import Signal
 
 from .source import SourceService
 from .trigger_sync import TriggerSyncService
@@ -13,7 +14,13 @@ from .thumbnail import ThumbnailService
 from .view import ViewService
 from .import_ import ImportService
 from .trash import TrashService, utcnow, TrashCleanupScheduler
-from .source_deletion import SourceTrashService
+from .source_trash import (
+    SourceTrashService, XdgThumbnailCleaner,
+    load_xdg_cleaner_config, load_source_trash_config,
+    install_source_trash_lifecycle
+)
+
+logger =getLogger(__package__)
 
 
 # ---------- 类型表：唯一事实来源 ----------
@@ -25,6 +32,7 @@ class Services(TypedDict):
     import_service: ImportService
     trash_service: TrashService  # 被动服务
     trash_cleanup_scheduler: TrashCleanupScheduler
+    xdg_thumbnail_cleaner: XdgThumbnailCleaner
     source_trash_service: SourceTrashService
 
 
@@ -64,11 +72,14 @@ _ARG_MAP: Dict[str, Callable[[Any, Container], Any]] = {
         c.get("trash_service"),
         c.get("task_service"),
     ),
+    "xdg_thumbnail_cleaner": lambda cls, c: cls(
+        load_xdg_cleaner_config(),
+    ),
     "source_trash_service": lambda cls, c: cls(
-        source_repo=c.get("source_repository"),
-        thumbnail_repo=c.get("thumbnail_repository"),
-        task_service=c.get("task_service"),
-        reconciler=c.get("reconciler"),
+        c.get("ingest_source_repo"),
+        c.get("thumbnail_repo"),
+        c.get("reconciler"),
+        load_source_trash_config(),
     ),
 }
 
@@ -101,7 +112,9 @@ def register_service(container: Container):
         container.reg,
     )
 
-    # ── 连接：扫描完成 → 唤醒导入 worker ────────────────
+    install_source_trash_lifecycle(container)
+
+    # ── 连接：app 扫描完成 → 唤醒导入 worker ────────────────
     def _wire_scan_to_import():
         source_service = container.get("source_service")
         import_service = container.get("import_service")
@@ -131,6 +144,7 @@ def register_service(container: Container):
     Application.on_boot(lambda: container.get("import_service").start())
     Application.on_boot(lambda: container.get("thumbnail_service").start())
     Application.on_boot(lambda: container.get("trash_cleanup_scheduler").start())
+    Application.on_boot(lambda: container.get("source_trash_service"))
 
     # ── on_final：注册顺序 = 拆除顺序.reversed ──────────────────
     Application.on_final(lambda: container.get("trash_cleanup_scheduler").stop(wait=True))

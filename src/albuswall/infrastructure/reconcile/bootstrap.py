@@ -19,7 +19,7 @@ def register_reconciler(
         returns=Reconciler,
     )
 
-    def _start_reconciler() -> None:
+    def _start_reconciler(_) -> None:
         # 惰性：没人构造过就不启动，也就没有 on_startup 项要跑
         if not container.has_instance("reconciler"):
             _logger.debug("Reconciler was never instantiated, skip start.")
@@ -33,7 +33,7 @@ def register_reconciler(
         container.get("reconciler").shutdown()
 
     # 启动：在 task_service 已就绪、其它服务注册完之后。
-    app.on_boot(_start_reconciler)
+    app.on_loop(_start_reconciler)
 
     # 关闭：必须在 task_service 之前。
     # task/bootstrap.py 用 on_final 注册了 task 关闭；这里也用 on_final，

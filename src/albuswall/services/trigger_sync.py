@@ -23,7 +23,7 @@ from typing import Dict, Optional
 from albuswall.dto.trigger import TriggerConfig
 from albuswall.repositories.source import IngestSourceRepository
 from albuswall.log import getLogger
-from albuswall.utils.signal import Signal
+from albuswall.utils.signals import Signal
 
 from albuswall.infrastructure.trigger.trigger import TriggerFacadeService
 
