@@ -1,11 +1,16 @@
 #
-""""""
+"""albusWall main window module.
+
+Defines the top-level :class:`Window` of albusWall, which coordinates
+the title bar, content area, overlay stack, and frosted-glass background.
+"""
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtCore import Qt
 
 from ..widgets.blur_overlay_label import BlurLabel
-from ..utils.qt_objectname_utils import auto_set_object_names
+from ..widgets.passthrough_stack_widget import PassthroughStack
+from ..utils import auto_set_object_names
 
 from .titlebar import TitleBar
 from .content import Content
@@ -15,10 +20,21 @@ from .source import IngestSource
 from .detail import Detail
 from ..setting import Setting, StackStation as SettingStation
 
-from ..widgets.passthrough_stack_widget import PassthroughStack
-
 
 class Window(QWidget):
+    """albusWall main window.
+
+    layer（自下而上）::
+
+        Window
+        ├─ back_ground            背景，铺满整窗口
+        ├─ stack_container        铺满整窗口
+        │   └─ QStackedLayout(StackAll)
+        │       ├─ content_page   内容层（占位符 + content）
+        │       └─ overlay        浮层，叠在内容之上
+        └─ title_bar              标题栏，raise 到最上
+    """
+
     main_layout: QVBoxLayout
 
     back_ground: BlurLabel
@@ -26,6 +42,7 @@ class Window(QWidget):
 
     title_bar: TitleBar
     content: Content
+    content_placeholder: QWidget
     overlay: PassthroughStack
     album: Album
     source: IngestSource
@@ -37,23 +54,18 @@ class Window(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setup()
-        self.setup_ui()
-        auto_set_object_names(
-            self,
-            class_name_source=self,
-            separator="",  # 去掉分隔符
-            camel_case=True
-        )
+        self._setup()
+        self._setup_ui()
+        auto_set_object_names(self)
 
-    def setup(self):
+    def _setup(self):
         self.setObjectName(type(self).__name__)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop, True)
 
-    def setup_ui(self):
+    def _setup_ui(self):
         layout = QVBoxLayout(self)
         self.main_layout = layout
         self.main_layout.setContentsMargins(0, 0, 0, 0)
@@ -76,6 +88,9 @@ class Window(QWidget):
 
         #
         self.title_bar = TitleBar(self)
+        self.title_bar.height_size_changed.connect(
+            self._on_action_bar_size_changed
+        )
 
         #
         self.content = Content(self)
@@ -101,7 +116,8 @@ class Window(QWidget):
         self.detail.target_widget = self
         self.overlay.addWidget(self.detail)
 
-        # setting
+        # TODO: 让设置页可浮动，但Qt还没适配好wayland
+        # settingcontent_placeholder
         # self.setting = Setting(None)
         self.setting = Setting(parent=self, target=self)
         self.setting.enable_close_button = True
@@ -115,6 +131,11 @@ class Window(QWidget):
         self.back_ground.lower()
         layout.addWidget(self.title_bar)
         layout.addStretch()
+
+    # slot
+    def _on_action_bar_size_changed(self, y: int) -> None:
+        # +1 是原来的基线偏移，保留语义
+        self.content_placeholder.setFixedHeight(y + 1)
 
     def _update_overlay_geometry(self):
         y = self.title_bar.action_bar_bottom_y_in_parent + 1

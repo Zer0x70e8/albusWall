@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
 
 from ..widgets.blur_overlay_label import BlurLabel
 from ..widgets.square_grid import SquareGridView
-from ..utils.qt_objectname_utils import auto_set_object_names
 
 from .utils import install_close_button
 
@@ -107,14 +106,6 @@ class Album(BlurLabel):
 
         layout.addWidget(self.close_button)
         layout.addWidget(self.root)
-
-        auto_set_object_names(
-            self,
-            class_name_source=self,
-            separator="",
-            camel_case=True,
-            overwrite=True
-        )
 
         # from PySide6.QtCore import QTimer
         # QTimer.singleShot(

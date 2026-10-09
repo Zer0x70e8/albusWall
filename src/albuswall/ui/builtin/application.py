@@ -21,25 +21,69 @@ from .presenter import PresenterManager
 if TYPE_CHECKING:
     from albuswall.core import Container
 
+_QET = QEvent.Type
 NOISY = {
-    QEvent.Type.MouseMove,
-    QEvent.Type.Paint,
-    QEvent.Type.UpdateRequest,
-    QEvent.Type.Timer,
-    QEvent.Type.MetaCall,
-    QEvent.Type.ChildPolished,
-    QEvent.Type.PolishRequest,
-    QEvent.Type.StyleChange,
-    QEvent.Type.LayoutRequest,
-    QEvent.Type.HoverMove,
-    QEvent.Type.Enter,
-    QEvent.Type.Leave,
+    # ---- 高频噪声 ----
+    _QET.MouseMove,
+    _QET.HoverMove,
+    _QET.Enter,
+    _QET.Leave,
+    _QET.Paint,
+    _QET.UpdateRequest,
+    _QET.UpdateLater,
+    _QET.Timer,
+    _QET.MetaCall,
+    _QET.StyleChange,
+    _QET.LayoutRequest,
+    _QET.PolishRequest,
+    _QET.ChildPolished,
+    _QET.ChildAdded,
+    _QET.ChildRemoved,  # 除非你在查 setParent 时才打开
+    _QET.DynamicPropertyChange,
+    _QET.ContentsRectChange,
+    _QET.WindowTitleChange,
+    _QET.ScreenChangeInternal,
+
+    # ---- 光标的"移动即发" ----
+    _QET.CursorChange,
+    _QET.HoverEnter,
+    _QET.HoverLeave,
+
+    # ---- 布局类，凡是自动 layout 都会发 ----
+    _QET.Move,  # ← 滚动区域不停发
+    _QET.Resize,  # ← 同上
+    _QET.Show,  # 加进来前先想清楚：查显示时机时才临时移除
+    _QET.Hide,
+    _QET.ShowToParent,
+    _QET.HideToParent,
+    _QET.Expose,
+
+    # ---- 输入法 / 提示 ----
+    _QET.InputMethodQuery,
+    _QET.InputMethod,
+    _QET.StatusTip,
+
+    # ---- 底层平台 ----
+    _QET.PlatformSurface,
+    _QET.WinIdChange,
+    _QET.WindowIconChange,
+
+    # ---- 激活/焦点，一般也不用看 ----
+    _QET.ApplicationActivate,
+    _QET.ApplicationDeactivate,
+    _QET.WindowActivate,
+    _QET.WindowDeactivate,
+    _QET.ActivationChange,
+    _QET.FocusAboutToChange,
+    _QET.FocusIn,
+    _QET.FocusOut,
 }
 
 _logger: Logger = getLogger(__name__)  # type: ignore
 _logger.trace = lambda msg, *args: _logger.log(TRACE, msg, *args)
 
 
+# noinspection SpellCheckingInspection
 @register_ui("builtin")
 class Application(QApplication):
     # 显式声明（可选，仅为了类型提示友好）；实例属性在 __init__ 里赋初值
@@ -53,7 +97,7 @@ class Application(QApplication):
         def run(self) -> int:
             return self.parent.exec()
 
-        def quit(self) -> None:
+        def quit(self, code=None) -> None:
             self.parent.quit()
 
     def __init__(self):
@@ -123,7 +167,12 @@ class Application(QApplication):
             self.window.show()
         return super().exec()
 
-    # def notify(self, receiver, event, /) -> bool: ...
+    # def notify(self, receiver, event, /) -> bool:
+    #
+    #     if event.type() not in NOISY:
+    #         print(f"[notify] {event.type().name:24s} -> "
+    #               f"{type(receiver).__name__}({receiver.objectName()})")
+    #     return super().notify(receiver, event)
 
     def __str__(self):
         window_repr = repr(self.window) if self.window is not None else "None"

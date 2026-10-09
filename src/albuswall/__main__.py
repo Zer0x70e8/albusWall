@@ -1,5 +1,6 @@
-#
-""""""
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Main entry point for the AlbusWall project."""
 
 import gc
 import logging

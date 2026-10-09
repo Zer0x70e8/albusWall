@@ -4,12 +4,11 @@
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from PySide6.QtCore import Qt, QPoint, QEvent, QPointF
+from PySide6.QtCore import Qt, QPoint, QEvent, QPointF, Signal
 from PySide6.QtGui import QIcon, QMouseEvent, QWheelEvent  # , QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget, QAbstractButton, QApplication)
 
-from ..utils.qt_objectname_utils import auto_set_object_names
 from ..widgets.action_buttons import (
     CloseButton, MaximizeButton, MinimizeButton)
 from ..widgets.floating_search_bar import (
@@ -20,6 +19,8 @@ from ...vo.album import TitleBarVO
 
 
 class TitleBar(QWidget):
+    height_size_changed = Signal(int)
+
     main_layout: QVBoxLayout
 
     action_bar: QWidget
@@ -63,13 +64,6 @@ class TitleBar(QWidget):
 
         self.setup_ui()
 
-        auto_set_object_names(
-            self,
-            class_name_source=self,
-            separator="",
-            camel_case=True,
-            overwrite=True
-        )
         # # self.floating_search_bar.setObjectName("SearchBar")
         #
         # from PySide6.QtCore import QTimer
@@ -304,9 +298,9 @@ class TitleBar(QWidget):
         has_content = (not button.icon().isNull()) or bool(button.text())
         button.setVisible(has_content)
 
-    def set_passthrough_target(self, target: QWidget | None) -> None:
-        """设置空白区域鼠标 / 滚轮事件的接收者（通常是 Content）。"""
-        self._passthrough_target = target
+    # def set_passthrough_target(self, target: QWidget | None) -> None:
+    #     """设置空白区域鼠标 / 滚轮事件的接收者（通常是 Content）。"""
+    #     self._passthrough_target = target
 
     def _is_interactive_at(self, pos: QPoint) -> bool:
         """判断 pos 是否落在真正可交互的控件上（按钮 / 搜索栏等）。"""
@@ -397,6 +391,12 @@ class TitleBar(QWidget):
                 return True
             w = w.parentWidget()
         return False
+
+    def resizeEvent(self, event):
+        last_height = self.height()
+        super().resizeEvent(event)
+        if last_height != self.height():
+            self.height_size_changed.emit(self.height())
 
     def eventFilter(self, obj, event):
         if (event.type() == QEvent.Type.Wheel

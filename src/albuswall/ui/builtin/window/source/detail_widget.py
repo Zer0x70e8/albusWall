@@ -13,8 +13,6 @@ from PySide6.QtWidgets import (
 from albuswall.dto.source import IngestSourceFormData
 from albuswall.common.enums import FileTypeCheckMode
 
-from ...utils import auto_set_object_names
-
 
 class IngestSourceDetailWidget(QFrame):
     main_layout: QVBoxLayout
@@ -120,13 +118,6 @@ class IngestSourceDetailWidget(QFrame):
         self._wire_internal_signals()
         self.setup_object_names()
         self._apply_default_state()
-        auto_set_object_names(
-            self,
-            class_name_source=self,
-            separator="",
-            overwrite=True,
-            camel_case=True
-        )
 
     def setup_ui(self):
         """创建所有控件并设置布局"""

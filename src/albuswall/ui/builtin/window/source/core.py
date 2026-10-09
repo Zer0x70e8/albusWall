@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
 
 from .detail_widget import IngestSourceDetailWidget
 from ...widgets import BlurLabel, ColumnListView
-from ...utils.qt_objectname_utils import auto_set_object_names
 
 
 class IngestSource(BlurLabel):
@@ -57,14 +56,6 @@ class IngestSource(BlurLabel):
         self.setObjectName("IngestSource")
 
         self._setup_ui()
-
-        auto_set_object_names(
-            self,
-            class_name_source=self,
-            separator="",
-            overwrite=True,
-            camel_case=True
-        )
 
     # ------------------------------------------------------------------ UI
     def _setup_ui(self):

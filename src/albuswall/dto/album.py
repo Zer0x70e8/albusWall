@@ -71,7 +71,12 @@ class AssetDTO:
     exif: Optional[dict[str, Any]] = None
 
     is_favorite: bool = False
+    # 生命周期态（软删除）
+    # include_deleted=False 时正常查询永远是 False/None；
+    # include_deleted=True（Trash / 恢复流程）时才会拿到真实值。
+    is_deleted: bool = False
 
+    deleted_at: Optional[str] = None
     created_at: Optional[str] = None
     modified_at: Optional[str] = None
 
@@ -110,6 +115,8 @@ class AssetDTO:
             city=data.get("city"),
             exif=exif,
             is_favorite=bool(data.get("is_favorite", 0)),
+            is_deleted=bool(data.get("is_deleted", 0)),
+            deleted_at=data.get("deleted_at"),
             created_at=data.get("created_at"),
             modified_at=data.get("modified_at"),
         )

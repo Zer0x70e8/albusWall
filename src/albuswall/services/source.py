@@ -23,7 +23,6 @@
 
 from __future__ import annotations
 
-import logging
 import mimetypes
 from itertools import count as _count
 from pathlib import Path
@@ -42,7 +41,6 @@ from typing import (
 )
 from uuid import uuid4
 
-from albuswall.log import TRACE
 from albuswall.repositories import (
     IngestSourceRepository,
     ImportRepository,
@@ -52,6 +50,7 @@ from albuswall.configue.state import (
     StateField,
     ObservableContext
 )
+from albuswall.log import getLogger
 from albuswall.dto.task import ExecutorType, Task
 from albuswall.dto.import_ import AssetCandidateCacheDTO
 from albuswall.dto.source import (
@@ -66,14 +65,9 @@ from albuswall.utils.mount import auto_mount
 from albuswall.utils.path import iter_files_depth_first
 
 if TYPE_CHECKING:
-    from albuswall.log import Logger
     from albuswall.infrastructure.task import TaskService
 
-_logger = logging.getLogger(__name__)
-# noinspection statement-effect
-_logger  # type: Logger
-# noinspection unresolved-references
-_logger.trace = lambda msg, *args, **kwargs: _logger.log(TRACE, msg, *args, **kwargs)
+_logger = getLogger(__name__)
 
 _SCAN_BATCH_SIZE = 500
 _T = TypeVar("_T")

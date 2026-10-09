@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..anims.search_bar_anim_protocol import SearchAnimator
-from ..utils.qt_objectname_utils import auto_set_object_names
+from ..utils.qt_objectname_utils import set_widget_object_name
 
 
 class SearchBarLayoutPlaceholder(QPushButton):
@@ -64,11 +64,10 @@ class FloatingSearchBar(QFrame):
 
         self._setup_ui()
 
-        auto_set_object_names(
+        set_widget_object_name(
             self,
-            class_name_source=self,
+            parent_class_name=type(self).__name__,
             separator="",
-            camel_case=True,
             overwrite=True
         )
 

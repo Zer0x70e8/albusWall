@@ -3,7 +3,7 @@
 
 from logging import getLogger
 from pathlib import Path
-from traceback import format_exc
+# from traceback import format_exc
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QTimer
@@ -76,11 +76,15 @@ class WindowPresenter(QObject):
         QTimer.singleShot(0, self._sync_title_bar_height)
 
         self._wire_navigation()
+        self._restore_window_state()
 
     def teardown(self) -> None:
         self._target.removeEventFilter(self)
 
-        st = Application.instance().configure.dynamic.window
+        # st = Application.instance().configure.dynamic.window
+        st = getattr(Application.instance().configure.dynamic, "window", None)
+        if st is None:
+            return
         g = self._target.normalGeometry()
         st.x, st.y = g.x(), g.y()
         st.width, st.height = g.width(), g.height()
@@ -118,14 +122,16 @@ class WindowPresenter(QObject):
             (w.detail.close_requested, overlay.show_blank),
         )
         for signal, slot in pairs:
+            # noinspection broad-exception,unused-local
             try:
                 signal.connect(slot)
             except Exception as e:
-                _logger.error(
-                    "UI wire err: %s\ntrackbar: %s",
-                    e,
-                    format_exc()
-                )
+                pass
+                # _logger.error(
+                #     "UI wire err: %s\ntraceback: %s",
+                #     e,
+                #     format_exc()
+                # )
 
     def _apply_style_sheet(self, _: "Configue") -> None:
         qss_path = self.confs.qss
@@ -164,3 +170,12 @@ class WindowPresenter(QObject):
     def hide_detail(self) -> None:
         """收起详情视图。"""
         self._target.overlay.show_blank()
+
+    def _restore_window_state(self) -> None:
+        st = Application.instance().configure.dynamic.window
+        if st.width and st.height:
+            self._target.resize(st.width, st.height)
+        if st.x is not None and st.y is not None:
+            self._target.move(st.x, st.y)
+        if st.maximized:
+            self._target.showMaximized()

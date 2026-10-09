@@ -11,12 +11,12 @@ from PySide6.QtCore import Qt
 try:
     from ..widgets.blur_overlay_label import BlurLabel
     from ..widgets.collapsible_group_box import CollapsibleGroupBox
-    from ..utils.qt_objectname_utils import auto_set_object_names
+    from ..utils.qt_objectname_utils import set_widget_object_name
 except ImportError:
     # BlurLabel = QWidget
     from albuswall.ui.builtin.widgets.blur_overlay_label import BlurLabel
     from albuswall.ui.builtin.widgets.collapsible_group_box import CollapsibleGroupBox
-    from albuswall.ui.builtin.utils.qt_objectname_utils import auto_set_object_names
+    from albuswall.ui.builtin.utils.qt_objectname_utils import set_widget_object_name
 
 
 class Setting(QWidget):
@@ -48,12 +48,11 @@ class Setting(QWidget):
         self._blur_target = target
 
         self._setup(parent)
-        auto_set_object_names(
+        set_widget_object_name(
             self,
-            class_name_source=self,
+            parent_class_name=type(self).__name__,
             separator="",  # 去掉分隔符
-            overwrite=True,
-            camel_case=True
+            overwrite=True
         )
 
         if auto_setup:

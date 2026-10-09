@@ -3,10 +3,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Sequence, Mapping, Optional, Any
 
-from PySide6.QtGui import QPixmap
 from PySide6.QtCore import Qt, Signal, QModelIndex
 from PySide6.QtWidgets import (
     QPushButton,
@@ -24,6 +22,7 @@ from ..widgets import BlurLabel
 from ..widgets.image_viewer import ImageViewer
 
 from .utils import install_close_button
+from .panel import InformationPanel
 
 
 class Detail(BlurLabel):
@@ -33,17 +32,17 @@ class Detail(BlurLabel):
     uuid 字符串；``assets.id`` 不再出现在本层。
     """
     close_requested = Signal()
-    image_loaded = Signal(str)
-    asset_navigate_requested = Signal(str)   # 参数：asset uuid
+    asset_navigate_requested = Signal(str)  # 参数：asset uuid
 
     # ---- 写操作意图（由内部按钮发出） ----
-    favorite_toggle_requested = Signal()
+    favorite_toggle_requested = Signal(bool)  # payload: 期望的新收藏状态
     trash_requested = Signal()
+    recover_requested = Signal()
     multiple_choice_requested = Signal()
     edit_requested = Signal()
 
     # ---- 对外广播：写操作已生效，需要外部（缩略图网格等）刷新 ----
-    assets_changed = Signal(list)            # payload: list[str] (uuid)
+    assets_changed = Signal(list)  # payload: list[str] (uuid)
 
     main_layout: QVBoxLayout
 
@@ -62,9 +61,12 @@ class Detail(BlurLabel):
     edit_button: QPushButton
     trash_button: QPushButton
 
+    panel: InformationPanel
+
     def __init__(self, parent=None):
         super().__init__(parent=parent, draw_label_content=False)
         self._nav_asset_uuids: list[str] = []
+        self._nav_delegate: SquareThumbDelegate | None = None
         self._nav_model: ThumbnailModel | None = None
 
         # 上/下一张导航缓存（uuid；None 表示到头）
@@ -72,6 +74,9 @@ class Detail(BlurLabel):
         self._nav_next_uuid: Optional[str] = None
         self._nav_index: int = 0
         self._nav_total: int = 0
+
+        # 当前资产是否已软删；决定 trash 按钮语义为 删除 / 恢复
+        self._is_deleted: bool = False
 
         self.setup_ui()
         self.setup_key()
@@ -154,10 +159,12 @@ class Detail(BlurLabel):
         self.favourite_button.setCheckable(True)
 
         # 意图信号：视图只声明"被点了"，不含业务
+        # favourite: clicked 携带 bool，直接透传作为"期望的新状态"
         self.favourite_button.clicked.connect(
             self.favorite_toggle_requested.emit
         )
-        self.trash_button.clicked.connect(self.trash_requested.emit)
+        # trash: 依据当前 _is_deleted 路由到 trash / recover
+        self.trash_button.clicked.connect(self._on_trash_clicked)
         self.multiple_choice_button.clicked.connect(
             self.multiple_choice_requested.emit
         )
@@ -178,26 +185,31 @@ class Detail(BlurLabel):
         self._nav_delegate = SquareThumbDelegate(self.item_line_viewer)
         self._nav_model = ThumbnailModel(parent=self)
         self.item_line_viewer.setModel(self._nav_model)
+        # noinspection bad-argument-type
+        self.item_line_viewer.setItemDelegate(self._nav_delegate)
+
+        # 信息面板：挂到 Detail 自身，铺满整个详情页，不参与任何 layout
+        self.panel = InformationPanel(self)  # 父 = Detail
+        self.panel.setVisible(False)
+        self.panel.setGeometry(self.rect())  # 与 Detail 完全重合
+
+        self.information_button.setCheckable(True)
+        self.information_button.toggled.connect(self._on_information_toggled)
+
+        self.panel.close_requested.connect(
+            lambda: self.information_button.setChecked(False)
+        )
 
         # 点击走 model
         self.item_line_viewer.clicked.connect(self._on_nav_item_clicked)
 
     def setup_key(self):
+        # 键盘总线尚未就绪，暂不接入；等统一键盘操作总线上线后在此挂载。
         pass
 
     # ------------------------------------------------------------------ #
     # 图片
     # ------------------------------------------------------------------ #
-    def set_image(self, path: str | Path) -> bool:
-        """接收图片路径（可直接 connect 到携带 str 的信号）。"""
-        pixmap = QPixmap()
-        path = str(path)
-        ok = bool(path) and pixmap.load(path)
-        self.image_viewer.set_pixmap(pixmap if ok else QPixmap())
-        if ok:
-            self.image_loaded.emit(path)
-        return ok
-
     def clear_image(self) -> None:
         self.image_viewer.clear()
 
@@ -269,15 +281,26 @@ class Detail(BlurLabel):
         self._nav_next_uuid = str(next_uuid) if next_uuid else None
 
     # ------------------------------------------------------------------ #
-    # 元信息 / 收藏 / 广播
+    # 收藏 / 删除状态
     # ------------------------------------------------------------------ #
-    def set_metadata(self, metadata: Mapping[str, object]) -> None:
-        """用元信息 dict 刷新信息面板（尺寸、时间、EXIF 等）。"""
-        # 目前无实际 UI，占位；等 information_button 展开面板时再实现
-
     def set_favorite_state(self, is_favorite: bool) -> None:
-        """同步收藏按钮选中态（由 presenter 在切换后 / 打开详情时调用）。"""
-        self.favourite_button.setChecked(bool(is_favorite))
+        """同步收藏按钮选中态。
+
+        用 ``blockSignals`` 阻断回路：``setChecked`` 不触发 ``clicked``，
+        但若未来改为监听 ``toggled``，也不会误发 ``favorite_toggle_requested``。
+        """
+        blocked = self.favourite_button.blockSignals(True)
+        try:
+            self.favourite_button.setChecked(bool(is_favorite))
+        finally:
+            self.favourite_button.blockSignals(blocked)
+
+    def set_deleted_state(self, is_deleted: bool) -> None:
+        """切换 trash 按钮语义：未删 → "trash"；已删 → "recover"。"""
+        self._is_deleted = bool(is_deleted)
+        self.trash_button.setText(
+            self.tr("recover") if self._is_deleted else self.tr("trash")
+        )
 
     def notify_assets_changed(self, asset_uuids: Sequence[str]) -> None:
         """写操作完成后由 presenter 调用，把受影响的资产 uuid 广播出去。
@@ -287,6 +310,10 @@ class Detail(BlurLabel):
         """
         self.assets_changed.emit([str(u) for u in asset_uuids])
 
+    def show_information(self, visible: bool = True) -> None:
+        """由 presenter 主动控制信息面板显隐（比如切换资产后重置）。"""
+        self.information_button.setChecked(visible)
+
     # ------------------------------------------------------------------ #
     # 槽
     # ------------------------------------------------------------------ #
@@ -295,5 +322,24 @@ class Detail(BlurLabel):
         if asset_uuid is not None:
             self.asset_navigate_requested.emit(str(asset_uuid))
 
-    # alias
-    show_image = set_image
+    def _on_trash_clicked(self) -> None:
+        """统一入口：按当前 _is_deleted 路由到 trash / recover。"""
+        if self._is_deleted:
+            self.recover_requested.emit()
+        else:
+            self.trash_requested.emit()
+
+    # ------------------------------------------------------------------ #
+    # 信息面板：覆盖整页
+    # ------------------------------------------------------------------ #
+    def _on_information_toggled(self, checked: bool) -> None:
+        if checked:
+            self.panel.setGeometry(self.rect())
+            self.panel.raise_()  # 抬到 Detail 里其它子控件之上
+        self.panel.setVisible(checked)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Detail 尺寸变化时，面板要跟着铺满（前提是已经创建）
+        if hasattr(self, "panel"):
+            self.panel.setGeometry(self.rect())
