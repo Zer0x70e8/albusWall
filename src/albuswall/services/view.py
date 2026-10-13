@@ -223,16 +223,39 @@ class ViewService:
             *,
             include_deleted: bool = False,
     ) -> Optional[str]:
-        """按相册 uuid 取封面磁盘完整路径。
+        """按相册 uuid 取封面磁盘完整路径（原图）。
 
-        组合流程：album_uuid → 封面 AssetDTO → asset uuid → 完整路径。
+        优先级：
+            1. albums.cover_asset_id 指向的显式封面
+            2. 相册内排序意义上的最新资产（物理相册才需要；
+               虚拟相册在 get_album_cover 里已返回 scope 首项）
+            3. None
         """
         cover = self.get_album_cover(album_uuid)
         if cover is None:
             return None
+
+        # 虚拟相册的 cover 已经由 scope 本身保证了可见性
+        # （Trash 的 cover 天然是软删资产），这里不能再二次过滤
+        if self._spec(album_uuid) is not None:
+            include_deleted = True
+
         return self.get_asset_full_path(
             cover.uuid, include_deleted=include_deleted
         )
+
+    def _fallback_cover_asset(self, album_uuid) -> Optional[AssetDTO]:
+        """物理相册无显式封面时，取排序第一张（= 最新）。
+
+        虚拟相册已由 get_album_cover → get_cover_asset_by_scope 处理，
+        这里直接返回 None 避免重复。
+        """
+        if self._spec(album_uuid) is not None:
+            return None
+        rows = self._repo.list_assets(
+            self._as_uuid_str(album_uuid), offset=0, limit=1,
+        )
+        return rows[0] if rows else None
 
     # ==================================================================
     # 上/下一张定位

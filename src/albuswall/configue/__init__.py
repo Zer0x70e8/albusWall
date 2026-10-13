@@ -1,7 +1,8 @@
 #
 """"""
 
-from typing import TYPE_CHECKING, Generic, TypeVar
+from pathlib import Path
+from typing import TYPE_CHECKING, Generic, TypeVar, Optional
 
 from .configue import Configue
 from .utils import (
@@ -40,10 +41,18 @@ if TYPE_CHECKING:
                 default: T = ...,  # type: ignore[assignment]
         ) -> T: ...  # type: ignore[misc]
 
+
+    # noinspection pep8-naming,unused-parameter
+    def PathField(
+            *path: str,
+            default: Optional[Path | str] = None,
+    ) -> Optional[Path]: ...
+
 __all__ = [
     # config
     "Configue", "Namespace", "FrozenNamespace",
     "ConfigDeclaration", "ConfigField", "ConfigMeta", "get_config",
+    "PathField",
     # utils
     "get_user_config_dir", "get_user_data_dir",
     "setup_static_config", "setup_dynamic_config",
@@ -71,6 +80,9 @@ def __getattr__(name):
     if name == "ConfigDeclaration":
         from .declaration import ConfigDeclaration
         return ConfigDeclaration
+    if name == "PathField":
+        from .declaration import PathField
+        return PathField
     if name == "ConfigMeta":
         from .declaration import ConfigMeta
         return ConfigMeta

@@ -16,8 +16,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtGui import QPainter, QPixmap
-from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QApplication, QListView
 
 
 # noinspection pep8-naming
@@ -38,40 +38,48 @@ class SquareThumbDelegate(QStyledItemDelegate):
         self._size_hint = QSize(size)
 
     def sizeHint(self, option, index) -> QSize:
+        view = option.widget
+        if isinstance(view, QListView):
+            gs = view.gridSize()
+            if gs.isValid() and not gs.isEmpty():
+                return gs
         return self._size_hint
 
     # ---------- 主绘制流程 ----------
-    def paint(self, painter: QPainter,
-              option: QStyleOptionViewItem, index) -> None:
-        rect = option.rect
-        if rect.width() <= 0 or rect.height() <= 0:
+    def paint(self, painter, option, index):
+        pixmap = index.data(Qt.ItemDataRole.DecorationRole)
+        if pixmap is None or pixmap.isNull():
+            # 走默认 QSS 路径：QListView::item { background-image: url(...) }
+            style = option.widget.style() if option.widget else QApplication.style()
+            style.drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
+            # overlay 照旧
+            self._draw_overlay(painter, option.rect, option, index)
             return
 
-        side = min(rect.width(), rect.height())
-        target = QRect(
-            rect.x() + (rect.width() - side) // 2,
-            rect.y() + (rect.height() - side) // 2,
-            side, side,
+        # 有图，自己画
+        self._draw_frame(painter, option.rect, option)
+        self._draw_cover(painter, option.rect, pixmap)
+        self._draw_overlay(painter, option.rect, option, index)
+
+    @staticmethod
+    def _draw_cover(painter, target: QRect, pixmap) -> None:
+        # ---- 第二次缩放：从 512 的预缩图铺到 cell ----
+        scaled = pixmap.scaled(
+            target.size(),
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
         )
-
-        pixmap = index.data(self._decoration_role)
-        ready = isinstance(pixmap, QPixmap) and not pixmap.isNull()
-
-        painter.save()
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        if ready:
-            cropped = self.crop_square(pixmap, side)
-            self._draw_content(painter, target, cropped, option, index)
-        else:
-            self._draw_placeholder(painter, target, option, index)
-        painter.restore()
+        # 居中裁剪：source 矩形取 scaled 的中心 target.size() 区域
+        sx = (scaled.width() - target.width()) // 2
+        sy = (scaled.height() - target.height()) // 2
 
         painter.save()
-        self._draw_overlay(painter, target, option, index)
-        painter.restore()
-
-        painter.save()
-        self._draw_selection(painter, target, option, index)
+        painter.setClipRect(target)  # 溢出到隔壁格子的部分不画
+        painter.drawPixmap(
+            target,  # 目标矩形
+            scaled,  # 源图（已缩放到 >= target）
+            QRect(sx, sy, target.width(), target.height()),  # 源矩形（裁剪）
+        )
         painter.restore()
 
     # ---------- 工具 ----------
@@ -113,6 +121,9 @@ class SquareThumbDelegate(QStyledItemDelegate):
 
     def _draw_placeholder(self, painter, target, option, index) -> None:
         pass  # 想画占位就覆写
+
+    def _draw_frame(self, painter, target, option) -> None:
+        pass
 
     def _draw_overlay(self, painter, target, option, index) -> None:
         pass  # 标题 / 描述 / 徽标都从这进

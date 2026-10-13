@@ -64,6 +64,7 @@ from PySide6.QtCore import QObject
 
 from albuswall.services.view import SCOPE_DELETED
 
+from ..config.static import ThumbnailGridPresenterConfs
 from ..utils.signal_adapter import SignalAdapter
 
 if TYPE_CHECKING:
@@ -187,16 +188,24 @@ class PresenterManager(QObject):
 
     def _build_thumb_presenter(self) -> Optional["ThumbnailGridPresenter"]:
         w, c = self._window, self._container
-        return self._try_presenter(
+        confs = ThumbnailGridPresenterConfs()
+
+        p = self._try_presenter(
             "ThumbnailGridPresenter",
             lambda: _import(".image_presenter", "ThumbnailGridPresenter")(
                 w.content,
                 thumb_repo=c.require("thumbnail_repo"),
                 thumb_service=c.require("thumbnail_service"),
                 spec=_thumb_spec(),
+                view_repo=c.get("view_repo", None),
+                trash_retention_days=30,
             ),
             requires=("thumbnail_repo", "thumbnail_service"),
         )
+        if p is not None:
+            p.set_favorite_icon(confs.favorite_on_icon, checked=True)
+        return p
+
 
     def _build_ingest_presenter(self) -> Optional["IngestSourcePresenter"]:
         w, c = self._window, self._container

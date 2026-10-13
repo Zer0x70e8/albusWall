@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Dict, Sequence, Optional
 from albuswall.log import getLogger
 
 from .configue import Configue
+from .declaration import ConfigField
 from .utils import *
 from .utils.ini_parser import RawINIParser
 
@@ -23,6 +24,15 @@ if TYPE_CHECKING:
 
 _Missing = object()
 _logger = getLogger(f"{albuswall.__name__}.configue")
+
+
+# noinspection bad-assignment
+class _ConfigueConfig:
+    """配置器自己用自己"""
+    disable_type_check: bool = ConfigField("configue", "disable_type_check", default=False)
+
+
+_conf = _ConfigueConfig()
 
 
 # ── 阶段一：静态配置 ────────────────────────────────
@@ -64,6 +74,9 @@ def setup_static_config(container, config_file_path: Path) -> Configue:
         sum(1 for _ in config.resolver.nodes()),
         len(config.resolver.schema()),
     )
+    # check
+    if not _conf.disable_type_check:
+        config.resolver.check_all()
     return config
 
 

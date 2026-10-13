@@ -12,7 +12,7 @@ from PySide6.QtCore import (
     QObject, QRunnable, QThreadPool, Qt, Signal, Slot,
     QModelIndex, QMetaObject, Q_ARG,
 )
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QImage
 
 import albuswall
 from albuswall.log import TRACE, Logger
@@ -40,6 +40,8 @@ _DEFAULT_EXTRA_ICON = "more_button.svg"
 _DEFAULT_SEARCH_ICON = "search_button.svg"
 
 _ICON_DIR_CANDIDATES = ("icons", "cover", "imgs", "assets")
+
+_PREVIEW_EDGE = 512
 
 
 class _CoverJob(QRunnable):
@@ -293,24 +295,56 @@ class AlbumPresenter(QObject):
 
         def job() -> None:
             path = self._view_service.get_cover_full_path(album_uuid)
-            pm = QPixmap(str(path)) if path else QPixmap()
+            _logger.debug(
+                "cover path for album=%s -> %r",
+                album_uuid, path
+            )
+            img = QImage(str(path)) if path else QImage()
+
+            # ---- 第一次缩放：在后台线程完成 ----
+            if (
+                    not img.isNull() and
+                    (img.width() > _PREVIEW_EDGE or img.height() > _PREVIEW_EDGE)
+            ):
+                # 用 KeepAspectRatioByExpanding 保证短边 = _PREVIEW_EDGE，
+                # 长边 >= _PREVIEW_EDGE，这样 paint 里永远不需要放大。
+                img = img.scaled(
+                    _PREVIEW_EDGE, _PREVIEW_EDGE,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+
             QMetaObject.invokeMethod(
-                self, "_on_cover_ready",
+                self, "_on_cover_ready_image",
                 Qt.ConnectionType.QueuedConnection,
                 Q_ARG(str, str(album_uuid)),
-                Q_ARG(QPixmap, pm),
+                Q_ARG(QImage, img),
             )
 
         self._pool.start(_CoverJob(job))
 
-    @Slot(str, QPixmap)
-    def _on_cover_ready(self, uuid_str: str, pixmap: QPixmap) -> None:
-        """线程池回调：按 uuid 定位行，避免列表变动后 row 错位。"""
+    @Slot(str, QImage)
+    def _on_cover_ready_image(self, uuid_str: str, image: QImage) -> None:
         row = self._row_for_uuid(uuid_str)
         if row < 0:
-            _logger.trace("封面回填时找不到 uuid=%s（可能已被移除）", uuid_str)
             return
+        _logger.debug(
+            "cover ready uuid=%s row=%d imageNull=%s size=%s",
+            uuid_str, row, image.isNull(), image.size(),
+        )
+        pixmap = QPixmap.fromImage(image) if not image.isNull() else QPixmap()
         self._model.setPixmap(row, pixmap)
+
+    # @Slot(str, QPixmap)
+    # def _on_cover_ready(self, uuid_str: str, pixmap: QPixmap) -> None:
+    #     row = self._row_for_uuid(uuid_str)
+    #     if row < 0:
+    #         return
+    #     _logger.debug(
+    #         "cover ready uuid=%s row=%d isNull=%s size=%s",
+    #         uuid_str, row, pixmap.isNull(), pixmap.size(),
+    #     )
+    #     self._model.setPixmap(row, pixmap)
 
     def _row_for_uuid(self, uuid_str: str) -> int:
         for r in range(self._model.rowCount()):

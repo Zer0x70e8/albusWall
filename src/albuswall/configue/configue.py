@@ -153,7 +153,8 @@ class _SectionView:
 
 
 class StaticConfig(Namespace):
-    __slots__ = ("_resolver", "_views")  # 注意：Namespace 用 __dict__，加 slots 要小心
+    # 忘记了这个slots到底有没有用了，目前注释掉也没bug出现
+    # __slots__ = ("_resolver", "_views")  # 注意：Namespace 用 __dict__，加 slots 要小心
 
     def __init__(self, resolver):
         super().__init__()
@@ -169,17 +170,25 @@ class StaticConfig(Namespace):
             if view is None:
                 view = _SectionView(resolver, name)
                 views[name] = view
-            # 直接写 __dict__，绕过未来可能的只读检查
-            self.__dict__[name] = view
             return view
         # 顶级 key 懒加载
-        value = resolver.get_typed("__default__", name)
-        self.__dict__[name] = value  # 缓存
-        return value
+        try:
+            return resolver.get_typed("__default__", name)
+        except KeyError as e:
+            raise AttributeError(name) from e
 
     # noinspection method-overriding
     def __setattr__(self, name, value):
         raise AttributeError("StaticConfig is read-only; use _config.resolver.set(...)")
+
+    def items(self):
+        resolver = object.__getattribute__(self, "_resolver")
+        for sec in resolver.sections():
+            if sec == "__default__":
+                continue
+            yield sec, self.__getattr__(sec)
+        for key in resolver.keys_of("__default__"):
+            yield key, resolver.get_typed("__default__", key)
 
 
 # class StaticConfig:

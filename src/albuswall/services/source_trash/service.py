@@ -26,7 +26,7 @@ _logger: Logger = getLogger(__name__)
 
 class SourceTrashService:
     """源级回收站。配置与协作者全部由构造参数注入。"""
-    sources_changed = SignalDescriptor("sources_changed", cross_process=True)
+    sources_changed = SignalDescriptor("sources_changed")
 
     def __init__(
             self,

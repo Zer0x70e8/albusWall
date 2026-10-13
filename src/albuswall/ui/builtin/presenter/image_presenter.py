@@ -44,24 +44,42 @@ from __future__ import annotations
 import logging
 import os
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from PySide6.QtCore import QObject, QRect, Qt, Signal, Slot
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QImage, QPixmap, QIcon
 
 from albuswall.dto.thumbnail import ThumbSpec
 from albuswall.log import TRACE, Logger
 
 try:
     from ..widgets.virtual_scroll import VirtualScrollWidget
+    from ..delegate.virtual_scroll_info_delegate import InfoCellDelegate, InfoMode
 except ImportError:
     from albuswall.ui.builtin.widgets.virtual_scroll import VirtualScrollWidget
+    from albuswall.ui.builtin.delegate.virtual_scroll_info_delegate import (
+        InfoCellDelegate, InfoMode,
+    )
 
 __all__ = ["ThumbnailGridPresenter"]
 
 _MAX_ATTEMPTS = 3
 _logger: Logger = logging.getLogger(__name__)  # noqa
 _logger.trace = lambda msg, *args: _logger.log(TRACE, msg, *args)
+
+
+def _coerce_icon(src: QIcon | QPixmap | str | None) -> QIcon | None:
+    """路径 / QPixmap / QIcon → QIcon；空值返回 None。"""
+    if src is None:
+        return None
+    if isinstance(src, QIcon):
+        return src if not src.isNull() else None
+    if isinstance(src, QPixmap):
+        return None if src.isNull() else QIcon(src)
+    # 字符串：既支持 ":/..." 资源，也支持普通文件路径
+    icon = QIcon(str(src))
+    return icon if not icon.isNull() else None
 
 
 class ThumbnailGridPresenter(QObject):
@@ -90,6 +108,8 @@ class ThumbnailGridPresenter(QObject):
             spec: ThumbSpec = ThumbSpec.SMALL,
             max_workers: int = 4,
             parent: Optional[QObject] = None,
+            view_repo: Optional[Any] = None,  # ← 读 is_favorite / deleted_at
+            trash_retention_days: int = 30,  # ← 回收站保留天数
     ) -> None:
         super().__init__(parent)
 
@@ -100,10 +120,15 @@ class ThumbnailGridPresenter(QObject):
         self._repo = thumb_repo
         self._service = thumb_service
         self._spec = spec
+        self._view_repo = view_repo
+        self._trash_retention_days = max(0, int(trash_retention_days))
 
         # 每个 asset 的生成尝试计数；只在 submit 成功时清零，
         # 由 _MAX_ATTEMPTS 兜底终止循环。
         self._attempts: dict[str, int] = {}
+
+        # 按 uuid 缓存 (is_favorite, days)，set_assets 时整体丢弃。
+        self._info_cache: dict[str, tuple[Optional[bool], Optional[int]]] = {}
 
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers,
@@ -143,6 +168,13 @@ class ThumbnailGridPresenter(QObject):
         view.visible_range_changed.connect(self._on_visible_range_changed)
         view.cache_cleared.connect(self._on_cache_cleared)
         view.unit_clicked.connect(self._on_unit_clicked)
+        delegate = InfoCellDelegate(
+            pixmap_getter=lambda i: self._view.pixmap_cache.get(i),
+            mode=InfoMode.FAVORITE,
+            favorite_getter=self._favorite_at_index,
+            days_getter=self._days_at_index,
+        )
+        self._view.delegate = delegate
 
     # ------------------------------------------------------------------ #
     # 公开 API
@@ -151,7 +183,8 @@ class ThumbnailGridPresenter(QObject):
         ...
 
     def teardown(self):
-        ...
+        """释放线程池。幂等。"""
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
     def set_assets(
             self,
@@ -159,15 +192,6 @@ class ThumbnailGridPresenter(QObject):
             *,
             include_deleted: bool = False,
     ) -> None:
-        """重置数据源并滚回顶部，触发一次可见范围重新计算。
-
-        Args:
-            asset_uuids: 当前视图里的 asset uuid 列表（str / UUID 均可）。
-            include_deleted:
-                当前视图是否为 Trash（scope=deleted）。
-                True  —— 缺失缩略图时允许触发生成，生成侧 include_deleted=True。
-                False —— Active 视图，生成侧 include_deleted=False。
-        """
         uuids = [str(u) for u in asset_uuids]
         _logger.info(
             "set_assets called: n=%d, include_deleted=%s",
@@ -180,8 +204,13 @@ class ThumbnailGridPresenter(QObject):
         self._submitted.clear()
         self._visible_range = (0, -1)
 
-        self._view.reset_source(len(self._asset_uuids) - 1)
+        # 数据源换了 → 信息缓存整体丢弃
+        self._info_cache.clear()
 
+        # 按 scope 切换信息条模式：回收站→天数，其它→收藏
+        self._apply_info_mode_for_scope(include_deleted)
+
+        self._view.reset_source(len(self._asset_uuids) - 1)
         self._attempts.clear()
 
     def set_spec(self, spec: ThumbSpec) -> None:
@@ -195,9 +224,35 @@ class ThumbnailGridPresenter(QObject):
         self._view.clear_cache()
         self._view.refresh_visible_range()
 
-    def shutdown(self) -> None:
-        """释放线程池。幂等。"""
-        self._executor.shutdown(wait=False, cancel_futures=True)
+    def set_favorite_icon(
+            self,
+            icon: QIcon | QPixmap | str | None,
+            *,
+            checked: bool = True,
+    ) -> None:
+        """设置"收藏 / 未收藏"状态图标。
+
+        Args:
+            icon:    ``QIcon`` / ``QPixmap`` / 文件路径 / 资源路径（``":/..."``）；
+                     传 ``None`` 清除该状态图标（回退到文本，如 ``"★"``）。
+            checked: ``True`` 设置"已收藏"图标；``False`` 设置"未收藏"图标。
+        """
+        d = self._view.delegate
+        if not isinstance(d, InfoCellDelegate):
+            _logger.warning("delegate 不是 InfoCellDelegate，图标设置被忽略")
+            return
+        d.set_icon(_coerce_icon(icon), checked=checked)
+        self._view.update()
+
+    def set_favorite_icons(
+            self,
+            *,
+            on: QIcon | QPixmap | str | None = None,
+            off: QIcon | QPixmap | str | None = None,
+    ) -> None:
+        """一次性设置两个状态图标（``on``=已收藏，``off``=未收藏）。"""
+        self.set_favorite_icon(on, checked=True)
+        self.set_favorite_icon(off, checked=False)
 
     # ------------------------------------------------------------------ #
     # 槽：控件事件
@@ -295,8 +350,98 @@ class ThumbnailGridPresenter(QObject):
             self._start_load(index)
 
     # ------------------------------------------------------------------ #
+    # 内部：信息条（is_favorite / 剩余天数，读 view_repo）
+    # ------------------------------------------------------------------ #
+    def _uuid_at_index(self, index: int) -> Optional[str]:
+        if 0 <= index < len(self._asset_uuids):
+            return self._asset_uuids[index]
+        return None
+
+    def _favorite_at_index(self, index: int) -> Optional[bool]:
+        uuid = self._uuid_at_index(index)
+        if uuid is None:
+            return None
+        return self._info_for_uuid(uuid)[0]
+
+    def _days_at_index(self, index: int) -> Optional[int]:
+        uuid = self._uuid_at_index(index)
+        if uuid is None:
+            return None
+        return self._info_for_uuid(uuid)[1]
+
+    def _info_for_uuid(
+            self, asset_uuid: str
+    ) -> tuple[Optional[bool], Optional[int]]:
+        """返回 ``(is_favorite, remaining_days)``；缺失项为 ``None``。
+
+        每 uuid 只查一次 repo，paint 期间命中缓存。
+        """
+        cached = self._info_cache.get(asset_uuid)
+        if cached is not None:
+            return cached
+        info = self._fetch_info(asset_uuid)
+        self._info_cache[asset_uuid] = info
+        return info
+
+    def _fetch_info(
+            self, asset_uuid: str
+    ) -> tuple[Optional[bool], Optional[int]]:
+        if self._view_repo is None:
+            return None, None
+        try:
+            dto = self._view_repo.get_asset(asset_uuid, include_deleted=True)
+        except Exception:
+            _logger.exception(
+                "fetch asset info failed uuid=%s", asset_uuid,
+            )
+            return None, None
+        if dto is None:
+            return None, None
+
+        fav_val = getattr(dto, "is_favorite", None)
+        fav: Optional[bool] = None if fav_val is None else bool(fav_val)
+
+        days = self._remaining_days(getattr(dto, "deleted_at", None))
+        return fav, days
+
+    def _remaining_days(self, deleted_at: Any) -> Optional[int]:
+        """``deleted_at`` → 距回收站保留期到期的天数。
+
+        - ``deleted_at`` 为 ``None``（不在回收站） → ``None``；
+        - 已过期                                  → ``0``。
+        """
+        if deleted_at is None:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(deleted_at))
+        except (TypeError, ValueError):
+            _logger.debug("bad deleted_at: %r", deleted_at)
+            return None
+        if dt.tzinfo is None:
+            # SQLite strftime('%Y-%m-%dT%H:%M:%f','now') 产出的是 UTC 裸时间
+            dt = dt.replace(tzinfo=timezone.utc)
+
+        elapsed_days = (
+                               datetime.now(timezone.utc) - dt
+                       ).total_seconds() / 86400.0
+        remaining = self._trash_retention_days - elapsed_days
+        return max(0, int(remaining))
+
+    # ------------------------------------------------------------------ #
     # 内部：加载
     # ------------------------------------------------------------------ #
+    def _apply_info_mode_for_scope(self, include_deleted: bool) -> None:
+        """按当前视图 scope 切换信息条显示模式。
+
+        - Trash（include_deleted=True） → ``InfoMode.DAYS``
+        - 其它（Active 视图）           → ``InfoMode.FAVORITE``
+        """
+        d = self._view.delegate
+        if not isinstance(d, InfoCellDelegate):
+            return
+        d.mode = InfoMode.DAYS if include_deleted else InfoMode.FAVORITE
+        self._view.update()
+
     def _start_load(self, index: int) -> None:
         asset_uuid = self._asset_uuids[index]
         if asset_uuid in self._inflight:

@@ -81,11 +81,11 @@ class ConfigDeclaration:
     # ── 新增：给 bootstrap 注册内建字段用 ─────────
     @classmethod
     def add_builtin(
-        cls,
-        key: str,
-        path: Sequence[str],
-        default: Any,
-        typ: Any,
+            cls,
+            key: str,
+            path: Sequence[str],
+            default: Any,
+            typ: Any,
     ) -> None:
         cls._registry[key] = {
             "path": tuple(path),
@@ -142,27 +142,43 @@ class ConfigField(Generic[T]):
                 return decl_cls
         return self._declaration_cls
 
-    def __get__(self, instance, owner) -> T:
+    # def __get__(self, instance, owner) -> T:
+    #     if instance is None:
+    #         return cast(T, self)
+    #     if self._cached_exception is not None:
+    #         raise self._cached_exception
+    #     if self._cached_value is not _Missing:
+    #         return self._cached_value
+    #
+    #     resolver = get_config().resolver
+    #     section, key = self._split_path()
+    #     try:
+    #         value = resolver.get_typed(section, key)
+    #     except KeyError:
+    #         if self._default is not _Missing:
+    #             return self._default
+    #         exc = self._build_error()
+    #         self._cached_exception = exc
+    #         raise exc
+    #
+    #     self._cached_value = value
+    #     return value
+
+    def __get__(self, instance, owner):
         if instance is None:
             return cast(T, self)
         if self._cached_exception is not None:
             raise self._cached_exception
-        if self._cached_value is not _Missing:
-            return self._cached_value
-
         resolver = get_config().resolver
         section, key = self._split_path()
         try:
-            value = resolver.get_typed(section, key)
+            return resolver.get_typed(section, key)
         except KeyError:
             if self._default is not _Missing:
                 return self._default
             exc = self._build_error()
             self._cached_exception = exc
             raise exc
-
-        self._cached_value = value
-        return value
 
     def __set__(self, instance, value):
         resolver = get_config().resolver
@@ -198,6 +214,16 @@ class ConfigField(Generic[T]):
             path_str = ".".join(str(part) for part in self._path)
             raise ValueError(f"name '{path_str}' is not defined")
         return self._default
+
+
+class PathField(ConfigField[Optional[Path]]):
+    """只做 str -> Path 的转换，None 保持 None，不做任何存在性检查。"""
+
+    def __get__(self, instance, owner):
+        value = super().__get__(instance, owner)
+        if value is None or isinstance(value, Path):
+            return value
+        return Path(value)
 
 
 def build_type_map_and_defaults(declaration) -> tuple[dict, dict]:

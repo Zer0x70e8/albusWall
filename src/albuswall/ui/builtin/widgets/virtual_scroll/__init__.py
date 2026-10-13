@@ -1,5 +1,17 @@
 #
 """Virtual scroll widgets"""
 
-from .widget import VirtualScrollWidget
+from .delegate import CellDelegate, CellOption, PixmapCellDelegate
+from .basic import VirtualScrollWidget as VirtualScrollWidgetBasic
+from .styled import StyledVirtualScrollWidget
 
+VirtualScrollWidget = StyledVirtualScrollWidget
+
+__all__ = [
+    "StyledVirtualScrollWidget",
+    "VirtualScrollWidget",
+    "VirtualScrollWidgetBasic",
+    "CellDelegate",
+    "CellOption",
+    "PixmapCellDelegate",
+]

@@ -160,7 +160,7 @@ class Detail(BlurLabel):
 
         # 意图信号：视图只声明"被点了"，不含业务
         # favourite: clicked 携带 bool，直接透传作为"期望的新状态"
-        self.favourite_button.clicked.connect(
+        self.favourite_button.clicked[bool].connect(
             self.favorite_toggle_requested.emit
         )
         # trash: 依据当前 _is_deleted 路由到 trash / recover

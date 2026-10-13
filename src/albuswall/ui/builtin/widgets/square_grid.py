@@ -65,7 +65,6 @@ class SquareGridView(QListView):
         self.setSizePolicy(policy)
 
         super().setSpacing(self._spacing)
-        self._apply_grid()
 
     # ---------- 属性 ----------
     def ratio(self) -> float:
@@ -143,3 +142,7 @@ class SquareGridView(QListView):
 
     def minimumSizeHint(self) -> QSize:
         return self.sizeHint()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._apply_grid()

@@ -50,8 +50,8 @@ class AlbumModel(QAbstractListModel):
         entry = self._items[row]
         if role == AlbumRole.Uuid:
             return entry.uuid
-        if role == AlbumRole.Pixmap:
-            return entry.pixmap
+        if role in (AlbumRole.Pixmap, Qt.ItemDataRole.DecorationRole):
+            return entry.pixmap  # ← DecorationRole 也返回，标准 delegate 就能拿到
         return None
 
     # ---------- 便捷 API ----------
@@ -68,7 +68,10 @@ class AlbumModel(QAbstractListModel):
             return
         self._items[row].pixmap = pixmap
         idx = self.index(row, 0)
-        self.dataChanged.emit(idx, idx, [int(AlbumRole.Pixmap)])
+        self.dataChanged.emit(
+            idx, idx,
+            [int(AlbumRole.Pixmap), int(Qt.ItemDataRole.DecorationRole)],
+        )
 
     def uuid_at(self, row: int) -> str:
         if 0 <= row < len(self._items):

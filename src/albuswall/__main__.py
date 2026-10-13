@@ -104,6 +104,7 @@ def _boot(app: Application) -> None:
             "and debug information will be output. \n"
             "Note: This does not enable debug-level logging."
         )
+        _logger.debug(container.get("configue"))
         _logger.debug("Container: %s\n", container)
         _logger.debug(app.plugins)
 
