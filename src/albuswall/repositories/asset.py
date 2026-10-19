@@ -234,3 +234,121 @@ class AssetRepository(BaseRepository):
             (album_uuid, _s(asset_uuid)),
         )
         return cursor.rowcount
+
+    # ==================================================================
+    # 标签成员
+    # ==================================================================
+
+    def add_tag_to_asset(self, tag_uuid: str, asset_uuid: _UUIDLike) -> int:
+        """给资产打标签。
+
+        - 标签或资产不可见（is_deleted = 1）时不会写入；
+        - 已存在的绑定通过 INSERT OR IGNORE 跳过（天然幂等）；
+        - ``tag_uuid`` 必须指向 ``tags.uuid``（规范标签），**不得写别名**。
+        """
+        cursor = self._execute(
+            """
+            INSERT OR IGNORE INTO asset_tags (asset_id, tag_uuid)
+            SELECT a.id, t.uuid
+              FROM assets AS a
+              JOIN tags   AS t ON t.uuid = ?
+             WHERE a.uuid = ?
+               AND a.is_deleted = 0
+               AND t.is_deleted = 0
+            """,
+            (tag_uuid, _s(asset_uuid)),
+        )
+        return cursor.rowcount
+
+    def remove_from_tag(self, tag_uuid: str, asset_uuid: _UUIDLike) -> int:
+        """把资产从指定标签移除（标签不可见时不做任何事）。"""
+        cursor = self._execute(
+            """
+            DELETE FROM asset_tags
+             WHERE asset_id = (
+                       SELECT id FROM assets WHERE uuid = ?
+                   )
+               AND tag_uuid = (
+                       SELECT uuid FROM tags
+                        WHERE uuid = ?
+                          AND is_deleted = 0
+                   )
+            """,
+            (_s(asset_uuid), tag_uuid),
+        )
+        return cursor.rowcount
+
+    # ==================================================================
+    # 标签成员（批量）
+    # ==================================================================
+
+    def add_tags_to_asset(
+            self, asset_uuid: _UUIDLike, tag_uuids: Sequence[str]
+    ) -> int:
+        """批量给资产打标签。
+
+        - 资产或标签不可见（``is_deleted = 1``）时不会写入对应绑定；
+        - 已存在的绑定通过 ``INSERT OR IGNORE`` 跳过（天然幂等）；
+        - 入参先按出现顺序去重，避免同批重复 uuid 造成无谓扫描；
+        - 单事务提交，返回**实际新增**的绑定行数。
+        """
+        uuids = list(dict.fromkeys(tag_uuids))
+        if not uuids:
+            return 0
+
+        affected = 0
+        with self._transaction() as conn:
+            for start in range(0, len(uuids), _IN_CLAUSE_CHUNK):
+                chunk = uuids[start:start + _IN_CLAUSE_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                cursor = conn.execute(
+                    f"""
+                    INSERT OR IGNORE INTO asset_tags (asset_id, tag_uuid)
+                    SELECT a.id, t.uuid
+                      FROM assets AS a
+                      JOIN tags   AS t
+                        ON t.uuid IN ({placeholders})
+                       AND t.is_deleted = 0
+                     WHERE a.uuid = ?
+                       AND a.is_deleted = 0
+                    """,
+                    (*chunk, _s(asset_uuid)),
+                )
+                affected += cursor.rowcount
+        return affected
+
+    def remove_tags_from_asset(
+            self, asset_uuid: _UUIDLike, tag_uuids: Sequence[str]
+    ) -> int:
+        """批量移除资产上的标签绑定。
+
+        - 与 ``remove_from_tag`` 保持一致：仅移除 ``tags.is_deleted = 0``
+          的标签绑定；软删标签的绑定保留，标签恢复后即可重现；
+        - 资产不存在时自然 0 行；
+        - 入参去重后单事务提交，返回**实际删除**的绑定行数。
+        """
+        uuids = list(dict.fromkeys(tag_uuids))
+        if not uuids:
+            return 0
+
+        affected = 0
+        with self._transaction() as conn:
+            for start in range(0, len(uuids), _IN_CLAUSE_CHUNK):
+                chunk = uuids[start:start + _IN_CLAUSE_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                cursor = conn.execute(
+                    f"""
+                    DELETE FROM asset_tags
+                     WHERE asset_id = (
+                               SELECT id FROM assets WHERE uuid = ?
+                           )
+                       AND tag_uuid IN (
+                               SELECT uuid FROM tags
+                                WHERE uuid IN ({placeholders})
+                                  AND is_deleted = 0
+                           )
+                    """,
+                    (_s(asset_uuid), *chunk),
+                )
+                affected += cursor.rowcount
+        return affected

@@ -7,8 +7,10 @@ from albuswall.log import getLogger
 from albuswall.core import Container, Application
 from albuswall.utils.registry import register_all, build_getters
 from albuswall.utils.signals import Signal
+from .asset_tag import AssetTagService
 
 from .source import SourceService
+from .tag import TagService
 from .trigger_sync import TriggerSyncService
 from .thumbnail import ThumbnailService
 from .view import ViewService
@@ -20,7 +22,7 @@ from .source_trash import (
     install_source_trash_lifecycle
 )
 
-logger =getLogger(__package__)
+logger = getLogger(__package__)
 
 
 # ---------- 类型表：唯一事实来源 ----------
@@ -34,6 +36,8 @@ class Services(TypedDict):
     trash_cleanup_scheduler: TrashCleanupScheduler
     xdg_thumbnail_cleaner: XdgThumbnailCleaner
     source_trash_service: SourceTrashService
+    tag_service: TagService
+    asset_tag_service: AssetTagService
 
 
 # ---------- 构建表：声明每个服务"怎么造" ----------
@@ -80,6 +84,14 @@ _ARG_MAP: Dict[str, Callable[[Any, Container], Any]] = {
         c.get("thumbnail_repo"),
         c.get("reconciler"),
         load_source_trash_config(),
+    ),
+    "tag_service": lambda t, c: t(
+        c.get("tag_repo"),
+    ),
+    "asset_tag_service": lambda t, c: t(
+        c.get("asset_repo"),
+        c.get("tag_repo"),
+        c.get("view_repo"),
     ),
 }
 

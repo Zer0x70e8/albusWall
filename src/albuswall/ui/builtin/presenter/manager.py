@@ -76,6 +76,8 @@ if TYPE_CHECKING:
     from .source_presenter import IngestSourcePresenter
     from .viewer_presenter import ViewerPresenter
     from .window_presenter import WindowPresenter
+    from .tagbar_presenter import TagBarPresenter
+    from .tag_editor_presenter import TagEditorPresenter
 
 _logger = getLogger(__name__)
 
@@ -150,6 +152,12 @@ class PresenterManager(QObject):
         self.thumb_presenter: Optional["ThumbnailGridPresenter"] = None
         self.ingest_presenter: Optional["IngestSourcePresenter"] = None
         self.viewer_presenter: Optional["ViewerPresenter"] = None
+        self.tagbar_presenter: Optional["TagBarPresenter"] = None
+        self.tag_editor_presenter: Optional["TagEditorPresenter"] = None
+
+        # 新增：当前"标签作用于哪个资产"
+        self._active_asset_uuid: str | None = None
+        self._detail_visible: bool = False
 
     # ------------------------------------------------------------------ #
     # build
@@ -167,6 +175,8 @@ class PresenterManager(QObject):
         self.thumb_presenter = self._build_thumb_presenter()
         self.ingest_presenter = self._build_ingest_presenter()
         self.viewer_presenter = self._build_viewer_presenter()
+        self.tagbar_presenter = self._build_tagbar_presenter()
+        self.tag_editor_presenter = self._build_tag_editor_presenter()
 
     def _build_window_presenter(self) -> Optional["WindowPresenter"]:
         w = self._window
@@ -206,7 +216,6 @@ class PresenterManager(QObject):
             p.set_favorite_icon(confs.favorite_on_icon, checked=True)
         return p
 
-
     def _build_ingest_presenter(self) -> Optional["IngestSourcePresenter"]:
         w, c = self._window, self._container
         return self._try_presenter(
@@ -232,6 +241,32 @@ class PresenterManager(QObject):
             requires=("view_service",),
         )
 
+    def _build_tagbar_presenter(self) -> Optional["TagBarPresenter"]:
+        w, c = self._window, self._container
+        return self._try_presenter(
+            "TagBarPresenter",
+            lambda: _import(".tagbar_presenter", "TagBarPresenter")(
+                w.detail.tag_bar,  # ← 改这里
+                tag_service=c.require("tag_service"),
+                asset_tag_service=c.require("asset_tag_service"),
+                current_asset_provider=self._current_asset_for_tags,
+                parent=self,
+            ),
+            requires=("tag_service", "asset_tag_service"),
+        )
+
+    def _build_tag_editor_presenter(self) -> Optional["TagEditorPresenter"]:
+        w, c = self._window, self._container
+        return self._try_presenter(
+            "TagEditorPresenter",
+            lambda: _import(".tag_editor_presenter", "TagEditorPresenter")(
+                c.require("tag_service"),
+                parent_widget=w,
+                parent=self,
+            ),
+            requires=("tag_service",),
+        )
+
     def _try_presenter(
             self,
             name: str,
@@ -244,7 +279,13 @@ class PresenterManager(QObject):
         依赖缺失 / 构造异常时记录日志、返回 None，不影响其它 presenter。
         成功时把实例加入 ``_presenters`` 并返回。
         """
-        missing = [k for k in requires if self._container.get(k, None) is None]
+        try:
+            missing = [k for k in requires if self._container.get(k, None) is None]
+        except Exception:
+            _logger.exception(
+                "%s skipped: dependency resolution failed", name,
+            )
+            return None
         if missing:
             _logger.warning("%s skipped: missing %s", name, missing)
             return None
@@ -263,6 +304,53 @@ class PresenterManager(QObject):
         self._wire_presenter_signals()
         self._wire_viewer_view_signals()
         self._wire_grid_refresh_signals()
+        self._wire_tag_signals()
+
+    def _wire_tag_signals(self) -> None:
+        """tagbar ↔ grid / viewer 的接线。
+
+        单向原则：
+            · 数据变更（tag 绑定 / 元数据）→ 触发 refresh，不直接改 UI 状态；
+            · 用户动作（tag 点击）→ 走一层 manager 槽再分发，不让 tagbar 直连 grid。
+
+        tag 相关连接全部同线程直连（queued=False，默认），因为 tag 操作
+        都在 UI 线程发起、也在 UI 线程写库（repo 层同步）。后台触发的
+        写操作（如果有）另加 queued=True。
+        """
+        if self.tagbar_presenter is not None:
+            self._adapter.connect(
+                self.tagbar_presenter.tags_changed,
+                self._on_tags_changed,
+            )
+            self._adapter.connect(
+                self.tagbar_presenter.tag_activated,
+                self._on_tag_activated,
+            )
+            self._adapter.connect(
+                self.tagbar_presenter.error_occurred,
+                self._on_tag_error,
+            )
+
+        if self.tag_editor_presenter is not None:
+            self._adapter.connect(
+                self.tag_editor_presenter.changed,
+                self._on_tag_metadata_changed,
+            )
+            self._adapter.connect(
+                self.tag_editor_presenter.error_occurred,
+                self._on_tag_error,
+            )
+
+        # grid 选中 → tagbar 刷新（如果 grid 暴露了 selection_changed）
+        if self.thumb_presenter is not None:
+            sel = getattr(self.thumb_presenter, "selection_changed", None)
+            if sel is not None:
+                self._adapter.connect(sel, self._on_selection_changed)
+            else:
+                _logger.warning(
+                    "thumb_presenter has no selection_changed; "
+                    "tagbar will not auto-refresh on selection."
+                )
 
     def _wire_presenter_signals(self) -> None:
         """presenter ↔ presenter 之间的信号（同线程直连）。"""
@@ -354,6 +442,8 @@ class PresenterManager(QObject):
         入参是本批变化的资产 uuid 列表；本槽只关心"有变化"这一事实。
         """
         self._refresh_grid()
+        if self.tagbar_presenter is not None:
+            self.tagbar_presenter.refresh()
 
     def _refresh_grid(self) -> None:
         if self.album_presenter is None:
@@ -399,15 +489,21 @@ class PresenterManager(QObject):
             return
         if self.window_presenter is not None:
             self.window_presenter.show_detail()
+        self._active_asset_uuid = str(asset_uuid)
+        self._detail_visible = True
+        if self.tagbar_presenter is not None:
+            self.tagbar_presenter.refresh()
         if not ok:
             _logger.info(
                 "viewer opened with placeholder (asset=%s)", asset_uuid,
             )
 
     def _on_detail_navigate(self, asset_uuid: str) -> None:
-        if self.viewer_presenter is None:
-            return
-        self.viewer_presenter.navigate(asset_uuid)
+        self._active_asset_uuid = str(asset_uuid)
+        if self.viewer_presenter is not None:
+            self.viewer_presenter.navigate(asset_uuid)
+        if self.tagbar_presenter is not None:
+            self.tagbar_presenter.refresh()
 
     def _on_detail_close_requested(self) -> None:
         self._close_viewer()
@@ -419,6 +515,85 @@ class PresenterManager(QObject):
             self.viewer_presenter.teardown()
         self._window.detail.refresh()
         self._refresh_grid()
+        self._detail_visible = False
+        # 关详情后由 grid 选中决定标签作用域
+        if self.thumb_presenter is not None:
+            getter = getattr(self.thumb_presenter, "current_asset_uuid", None)
+            try:
+                self._active_asset_uuid = (
+                    str(getter()) if callable(getter) and getter() else None
+                )
+            except Exception:
+                _logger.exception("current_asset_uuid failed during close")
+                self._active_asset_uuid = None
+        else:
+            self._active_asset_uuid = None
+        if self.tagbar_presenter is not None:
+            self.tagbar_presenter.refresh()
+
+    def _on_selection_changed(self, asset_uuid: str) -> None:
+        if self._detail_visible:
+            return
+        self._active_asset_uuid = str(asset_uuid) if asset_uuid else None
+        if self.tagbar_presenter is not None:
+            self.tagbar_presenter.refresh()
+
+    def _current_asset_for_tags(self) -> str | None:
+        """TagBar 的"作用于哪个资产"来源。
+
+        优先级：
+            1) 详情打开 → 详情当前资产；
+            2) 详情关闭 → grid 当前选中。
+        由 manager 集中维护，避免 tagbar 反向依赖 viewer 或 grid。
+        """
+        return self._active_asset_uuid
+
+    # ---------------- tag ----------------
+
+    def _on_tags_changed(self) -> None:
+        """资产上的标签绑定变更（新建 / 添加 / 移除）。
+
+        只需要刷 tagbar 自身；grid 的资产集合没变，不用刷 grid。
+        如果详情打开且看的是同一资产，详情侧栏的标签 chip 也应刷新——
+        那由 viewer_presenter 自己的 assets_changed 路径负责，manager 不重复。
+        """
+        if self.tagbar_presenter is not None:
+            self.tagbar_presenter.refresh()
+
+    def _on_tag_metadata_changed(self) -> None:
+        """标签元数据变更（create / rename / delete / restore）。
+
+        影响两处：
+            · tagbar 的 chip（display_name 变了要重绘）；
+            · tagbar 的 layer tree（结构可能变了）。
+        """
+        if self.tagbar_presenter is not None:
+            self.tagbar_presenter.refresh()
+            self.tagbar_presenter.refresh_tree()
+
+    def _on_tag_activated(self, tag_uuid: str) -> None:
+        """用户点击 chip 或树节点 → 按标签筛选。
+
+        TODO(P2): 切到 "tag 虚拟相册"。
+            · 短期：只记录日志，等虚拟相册功能上线；
+            · 中期：如果 album_presenter 支持虚拟 album，调
+              ``self.album_presenter.select_virtual(f"tag:{tag_uuid}")``；
+            · 长期：虚拟相册与物理相簿统一为 ``Album`` DTO，
+              tag 只是 ``album_type == "tag"`` 的一种。
+        """
+        _logger.info(
+            "tag activated: %s (tag-virtual album not implemented yet)",
+            tag_uuid,
+        )
+
+    def _on_tag_error(self, message: str) -> None:
+        """tag 业务错误 → 弹提示。"""
+        w = self._window
+        toast = getattr(w, "show_toast", None)
+        if callable(toast):
+            toast(message)
+        else:
+            _logger.warning("tag error (no toast available): %s", message)
 
     # ---- scope helpers ----
 
@@ -475,6 +650,8 @@ class PresenterManager(QObject):
                 _logger.exception(
                     "presenter %s.setup failed", type(p).__name__,
                 )
+        if self.tagbar_presenter is not None:
+            self.tagbar_presenter.refresh()
 
     def teardown(self) -> None:
         """断开所有 adapter 连接并逆序 teardown presenter。"""

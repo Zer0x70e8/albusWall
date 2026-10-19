@@ -118,11 +118,11 @@ class ViewService:
             return self._repo.get_album(self._as_uuid_str(album_uuid))
         cover = self._repo.get_cover_asset_by_scope(spec.scope)
         return Album(
-            id=spec.sentinel_id,
+            # id=spec.sentinel_id,
             uuid=UUID(self._as_uuid_str(album_uuid)),
             title=spec.title,
             description=spec.description,
-            cover=UUID(cover.uuid) if cover else None,
+            cover=cover.uuid if cover else None,
             type=0,
             created_at=_MODULE_STARTED_AT,
             modified_at=_MODULE_STARTED_AT,

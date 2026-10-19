@@ -4,16 +4,19 @@
 import datetime
 import json
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import Optional, List, Dict, Any
 
 from albuswall.common.enums import UpdateMode
+
+from .utils import normal
+from .utils.normal import to_json
 
 
 @dataclass
 class DeviceTrigger:
     """设备触发器配置"""
-    id: Optional[int] = None  # 添加默认值
+    id: Optional[int] = None
     enabled: bool = False
     target: Optional[str] = None  # 目标设备标识，例如设备路径或设备 ID
 
@@ -21,7 +24,7 @@ class DeviceTrigger:
 @dataclass
 class ScheduledTrigger:
     """计划触发器配置"""
-    id: Optional[int] = None  # 添加默认值
+    id: Optional[int] = None
     enabled: bool = False
     time: Optional[str] = None  # 当更新模式为 scheduled_time 时使用，格式 "HH:MM"
     interval: Optional[str] = None  # 当更新模式为 interval_time 时使用，格式如 "12h"、"30m"、"1d"
@@ -64,14 +67,23 @@ class ScheduledTrigger:
 
 @dataclass
 class TriggerConfig:
-    """总触发配置，对应 trigger_config 字段（嵌套结构）"""
-    id: Optional[int] = None
-    update_mode: List[UpdateMode] | None = None  # 可同时选择多种模式，默认为空列表
-    device_trigger: DeviceTrigger | None = None
-    scheduled: ScheduledTrigger | None = None
+    """总触发配置，对应 trigger_config 字段（嵌套结构）。
 
+    字段类型刻意写非 ``Optional``：这些字段在语义上"永远有值"，
+    由 ``default_factory`` 提供默认实例；``__post_init__`` 里的
+    ``is None`` 分支只是防御动态构造（``TriggerConfig(update_mode=None)``）
+    绕过默认工厂，不参与类型收窄，故不写进注解。
+    """
+    id: Optional[int] = None
+    update_mode: List[UpdateMode] = field(default_factory=lambda: [UpdateMode.MANUAL])
+    device_trigger: DeviceTrigger = field(default_factory=DeviceTrigger)
+    scheduled: ScheduledTrigger = field(default_factory=ScheduledTrigger)
+
+    # noinspection unreachable-code
     def __post_init__(self):
-        # 确保复杂字段有默认实例，避免 None 引发错误
+        # 防御性兜底：外部显式传 None 时（绕过 default_factory）回落到默认实例。
+        # 对类型检查器而言这些分支"不可能命中"（字段非 Optional），保留是为了
+        # 接住 ``TriggerConfig(update_mode=None)`` 这类动态调用。
         if self.update_mode is None:
             self.update_mode = [UpdateMode.MANUAL]
         if self.device_trigger is None:
@@ -99,24 +111,24 @@ class TriggerConfig:
         return not (has_device_trigger or has_scheduled_trigger)
 
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典，枚举值转为字符串以便 JSON 序列化"""
-        # asdict 会递归包含所有字段，包括 id
+        """转换为字典，保留 ``id`` 与 ``update_mode`` 的 ``Enum`` 原样。
+
+        契约（见 ``CONVENTIONS.md`` · TriggerConfig.to_dict）：
+        * ``id`` 保留；
+        * ``update_mode`` 保持 ``Enum`` 原样，不转 ``.value``；
+        * 存储形态**不**走本方法，走 ``IngestSourceFormData.to_trigger_config()``。
+          运行时视图与存储视图职责分离，运行时字段不污染存储。
+        """
         return {
             "id": self.id,
-            "update_mode": [mode.value for mode in self._normal(self.update_mode, list)],
-            "device_trigger": asdict(self._normal(self.device_trigger, dict)),
-            "scheduled": asdict(self._normal(self.scheduled, dict)),
+            "update_mode": list(normal(self.update_mode, list)),
+            "device_trigger": asdict(normal(self.device_trigger, DeviceTrigger)),
+            "scheduled": asdict(normal(self.scheduled, ScheduledTrigger)),
         }
 
-    @staticmethod
-    def _normal(v, t):
-        if v is None:
-            v = t()
-        return v
-
     def to_json(self) -> str:
-        """转换为 JSON 字符串"""
-        return json.dumps(self.to_dict(), ensure_ascii=False)
+        """转换为 JSON 字符串；``Enum`` 成员由 ``to_json`` 兜底转 ``value``。"""
+        return to_json(self)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TriggerConfig":

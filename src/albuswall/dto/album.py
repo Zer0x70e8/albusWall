@@ -4,24 +4,31 @@
 from __future__ import annotations
 
 import json
+from sqlite3 import Row
 from dataclasses import dataclass, asdict
 from typing import Any, Optional
 from uuid import UUID
 
+from .utils import to_uuid
 
-@dataclass
+__all__ = ["Album", "AssetDTO"]
+
+
+@dataclass(frozen=True, slots=True)
 class Album:
-    id: int
+    """db中拿的，db作为源头需要信任，所以不能修改。"""
+    # id: int
     uuid: UUID
     title: str
-    description: str
-    cover: Optional[UUID]  # cover asset id
-    type: int
-    created_at: str
-    modified_at: str
+    # 契约：Album.description 默认空字符串，不用 Optional[str]
+    description: str = ""
+    cover: Optional[UUID] = None  # cover asset id
+    type: int = 0
+    created_at: str = ""
+    modified_at: str = ""
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class AssetDTO:
     """资产 DTO，对应 assets 表；不包含软删除等内部字段。
 
@@ -45,15 +52,14 @@ class AssetDTO:
     """
 
     # 必填业务字段
-    uuid: str
+    # 契约：对外字段统一为 UUID；str→UUID 收敛在 from_row
+    # id: Optional[int] = None  # 排序用
+    uuid: UUID
     file_path: str
     original_name: str
     mime_type: str
     file_hash: str
-
-    # 可选 / 默认字段
-    # id: Optional[int] = None  # 内部资产入库逻辑
-    source_id: int = -1
+    source_id: int
 
     # NOTE: 职责问题，外部自己转化 enum
     # （thumb_path = 绝对 base；thumb_<spec>_path = 相对文件名）
@@ -81,8 +87,12 @@ class AssetDTO:
     modified_at: Optional[str] = None
 
     @classmethod
-    def from_row(cls, row: Any) -> "AssetDTO":
-        """从 sqlite3.Row、dict 或 Mapping 构造 DTO。"""
+    def from_row(cls, row: Row) -> "AssetDTO":
+        """从 ``sqlite3.Row`` 构造 DTO。
+
+        契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。
+        内部仍转为 ``dict`` 以保留轻查询缺列容错（部分 SELECT 只挑列）。
+        """
         data = dict(row)
 
         exif = None
@@ -96,7 +106,7 @@ class AssetDTO:
 
         return cls(
             # id=data.get("id"),
-            uuid=data["uuid"],
+            uuid=to_uuid(data["uuid"]),
             file_path=data["file_path"],
             source_id=data.get("source_id", -1),
             # legacy, 请改用 ThumbnailRepository/ThumbnailPaths
@@ -122,4 +132,8 @@ class AssetDTO:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """浅转换：只变 dict，``UUID`` / ``Enum`` 原样保留。
+
+        契约：``to_dict`` 面向日志/调试，不承担 json 序列化责任。
+        """
         return asdict(self)

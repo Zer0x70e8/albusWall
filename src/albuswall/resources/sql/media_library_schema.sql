@@ -8,7 +8,7 @@
 --   - 所有 JSON 字段均为 TEXT，存储序列化后的 JSON 字符串
 --   - 除 created_at / modified_at 外，业务可写字段均由应用层维护
 --
--- 路径语义（重要）：
+-- 路径语义：
 --   - ingest_source.source_path：源目录的绝对路径；id=0 的特殊源为空串
 --   - assets.file_path         ：相对路径
 --       · source_id = 0：POSIX 相对 '/'，如 "home/user/a.jpg"
@@ -18,6 +18,15 @@
 --   - assets.thumb_*_path      ：**相对 thumb_path** 的 spec 文件名/子路径
 --       完整路径 = thumb_path.rstrip('/') + '/' + thumb_<spec>_path
 --   - asset_candidate_cache.path：相对路径，相对 ingest_source.source_path
+--
+-- 标签语义：
+--   - 标签是一等实体，拥有稳定的 uuid；资产绑定标签 uuid，而不是路径
+--   - tags 表维护规范标签树；parent_id 为 NULL 表示根节点
+--   - tag_aliases 只用于路径解析（软链接/别名），不参与资产绑定；
+--     解析路径时若命中 alias，则跳到 target_tag_uuid 指向的规范标签
+--   - asset_tags.tag_uuid 必须指向 tags.uuid（规范标签），不能写 alias
+--   - 「叶子」是动态状态（当前无子节点），不是标签类型；
+--     所有规范标签都可以绑定资产，不限于叶子
 -- =============================================================================
 
 -- 启用 WAL 模式（持久化，仅需执行一次；重复执行无害）
@@ -55,7 +64,7 @@ CREATE TABLE IF NOT EXISTS ingest_source (
     CONSTRAINT chk_file_type_check CHECK (file_type_check IN ('suffix', 'magic')),
     CONSTRAINT chk_auto_mount_bool CHECK (auto_mount IN (0,1)),
     CONSTRAINT chk_subfolder_recursion_bool CHECK (subfolder_recursion IN (0,1)),
-    CONSTRAINT chk_ingest_source_disabled_bool CHECK (disabled IN (0,1))
+    CONSTRAINT chk_ingest_source_disabled_bool CHECK (disabled IN (0,1)),
     CONSTRAINT chk_ingest_source_deleted_bool CHECK (is_deleted IN (0,1))
 );
 
@@ -169,7 +178,97 @@ CREATE TABLE IF NOT EXISTS album_assets (
 );
 
 -- -----------------------------------------------------------------------------
--- 5. 资产候选缓存表（存放待二次处理的文件，处理完成后可清理）
+-- 5. 垃圾箱清理状态表（单例，id 恒为 1）
+--    语义：全库唯一的清理水位线，用于缓解系统时钟被篡改的破坏。
+--      - last_observed_at       ：见过的最大挂钟时间，只增不减；
+--                                 时钟回拨时以它作为"现在"的兜底
+--      - last_cleanup_at        ：上次清理完成的挂钟时间（观察用）
+--      - last_cleanup_deleted   ：上次清理物理删除的资产数（观察用）
+--      - suspicious_clock_jumps ：检测到的可疑时钟跳变累计次数
+--    单例约束由 CHECK (id = 1) 保证；行由下面的 INSERT OR IGNORE 初始化。
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS trash_state (
+    id                     INTEGER PRIMARY KEY CHECK (id = 1),
+    last_observed_at       TEXT    NOT NULL,
+    last_cleanup_at        TEXT,
+    last_cleanup_deleted   INTEGER NOT NULL DEFAULT 0,
+    suspicious_clock_jumps INTEGER NOT NULL DEFAULT 0
+);
+
+-- 单例初始化，幂等
+INSERT OR IGNORE INTO trash_state (id, last_observed_at)
+VALUES (1, strftime('%Y-%m-%dT%H:%M:%f','now'));
+
+-- -----------------------------------------------------------------------------
+-- 6. 标签表（规范标签树）
+--    语义：
+--      - 每个标签拥有稳定的 uuid，资产绑定的是 uuid，而不是路径
+--      - parent_id 为 NULL 表示根节点；树形结构由 parent_id 维护
+--      - norm_name 为归一化名称（如 lower + unicode normalize），用于同层去重
+--      - 「叶子」为动态状态（当前无子节点），不在此表内标记；
+--         所有规范标签都可以绑定资产，不限于叶子
+--      - 软删除约定：is_deleted=1 表示逻辑删除，deleted_at 记录删除时间
+--      - 唯一约束：同一父节点下 norm_name 唯一（仅约束未删除行）
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS tags (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid         TEXT    NOT NULL UNIQUE,           -- 全局唯一标识，资产绑定用
+    parent_id    INTEGER REFERENCES tags(id) ON DELETE RESTRICT,  -- 父标签；NULL 为根
+    name         TEXT    NOT NULL,                  -- 路径段名，如 "鹈鹕"
+    norm_name TEXT NOT NULL,                        -- 归一化名，用于同层唯一
+    display_name TEXT,                              -- 展示名，可空；为空时应用层回退到 name
+    description  TEXT,                              -- 备注，可空
+    sort_order   INTEGER NOT NULL DEFAULT 0,        -- 排序权重，越小越靠前
+    is_deleted   INTEGER NOT NULL DEFAULT 0,        -- 0/1 布尔：软删除
+    deleted_at   TEXT,                              -- 软删除时间；is_deleted=0 时为 NULL
+    created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+    modified_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+    CONSTRAINT chk_tags_deleted_bool CHECK (is_deleted IN (0,1))
+);
+
+-- -----------------------------------------------------------------------------
+-- 7. 标签别名 / 软链接表
+--    语义：
+--      - 别名拥有自己的路径段名（如 "游戏A.link"），仅用于路径解析
+--      - 解析路径命中别名时，跳到 target_tag_uuid 指向的规范标签
+--      - 别名不参与资产绑定；asset_tags.tag_uuid 必须指向 tags.uuid
+--      - 应用层需保证：
+--          · 禁止别名循环（A → B → A）
+--          · 别名最好直接指向规范标签，不要指向别名
+--          · 别名不建议有子节点（若允许，需定义跳转后拼接路径的规则）
+--      - 唯一约束：同一父标签下 norm_name 唯一
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS tag_aliases (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid            TEXT    NOT NULL UNIQUE,           -- 全局唯一标识
+    parent_tag_id   INTEGER REFERENCES tags(id) ON DELETE CASCADE,  -- 挂载的父标签；NULL 表示根
+    name            TEXT    NOT NULL,                  -- 路径段名，如 "游戏A.link"
+    norm_name       TEXT    NOT NULL,                  -- 归一化名，用于同层唯一
+    target_tag_uuid TEXT    NOT NULL,                  -- 指向的规范标签 uuid
+    created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+    modified_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+    FOREIGN KEY (target_tag_uuid) REFERENCES tags(uuid) ON DELETE CASCADE
+);
+
+-- -----------------------------------------------------------------------------
+-- 8. 资产-标签关联表（多对多）
+--    语义：
+--      - 资产绑定的 tag_uuid 必须指向 tags.uuid（规范标签），不能写别名
+--      - 一个资产可绑定多个标签；一个标签可被多个资产绑定
+--      - 删除资产 / 删除标签时，关联行级联清除
+--      - 路径解析（含别名跳转）由应用层完成后，再写入规范 tag_uuid
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS asset_tags (
+    asset_id   INTEGER NOT NULL,               -- 关联资产
+    tag_uuid   TEXT    NOT NULL,               -- 关联规范标签 uuid（tags.uuid）
+    created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),  -- 绑定时间
+    PRIMARY KEY (asset_id, tag_uuid),
+    FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_uuid) REFERENCES tags(uuid) ON DELETE CASCADE
+);
+
+-- -----------------------------------------------------------------------------
+-- 9. 资产候选缓存表（存放待二次处理的文件，处理完成后可清理）
 --    语义：
 --      - path  为相对路径，相对于 ingest_source.source_path
 --      - uuid  为候选资产的唯一标识，与 assets.uuid 无关联
@@ -191,27 +290,6 @@ CREATE TABLE IF NOT EXISTS asset_candidate_cache (
     ),
     FOREIGN KEY (source_id) REFERENCES ingest_source(id) ON DELETE CASCADE
 );
--- -----------------------------------------------------------------------------
--- 6. 垃圾箱清理状态表（单例，id 恒为 1）
---    语义：全库唯一的清理水位线，用于缓解系统时钟被篡改的破坏。
---      - last_observed_at       ：见过的最大挂钟时间，只增不减；
---                                 时钟回拨时以它作为"现在"的兜底
---      - last_cleanup_at        ：上次清理完成的挂钟时间（观察用）
---      - last_cleanup_deleted   ：上次清理物理删除的资产数（观察用）
---      - suspicious_clock_jumps ：检测到的可疑时钟跳变累计次数
---    单例约束由 CHECK (id = 1) 保证；行由下面的 INSERT OR IGNORE 初始化。
--- -----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS trash_state (
-    id                     INTEGER PRIMARY KEY CHECK (id = 1),
-    last_observed_at       TEXT    NOT NULL,
-    last_cleanup_at        TEXT,
-    last_cleanup_deleted   INTEGER NOT NULL DEFAULT 0,
-    suspicious_clock_jumps INTEGER NOT NULL DEFAULT 0
-);
-
--- 单例初始化，幂等
-INSERT OR IGNORE INTO trash_state (id, last_observed_at)
-VALUES (1, strftime('%Y-%m-%dT%H:%M:%f','now'));
 
 -- =============================================================================
 -- 索引 —— 覆盖所有常用查询与排序，确保大数据量下的性能
@@ -286,6 +364,41 @@ CREATE INDEX IF NOT EXISTS idx_ingest_source_deleted
     ON ingest_source(deleted_at DESC, id DESC)
     WHERE is_deleted = 1;
 
+-- tags：
+--   同层唯一约束（仅约束未删除行）；SQLite 中 NULL 在 UNIQUE 里互不冲突，
+--   用 COALESCE(parent_id, 0) 让根节点（parent_id IS NULL）也参与唯一性
+--   （id 从 1 起自增，0 可安全作为哨兵）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_parent_norm_uq
+    ON tags(COALESCE(parent_id, 0), norm_name)
+    WHERE is_deleted = 0;
+
+--   按父节点枚举子节点（树遍历主路径）
+CREATE INDEX IF NOT EXISTS idx_tags_parent ON tags(parent_id);
+
+--   按 uuid 反查（uuid 已有 UNIQUE 约束，SQLite 会自动建索引，无需显式创建）
+
+--   软删除过滤
+CREATE INDEX IF NOT EXISTS idx_tags_deleted
+    ON tags(deleted_at DESC, id DESC)
+    WHERE is_deleted = 1;
+
+-- tag_aliases：
+--   同层唯一约束（同上，用 COALESCE 兜底 NULL）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_aliases_parent_norm_uq
+    ON tag_aliases(COALESCE(parent_tag_id, 0), norm_name);
+
+--   按父标签枚举别名
+CREATE INDEX IF NOT EXISTS idx_tag_aliases_parent ON tag_aliases(parent_tag_id);
+
+--   按目标规范标签反查（标签合并 / 目标更新时使用）
+CREATE INDEX IF NOT EXISTS idx_tag_aliases_target ON tag_aliases(target_tag_uuid);
+
+-- asset_tags：
+--   按资产查标签（PRIMARY KEY (asset_id, tag_uuid) 已覆盖）
+--   按标签查资产（反向查询，加索引）
+CREATE INDEX IF NOT EXISTS idx_asset_tags_tag
+    ON asset_tags(tag_uuid, asset_id);
+
 -- asset_candidate_cache：
 --   按 source 过滤候选列表
 CREATE INDEX IF NOT EXISTS idx_asset_candidate_cache_source
@@ -326,5 +439,22 @@ AFTER UPDATE ON albums FOR EACH ROW
 WHEN NEW.modified_at = OLD.modified_at
 BEGIN
     UPDATE albums SET modified_at = strftime('%Y-%m-%dT%H:%M:%f','now')
+    WHERE id = NEW.id;
+END;
+
+--
+CREATE TRIGGER IF NOT EXISTS trg_tags_modified_at
+AFTER UPDATE ON tags FOR EACH ROW
+WHEN NEW.modified_at = OLD.modified_at
+BEGIN
+    UPDATE tags SET modified_at = strftime('%Y-%m-%dT%H:%M:%f','now')
+    WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_tag_aliases_modified_at
+AFTER UPDATE ON tag_aliases FOR EACH ROW
+WHEN NEW.modified_at = OLD.modified_at
+BEGIN
+    UPDATE tag_aliases SET modified_at = strftime('%Y-%m-%dT%H:%M:%f','now')
     WHERE id = NEW.id;
 END;

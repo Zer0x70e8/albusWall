@@ -3,11 +3,32 @@
 
 from __future__ import annotations
 
-import sqlite3
+from sqlite3 import Row
 from dataclasses import dataclass
-from typing import ClassVar, Optional
+from typing import Any, ClassVar, Optional
+from uuid import UUID
 
 from albuswall.common.enums import CandidateStatus
+
+from .utils import to_uuid
+
+__all__ = ["AssetCreateDTO", "AssetCandidateCacheDTO"]
+
+
+def _coerce_status(
+        value: Any,
+        default: CandidateStatus = CandidateStatus.PENDING,
+) -> CandidateStatus:
+    """读路径枚举容错：非法值降级到显式默认，不阻塞。
+
+    契约：读路径遇非法枚举值降级到显式默认；写路径抛 ``ValueError``。
+    """
+    if isinstance(value, CandidateStatus):
+        return value
+    try:
+        return CandidateStatus(value)
+    except (ValueError, TypeError):
+        return default
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +40,8 @@ class AssetCandidateCacheDTO:
     """
 
     # ---- 必填 ----
-    uuid: str
+    # 契约：对外字段统一为 UUID；from_row 负责 str→UUID
+    uuid: UUID
     path: str
     source_id: int
 
@@ -41,23 +63,39 @@ class AssetCandidateCacheDTO:
     )
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "AssetCandidateCacheDTO":
+    def from_row(cls, row: Row) -> "AssetCandidateCacheDTO":
         """只接受 sqlite3.Row（connector 已设置 row_factory）。
 
-        不再保留 tuple 顺序兼容分支：那份顺序和 COLUMNS 是双份维护，
-        字段增删必炸。
+        契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。
         """
         return cls(
             id=row["id"],
-            uuid=row["uuid"],
+            uuid=to_uuid(row["uuid"]),
             path=row["path"],
             source_id=row["source_id"],
             mime_type=row["mime_type"],
             created_at=row["created_at"],
-            status=CandidateStatus(row["status"]),
+            status=_coerce_status(row["status"]),
             claimed_by=row["claimed_by"],
             claimed_at=row["claimed_at"],
         )
+
+    def to_insert_params(self) -> tuple:
+        """按 COLUMNS 顺序生成 INSERT 参数。
+
+        契约：写路径负责 UUID→str；``uuid`` 列转 ``str``，
+        ``status`` 列取枚举 ``value``。``id`` 为 ``None`` 时由 SQLite
+        AUTOINCREMENT 生成（绑定 NULL 即可）。
+        """
+        params = []
+        for col in self.COLUMNS:
+            value = getattr(self, col)
+            if col == "uuid" and isinstance(value, UUID):
+                value = str(value)
+            elif col == "status" and isinstance(value, CandidateStatus):
+                value = value.value
+            params.append(value)
+        return tuple(params)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +111,8 @@ class AssetCreateDTO:
     """
 
     # ---- 必填 ----
-    uuid: str
+    # 契约：对外字段统一为 UUID；写路径（to_insert_params）负责 UUID→str
+    uuid: UUID
     file_path: str
     original_name: str
     mime_type: str
@@ -94,8 +133,10 @@ class AssetCreateDTO:
     city: Optional[str] = None
     exif_json: Optional[str] = None
 
+    # 契约：仅 AssetCreateDTO.is_favorite 保留 int（未来星级）
     is_favorite: int = 0
-    is_deleted: int = 0
+    # 契约：is_deleted 改 bool（DB 仍是 INTEGER 0/1，写入时归一）
+    is_deleted: bool = False
     deleted_at: Optional[str] = None
 
     # 与 assets 列顺序完全一致（不含 id / created_at / modified_at）
@@ -109,5 +150,19 @@ class AssetCreateDTO:
     )
 
     def to_insert_params(self) -> tuple:
-        """按 COLUMNS 顺序生成 INSERT 参数，替代 _asset_params。"""
-        return tuple(getattr(self, col) for col in self.COLUMNS)
+        """按 COLUMNS 顺序生成 INSERT 参数，替代 _asset_params。
+
+        契约：写路径负责 UUID→str；``is_deleted`` 由 bool 归一为 0/1，
+        ``is_favorite`` 保持 int（未来星级）。
+        """
+        params = []
+        for col in self.COLUMNS:
+            value = getattr(self, col)
+            if col == "uuid" and isinstance(value, UUID):
+                value = str(value)
+            elif col == "is_deleted":
+                value = int(bool(value))
+            elif col == "is_favorite":
+                value = int(value)
+            params.append(value)
+        return tuple(params)

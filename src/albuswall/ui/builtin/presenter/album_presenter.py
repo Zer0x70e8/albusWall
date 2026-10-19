@@ -425,8 +425,8 @@ class AlbumPresenter(QObject):
         return TitleBarVO(
             window_title=self._window_title(),
             cover=self._album_cover_path(album),
-            title=album.title if album is not None else None,
-            description=album.description if album is not None else None,
+            title=self._text_or_none(album.title) if album is not None else None,
+            description=self._text_or_none(album.description) if album is not None else None,
             album_icon=self._config.album_icon_path(),
             extra_icon=self._config.extra_icon_path(),
             search_icon=self._config.search_icon_path(),

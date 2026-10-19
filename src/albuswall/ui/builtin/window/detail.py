@@ -23,6 +23,7 @@ from ..widgets.image_viewer import ImageViewer
 
 from .utils import install_close_button
 from .panel import InformationPanel
+from .tagbar import TagBar
 
 
 class Detail(BlurLabel):
@@ -62,6 +63,7 @@ class Detail(BlurLabel):
     trash_button: QPushButton
 
     panel: InformationPanel
+    tag_bar: TagBar
 
     def __init__(self, parent=None):
         super().__init__(parent=parent, draw_label_content=False)
@@ -114,6 +116,7 @@ class Detail(BlurLabel):
 
         # 导航栏（横向缩略图）
         self.item_line_viewer = QListView(self.overlay)
+
         self.item_line_viewer.setFlow(QListView.Flow.LeftToRight)
         self.item_line_viewer.setWrapping(False)
         self.item_line_viewer.setUniformItemSizes(True)
@@ -123,6 +126,9 @@ class Detail(BlurLabel):
         self.item_line_viewer.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
+
+        # tag bar
+        self.tag_bar = TagBar(self)
 
         # 按钮
         self.multiple_choice_button = QPushButton(self.tr("choice"), self.overlay)
@@ -148,6 +154,7 @@ class Detail(BlurLabel):
         bottom_bar.addStretch(1)
         bottom_bar.addWidget(self.trash_button)
 
+        overlay_layout.addWidget(self.tag_bar)
         overlay_layout.addWidget(self.item_line_viewer)
         overlay_layout.addLayout(bottom_bar)
 
