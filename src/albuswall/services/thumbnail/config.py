@@ -24,7 +24,7 @@ version / image_format 参与路径生成，改动必须 bump version，
 from pathlib import Path
 
 from albuswall.configue import ConfigField
-from albuswall.dto.thumbnail import ThumbSpec
+from albuswall.common.enums import ThumbSpec
 
 # 默认 spec 尺寸
 _DEFAULT_SPECS: dict[str, int] = {

@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping, TYPE_CHECKING
 
-from albuswall.dto.thumbnail import ThumbSpec
+from albuswall.common.enums import ThumbSpec
 from albuswall.utils.image import open_normalized
 
 if TYPE_CHECKING:

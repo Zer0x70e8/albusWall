@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from albuswall.dto.thumbnail import ThumbSpec
+from albuswall.common.enums import ThumbSpec
 
 # 输出格式 → 文件扩展名
 _EXT_MAP: dict[str, str] = {

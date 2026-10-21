@@ -17,7 +17,7 @@ __all__ = [
     "to_uuid",
     "coerce_enum",
     "row_get",
-    "to_json",
+    "dump_json",
     "json_default",
     "normalize_tag_name",
 ]
@@ -82,7 +82,13 @@ def row_get(row: sqlite3.Row, key: str, default: Any = None) -> Any:
 
 
 # ---- 序列化 ----
-def to_json(dto: Any) -> str:
+def dump_json(dto: Any) -> str:
+    """把带 ``to_dict()`` 的 DTO 序列化为 JSON 字符串（Enum → value）。
+
+    命名刻意与 DTO 的 ``to_json()`` 方法区分：本函数是"任意 DTO → JSON"
+    的工具，DTO 的 ``to_json()`` 是实例方法。禁止再造别名（如
+    ``to_json = dump_json``），保持单一名称。
+    """
     return json.dumps(dto.to_dict(), ensure_ascii=False, default=json_default)
 
 

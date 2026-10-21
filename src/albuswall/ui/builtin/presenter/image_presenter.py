@@ -50,7 +50,7 @@ from typing import Any, Optional
 from PySide6.QtCore import QObject, QRect, Qt, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap, QIcon
 
-from albuswall.dto.thumbnail import ThumbSpec
+from albuswall.common.enums import ThumbSpec
 from albuswall.log import TRACE, Logger
 
 try:

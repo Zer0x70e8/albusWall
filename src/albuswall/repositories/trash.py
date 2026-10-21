@@ -1,14 +1,27 @@
 #
-""""""
+"""回收站仓储（软删资产列表 / 恢复 / 物理清除 / 单例水位）。
+
+时间契约
+--------
+本仓储按 **时间字符串的字典序** 做截止判断（``deleted_at <= ?``）。
+所有时间列统一为 ``utils.time`` 的格式：
+
+    YYYY-MM-DDTHH:MM:SS.sss     （UTC，3 位毫秒，无时区后缀）
+
+该格式定长且字典序 == 时间序；调用方必须用 ``utils.time.now_str()`` /
+``utils.time.cutoff_str()`` 生成参数，禁止直接 ``datetime.isoformat()``
+（微秒 + 时区后缀会让比较静默失准）。
+"""
 
 from typing import List, Optional
 
-from albuswall.repositories.base import BaseRepository
 from albuswall.dto.trash import (
     PurgeCandidateDTO,
     TrashedAssetDTO,
     TrashStateDTO,
 )
+from albuswall.repositories.base import BaseRepository
+from albuswall.utils.time import now_str
 
 from .utils.sql_helpers import placeholders
 
@@ -33,7 +46,8 @@ class TrashRepository(BaseRepository):
     def list_deleted(self, limit: int, offset: int) -> List[TrashedAssetDTO]:
         if limit <= 0 or offset < 0:
             return []
-        rows = self._fetchall(
+        return self._fetch_all_dtos(
+            TrashedAssetDTO,
             f"""
             SELECT {self._LIST_COLUMNS}
               FROM assets
@@ -43,10 +57,10 @@ class TrashRepository(BaseRepository):
             """,
             (limit, offset),
         )
-        return [TrashedAssetDTO.from_row(r) for r in rows]
 
     def get_deleted(self, asset_id: int) -> Optional[TrashedAssetDTO]:
-        row = self._fetchone(
+        return self._fetch_one_dto(
+            TrashedAssetDTO,
             f"""
             SELECT {self._LIST_COLUMNS}
               FROM assets
@@ -54,7 +68,6 @@ class TrashRepository(BaseRepository):
             """,
             (asset_id,),
         )
-        return TrashedAssetDTO.from_row(row) if row is not None else None
 
     # ---------- 恢复 ----------
 
@@ -98,10 +111,23 @@ class TrashRepository(BaseRepository):
 
     # ---------- 物理清除 ----------
 
-    def find_expired(self, cutoff_iso: str, limit: int) -> List[PurgeCandidateDTO]:
+    def find_expired(
+            self, cutoff_iso: str, limit: int
+    ) -> List[PurgeCandidateDTO]:
+        """取出 ``deleted_at <= cutoff_iso`` 的软删资产（到期清理候选）。
+
+        Args:
+            cutoff_iso: 截止时间，**必须**是 ``utils.time.format_iso`` 的
+                格式（``YYYY-MM-DDTHH:MM:SS.sss``，UTC、3 位毫秒、无时区
+                后缀）。该格式下字典序 == 时间序，可直接做 ``<=`` 比较。
+                请用 ``utils.time.cutoff_str(timedelta(...))`` 生成，不要用
+                ``datetime.isoformat()``（精度 / 时区不同会静默比较错）。
+            limit: 最多返回行数；``<= 0`` 返回空列表。
+        """
         if limit <= 0:
             return []
-        rows = self._fetchall(
+        return self._fetch_all_dtos(
+            PurgeCandidateDTO,
             f"""
             SELECT {self._PURGE_COLUMNS}
               FROM assets
@@ -113,12 +139,13 @@ class TrashRepository(BaseRepository):
             """,
             (cutoff_iso, limit),
         )
-        return [PurgeCandidateDTO.from_row(r) for r in rows]
 
     def find_any_deleted(self, limit: int) -> List[PurgeCandidateDTO]:
+        """不判断到期，直接按删除时间升序取任意软删资产（清空回收站用）。"""
         if limit <= 0:
             return []
-        rows = self._fetchall(
+        return self._fetch_all_dtos(
+            PurgeCandidateDTO,
             f"""
             SELECT {self._PURGE_COLUMNS}
               FROM assets
@@ -128,7 +155,6 @@ class TrashRepository(BaseRepository):
             """,
             (limit,),
         )
-        return [PurgeCandidateDTO.from_row(r) for r in rows]
 
     def purge_batch(self, asset_ids: List[int]) -> List[int]:
         """物理删除；返回实际删除的 id 列表。未列出的 id 表示未在软删状态。"""
@@ -173,12 +199,13 @@ class TrashStateRepository(BaseRepository):
             (self._STATE_ID,),
         )
         if row is None:
+            # 时间格式与其它落库时间一致，统一由 utils.time 生成后绑参。
             self._execute(
                 """
                 INSERT OR IGNORE INTO trash_state (id, last_observed_at)
-                VALUES (?, strftime('%Y-%m-%dT%H:%M:%f','now'))
+                VALUES (?, ?)
                 """,
-                (self._STATE_ID,),
+                (self._STATE_ID, now_str()),
             )
             row = self._fetchone(
                 "SELECT * FROM trash_state WHERE id = ?",
@@ -189,7 +216,6 @@ class TrashStateRepository(BaseRepository):
                 "trash_state singleton row missing after INSERT OR IGNORE"
             )
         return TrashStateDTO.from_row(row)
-
     def update(
             self,
             *,

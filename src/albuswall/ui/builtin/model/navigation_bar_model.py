@@ -31,7 +31,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QPixmap
 
-from albuswall.dto.thumbnail import ThumbSpec
+from albuswall.common.enums import ThumbSpec
 from albuswall.log import Logger, getLogger
 
 from ..widgets.image_loader import ImageLoader, get_loader

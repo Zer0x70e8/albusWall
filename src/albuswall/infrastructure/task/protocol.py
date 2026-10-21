@@ -26,11 +26,11 @@ from __future__ import annotations
 from concurrent.futures import Future
 from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
+from albuswall.common.enums import ExecutorType
 from albuswall.dto.task import (
     BackpressureEvent,
     ExecutorArg,
     TaskServiceStats,
-    ExecutorType,
 )
 
 BackpressureCallback = Callable[[BackpressureEvent], None]

@@ -10,13 +10,17 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional, Sequence
+from uuid import UUID
 
 from albuswall.dto.sentinel import UNSET
 from albuswall.dto.tag import Tag, TagCreate, TagUpdate
-from albuswall.utils.text import normalize_tag_name
+from albuswall.dto.utils import to_uuid
+from albuswall.repositories.utils.types import UuidKeyed
 
 if TYPE_CHECKING:
     from albuswall.repositories import TagRepository
+
+_UUIDLike = UUID | str
 
 
 # ============================== 错误 ==============================
@@ -39,7 +43,11 @@ class TagParentNotFound(TagError):
 
 
 class TagNameConflict(TagError):
-    def __init__(self, name: str, existing_uuid: Optional[str] = None):
+    def __init__(
+            self,
+            name: str,
+            existing_uuid: Optional[_UUIDLike] = None,
+    ):
         super().__init__(f"tag name conflict: {name!r}")
         self.name = name
         self.existing_uuid = existing_uuid
@@ -87,7 +95,7 @@ class TagTreeNode:
     path: tuple[str, ...] = ()  # 从根到当前的 display_name 链（不含自身）
 
     @property
-    def uuid(self) -> str:
+    def uuid(self) -> UUID:
         return self.tag.uuid
 
     @property
@@ -143,10 +151,10 @@ class TagService:
     # 读
     # ---------------------------------------------------------------- #
 
-    def get(self, uuid: str) -> Tag:
+    def get(self, uuid: _UUIDLike) -> Tag:
         tag = self._repo.get_tag(uuid)
         if tag is None:
-            raise TagNotFound(uuid)
+            raise TagNotFound(str(uuid))
         return tag
 
     def list_all(self) -> list[Tag]:
@@ -160,16 +168,17 @@ class TagService:
         if not tags:
             return []
 
+        # repo 返回 {canonical uuid str: count}（UuidKeyed），用 str(t.uuid) 取值
         counts = self._repo.count_assets_bulk([t.uuid for t in tags])
 
-        children_map: dict[str, list[Tag]] = defaultdict(list)
+        children_map: dict[UUID, list[Tag]] = defaultdict(list)
         for t in tags:
             if t.parent_uuid is not None:
                 children_map[t.parent_uuid].append(t)
 
         result: list[TagWithStats] = []
         for t in tags:
-            own = counts.get(t.uuid, 0)
+            own = counts.get(str(t.uuid), 0)
             child_count = len(children_map.get(t.uuid, ()))
             subtree = (
                 self._subtree_asset_count(t.uuid, children_map, counts)
@@ -201,7 +210,7 @@ class TagService:
             return []
 
         by_uuid = {t.uuid: t for t in tags}
-        children_map: dict[Optional[str], list[Tag]] = defaultdict(list)
+        children_map: dict[Optional[UUID], list[Tag]] = defaultdict(list)
 
         for t in tags:
             parent = t.parent_uuid
@@ -231,15 +240,15 @@ class TagService:
             if t.parent_uuid is not None and t.parent_uuid not in visible
         ]
 
-    def ancestors(self, tag_uuid: str) -> list[Tag]:
+    def ancestors(self, tag_uuid: _UUIDLike) -> list[Tag]:
         """从根到父的祖先链（不含自身）。父链上有软删 / 脏环就截断。"""
         tag = self._repo.get_tag(tag_uuid)
         if tag is None:
-            raise TagNotFound(tag_uuid)
+            raise TagNotFound(str(tag_uuid))
 
         by_uuid = {t.uuid: t for t in self._repo.list_tags()}
         chain: list[Tag] = []
-        seen: set[str] = set()
+        seen: set[UUID] = set()
         cur = tag.parent_uuid
         while cur is not None and cur in by_uuid and cur not in seen:
             seen.add(cur)
@@ -248,7 +257,7 @@ class TagService:
             cur = ancestor.parent_uuid
         return list(reversed(chain))
 
-    def breadcrumb(self, tag_uuid: str) -> list[Tag]:
+    def breadcrumb(self, tag_uuid: _UUIDLike) -> list[Tag]:
         """祖先 + 自身，方便 UI 直接渲染面包屑。"""
         return self.ancestors(tag_uuid) + [self.get(tag_uuid)]
 
@@ -259,20 +268,21 @@ class TagService:
     def create(
             self,
             name: str,
-            parent_uuid: Optional[str] = None,
+            parent_uuid: Optional[_UUIDLike] = None,
             *,
             display_name: Optional[str] = None,
             description: Optional[str] = None,
             sort_order: int = 0,
-    ) -> str:
+    ) -> UUID:
         name = name.strip()
         if not name:
             raise TagError("tag name is empty")
 
-        if parent_uuid is not None and not self._repo.exists(parent_uuid):
-            raise TagParentNotFound(parent_uuid)
+        parent = None if parent_uuid is None else to_uuid(parent_uuid)
+        if parent is not None and not self._repo.exists(parent):
+            raise TagParentNotFound(str(parent))
 
-        existing = self._repo.find_by_name(parent_uuid, name)
+        existing = self._repo.find_by_name(parent, name)
         if existing is not None:
             raise TagNameConflict(name, existing)
 
@@ -281,32 +291,32 @@ class TagService:
             display_name=display_name if display_name is not None else name,
             description=description,
             sort_order=sort_order,
-            parent_uuid=parent_uuid,
+            parent_uuid=parent,
         ))
         if new_uuid is None:
             # 并发兜底：查完到写之间有别人抢先建了同名标签
             raise TagNameConflict(name)
         return new_uuid
 
-    def rename(self, tag_uuid: str, new_name: str) -> None:
+    def rename(self, tag_uuid: _UUIDLike, new_name: str) -> None:
         new_name = new_name.strip()
         if not new_name:
             raise TagError("tag name is empty")
 
         tag = self._repo.get_tag(tag_uuid)
         if tag is None:
-            raise TagNotFound(tag_uuid)
+            raise TagNotFound(str(tag_uuid))
 
         existing = self._repo.find_by_name(tag.parent_uuid, new_name)
-        if existing is not None and existing != tag_uuid:
+        if existing is not None and existing != tag.uuid:
             raise TagNameConflict(new_name, existing)
 
         if not self._repo.update(tag_uuid, TagUpdate(name=new_name)):
-            raise TagNotFound(tag_uuid)
+            raise TagNotFound(str(tag_uuid))
 
     def update(
             self,
-            tag_uuid: str,
+            tag_uuid: _UUIDLike,
             *,
             display_name: Optional[str] = UNSET,
             description: Optional[str] = UNSET,
@@ -321,36 +331,43 @@ class TagService:
         if patch.is_empty():
             return
         if not self._repo.update(tag_uuid, patch):
-            raise TagNotFound(tag_uuid)
+            raise TagNotFound(str(tag_uuid))
 
-    def move(self, tag_uuid: str, new_parent_uuid: Optional[str]) -> None:
-        if new_parent_uuid == tag_uuid:
-            raise TagCycle(tag_uuid, new_parent_uuid)
+    def move(
+            self,
+            tag_uuid: _UUIDLike,
+            new_parent_uuid: Optional[_UUIDLike],
+    ) -> None:
+        tag = to_uuid(tag_uuid)
+        new_parent = (
+            None if new_parent_uuid is None else to_uuid(new_parent_uuid)
+        )
+        if new_parent == tag:
+            raise TagCycle(str(tag), str(new_parent))
 
-        if (new_parent_uuid is not None
-                and not self._repo.exists(new_parent_uuid)):
-            raise TagParentNotFound(new_parent_uuid)
+        if new_parent is not None and not self._repo.exists(new_parent):
+            raise TagParentNotFound(str(new_parent))
 
         # 跨层环：沿新父向上追溯。list_tags 只给可见标签，
         # 所以父链软删就会截断——这已经是孤儿，不是环，无需报错。
-        if new_parent_uuid is not None:
+        if new_parent is not None:
             parent_of = {t.uuid: t.parent_uuid for t in self._repo.list_tags()}
-            cur: Optional[str] = new_parent_uuid
-            seen: set[str] = set()
+            cur: Optional[UUID] = new_parent
+            seen: set[UUID] = set()
             while cur is not None:
-                if cur == tag_uuid:
-                    raise TagCycle(tag_uuid, new_parent_uuid)
+                if cur == tag:
+                    raise TagCycle(str(tag), str(new_parent))
                 if cur in seen:
                     # 已有脏环，拒绝操作
-                    raise TagCycle(tag_uuid, new_parent_uuid)
+                    raise TagCycle(str(tag), str(new_parent))
                 seen.add(cur)
                 cur = parent_of.get(cur)
 
-        if not self._repo.move(tag_uuid, new_parent_uuid):
+        if not self._repo.move(tag, new_parent):
             # 已校验过 tag 存在 / 父存在 / 无环，False 只剩「目标层重名」
-            raise TagMoveConflict(tag_uuid, new_parent_uuid)
+            raise TagMoveConflict(str(tag), str(new_parent))
 
-    def delete(self, tag_uuid: str, *, cascade: bool = False) -> None:
+    def delete(self, tag_uuid: _UUIDLike, *, cascade: bool = False) -> None:
         """软删单个标签。
 
         cascade=False（默认）：有直接子标签时抛 TagHasChildren；
@@ -359,21 +376,23 @@ class TagService:
         """
         tag = self._repo.get_tag(tag_uuid)
         if tag is None:
-            raise TagNotFound(tag_uuid)
+            raise TagNotFound(str(tag_uuid))
 
         children = [
-            t for t in self._repo.list_tags() if t.parent_uuid == tag_uuid
+            t for t in self._repo.list_tags() if t.parent_uuid == tag.uuid
         ]
         if children and not cascade:
-            raise TagHasChildren(tag_uuid, [c.uuid for c in children])
+            raise TagHasChildren(
+                str(tag.uuid), [str(c.uuid) for c in children]
+            )
 
         for c in children:
             self._repo.soft_delete(c.uuid)
-        self._repo.soft_delete(tag_uuid)
+        self._repo.soft_delete(tag.uuid)
 
-    def restore(self, tag_uuid: str) -> RestoreResult:
+    def restore(self, tag_uuid: _UUIDLike) -> RestoreResult:
         if not self._repo.exists(tag_uuid, include_deleted=True):
-            raise TagNotFound(tag_uuid)
+            raise TagNotFound(str(tag_uuid))
 
         restored = self._repo.restore(tag_uuid)
         if not restored:
@@ -383,7 +402,7 @@ class TagService:
                     tag=self._repo.get_tag(tag_uuid),
                     parent_visible=True,
                 )
-            raise TagRestoreConflict(tag_uuid)
+            raise TagRestoreConflict(str(tag_uuid))
 
         tag = self._repo.get_tag(tag_uuid)
         parent_visible = (
@@ -399,18 +418,18 @@ class TagService:
 
     @staticmethod
     def _subtree_asset_count(
-            root_uuid: str,
-            children_map: dict[str, list[Tag]],
-            counts: dict[str, int],
+            root_uuid: UUID,
+            children_map: dict[UUID, list[Tag]],
+            counts: UuidKeyed[int],
     ) -> int:
-        total = counts.get(root_uuid, 0)
-        seen: set[str] = {root_uuid}
-        stack: list[str] = [c.uuid for c in children_map.get(root_uuid, ())]
+        total = counts.get(str(root_uuid), 0)
+        seen: set[UUID] = {root_uuid}
+        stack: list[UUID] = [c.uuid for c in children_map.get(root_uuid, ())]
         while stack:
             cur = stack.pop()
             if cur in seen:
                 continue
             seen.add(cur)
-            total += counts.get(cur, 0)
+            total += counts.get(str(cur), 0)
             stack.extend(c.uuid for c in children_map.get(cur, ()))
         return total

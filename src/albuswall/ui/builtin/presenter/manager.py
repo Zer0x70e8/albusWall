@@ -94,7 +94,7 @@ def _import(module: str, name: str):
 
 def _thumb_spec():
     try:
-        from albuswall.dto.thumbnail import ThumbSpec
+        from albuswall.common.enums import ThumbSpec
         return ThumbSpec.MEDIUM
     except ImportError:
         _logger.warning("ThumbSpec unavailable; using default spec.")

@@ -9,7 +9,7 @@ from dataclasses import dataclass, asdict
 from typing import Any, Optional
 from uuid import UUID
 
-from .utils import to_uuid
+from .utils import to_uuid, row_get
 
 __all__ = ["Album", "AssetDTO"]
 
@@ -26,6 +26,26 @@ class Album:
     type: int = 0
     created_at: str = ""
     modified_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: Row) -> "Album":
+        """从 ``sqlite3.Row`` 构造。
+
+        契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。
+        ``cover`` 由 SELECT 里 ``cover_uuid`` 列派生（封面 LEFT JOIN 的
+        结果），该列缺失或为空都表示没有封面；其余可选列走 ``row_get``
+        容忍轻查询只挑部分列。
+        """
+        raw_cover = row_get(row, "cover_uuid")
+        return cls(
+            uuid=to_uuid(row["uuid"]),
+            title=row["title"],
+            description=row_get(row, "description") or "",
+            cover=to_uuid(raw_cover) if raw_cover else None,
+            type=row_get(row, "type", 0) or 0,
+            created_at=row_get(row, "created_at") or "",
+            modified_at=row_get(row, "modified_at") or "",
+        )
 
 
 @dataclass(frozen=True, slots=True)

@@ -39,12 +39,11 @@ from dataclasses import dataclass
 from typing import Optional, Sequence, TYPE_CHECKING
 from uuid import UUID
 
-from albuswall.dto.task import ExecutorType
+from albuswall.common.constants.thumbnail import ALL_SPECS
+from albuswall.common.enums import ExecutorType, ThumbSpec
 from albuswall.dto.thumbnail import (
-    ALL_SPECS,
     ThumbnailResult,
     ThumbnailStats,
-    ThumbSpec,
 )
 from albuswall.log import getLogger
 from albuswall.utils import path as path_util

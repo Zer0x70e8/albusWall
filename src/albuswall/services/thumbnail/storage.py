@@ -13,7 +13,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping, TYPE_CHECKING
 
-from albuswall.dto.thumbnail import ALL_SPECS, ThumbSpec, ThumbnailPaths
+from albuswall.common.constants.thumbnail import ALL_SPECS
+from albuswall.common.enums import ThumbSpec
+from albuswall.dto.thumbnail import ThumbnailPaths
 from albuswall.infrastructure.fs import atomic_write
 from albuswall.log import getLogger
 

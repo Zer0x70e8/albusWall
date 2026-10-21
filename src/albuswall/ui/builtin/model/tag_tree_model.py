@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from uuid import UUID
 
 from PySide6.QtCore import QAbstractItemModel, QModelIndex, Qt
 
@@ -27,6 +28,7 @@ class TagTreeModel(QAbstractItemModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._roots: list[_Node] = []
+        # 键统一为 canonical str，避免 UUID / str 两种口径混用
         self._by_uuid: dict[str, _Node] = {}
 
     # ---- 装载 ----
@@ -40,19 +42,19 @@ class TagTreeModel(QAbstractItemModel):
 
     def _build(self, node: TagTreeNode, parent: _Node | None, row: int) -> _Node:
         n = _Node(node=node, parent=parent, row=row)
-        self._by_uuid[node.uuid] = n
+        self._by_uuid[str(node.uuid)] = n
         for i, child in enumerate(node.children):
             n.children.append(self._build(child, parent=n, row=i))
         return n
 
     # ---- 便捷查询 ----
-    def uuid_at(self, index: QModelIndex) -> str | None:
+    def uuid_at(self, index: QModelIndex) -> UUID | None:
         if not index.isValid():
             return None
         return index.internalPointer().node.uuid
 
-    def index_of(self, uuid: str) -> QModelIndex:
-        n = self._by_uuid.get(uuid)
+    def index_of(self, uuid: "UUID | str") -> QModelIndex:
+        n = self._by_uuid.get(str(uuid))
         if n is None:
             return QModelIndex()
         if n.parent is None:

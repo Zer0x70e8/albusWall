@@ -1,21 +1,43 @@
 #
-""""""
+"""导入源（ingest_source）仓储。
+
+契约
+----
+* 读路径统一返回 ``IngestSource``（单一读模型），构造一律走
+  ``IngestSource.from_row``；``_ALL_COLUMNS`` 必须与它读取的列一一对应。
+  ``from_row`` 用 ``dto.utils.row_get`` 兜底可选列，漏列不会报错，但新字段
+  会被静默吞成默认值（例如 ``disabled`` 漏掉会让所有源看起来都是启用态）。
+* 写路径：``IngestSourceCreate`` / ``IngestSourceUpdate`` 是唯一入参 DTO；
+  JSON 列的序列化统一过 ``_dump_json``（``dto.utils.json_default`` 兜底
+  ``Enum → value``，防止运行时视图误入存储）。
+* ``SourcePurgeReport.asset_uuids`` 对外是 ``UUID``，由本仓储负责
+  ``str→UUID``（与 ``from_row`` 同一口径）。
+"""
+
+from __future__ import annotations
 
 import json
-from typing import Any, Callable, Final, List, Optional
+from typing import Any, Callable, Final, Optional
+from uuid import UUID
 
+from albuswall.dto.sentinel import UNSET
 from albuswall.dto.source import (
+    MANUAL_SOURCE_ID,
     IngestSource,
     IngestSourceCreate,
     IngestSourceUpdate,
     SourcePurgeReport,
-    MANUAL_SOURCE_ID,
 )
 from albuswall.dto.trigger import TriggerConfig
+from albuswall.dto.utils import json_default, to_uuid
+from albuswall.utils.time import now_str
 
 from .base import BaseRepository
-from ..dto.sentinel import UNSET
-from ..utils.time import now_iso
+
+
+def _dump_json(value: Any) -> str:
+    """JSON 列的统一序列化出口（``Enum`` 由 ``json_default`` 兜底）。"""
+    return json.dumps(value, ensure_ascii=False, default=json_default)
 
 
 # noinspection SpellCheckingInspection
@@ -26,8 +48,8 @@ class IngestSourceRepository(BaseRepository):
     ----
     * ``assets.source_id`` 上的外键约束 **必须为 RESTRICT**，且每个连接
       都执行过 ``PRAGMA foreign_keys = ON``（SQLite 默认关闭）。
-      本仓库的 ``delete`` 会先做一次显式 ``count_assets`` 预检查以获得
-      友好错误信息，但真正的并发兜底仍由 FK 完成（TOCTOU）。
+      本仓库的 ``purge`` 会先显式校验源仍处于软删态以获得可预期结果，
+      但真正的并发兜底仍由 FK 完成（TOCTOU）。
 
     与旧实现的差异
     --------------
@@ -37,11 +59,6 @@ class IngestSourceRepository(BaseRepository):
     * ``create`` 内联 INSERT 参数拼装（不再依赖
       ``IngestSourceCreate.to_row_params``）。
     * ``update`` 走 ``UNSET`` / ``None`` 二分语义。
-
-    注意：``_ALL_COLUMNS`` 必须与 ``IngestSource.from_row`` 读取的列
-    一一对应。任何新列加入 DTO 时，务必同步更新此处——``from_row`` 用
-    ``_row_get(row, key, default)`` 兜底，漏列不会报错，但新字段会被
-    静默吞成默认值（例如 ``disabled`` 漏掉会让所有源看起来都是启用态）。
     """
 
     _ALL_COLUMNS: Final[str] = """
@@ -66,95 +83,96 @@ class IngestSourceRepository(BaseRepository):
         "auto_mount": int,
         "disabled": int,
         "file_type_check": lambda m: m.value,
-        "file_types": lambda v: json.dumps(v, ensure_ascii=False),
-        "tags": lambda v: json.dumps(v, ensure_ascii=False),
+        "file_types": _dump_json,
+        "tags": _dump_json,
         "subfolder_recursion": int,
         "subfolder_recursion_depth": _EXACTLY,
-        "trigger_config": lambda v: json.dumps(v, ensure_ascii=False),
+        "trigger_config": _dump_json,
     }
 
     # ==================================================================
     # 查询：IngestSource（统一读模型）
     # ==================================================================
 
-    def get_source_candidates(self) -> List[IngestSource]:
+    def get_source_candidates(self) -> list[IngestSource]:
         """获取所有需要自动同步的导入源候选（排除 id=0 虚拟根）。
 
         注意：此处**不**过滤 ``disabled``。禁用与否是语义判断，交给
         ``IngestSource.is_void()`` 在 service 层处理——repo 只负责
         把行读出来，保持"读路径零业务规则"。
         """
-        query = f"""
+        return self._fetch_all_dtos(
+            IngestSource,
+            f"""
             SELECT {self._ALL_COLUMNS}
             FROM ingest_source
             WHERE id != 0 AND is_deleted = 0
             ORDER BY id ASC
-        """
-        rows = self._fetchall(query)
-        if not rows:
-            return []
-        return [IngestSource.from_row(row) for row in rows]
+            """,
+        )
 
     def get_sync_candidate(self, source_id: int) -> Optional[IngestSource]:
         """单源同步候选；``MANUAL_SOURCE_ID`` 与不存在的 id 都返回 ``None``。"""
         if source_id == MANUAL_SOURCE_ID:
             return None
-        query = f"""
+        return self._fetch_one_dto(
+            IngestSource,
+            f"""
             SELECT {self._ALL_COLUMNS}
             FROM ingest_source
             WHERE id = ? AND is_deleted = 0
-        """
-        row = self._fetchone(query, (source_id,))
-        if row is None:
-            return None
-        return IngestSource.from_row(row)
+            """,
+            (source_id,),
+        )
 
-    def list_view_dtos(self) -> List[IngestSource]:
+    def list_view_dtos(self) -> list[IngestSource]:
         """列出所有导入源（含 id=0 虚拟根），按 id 升序。"""
-        query = f"""
+        return self._fetch_all_dtos(
+            IngestSource,
+            f"""
             SELECT {self._ALL_COLUMNS}
               FROM ingest_source
              WHERE is_deleted = 0
              ORDER BY id ASC
-        """
-        rows = self._fetchall(query)
-        if not rows:
-            return []
-        return [IngestSource.from_row(row) for row in rows]
+            """,
+        )
 
-    def list_pending_purge_ids(self) -> List[int]:
+    def list_pending_purge_ids(self) -> list[int]:
         """列出所有 is_deleted=1 但物理行仍存在的 source id。
+
         用于启动时补交中断的清理任务。
         排除 id=0（虚拟源不会被标删）。
         """
-        rows = self._fetchall("""
+        rows = self._fetchall(
+            """
             SELECT id FROM ingest_source
              WHERE is_deleted = 1 AND id != 0
              ORDER BY id ASC
-        """)
-        return [r["id"] for r in rows] if rows else []
+            """
+        )
+        return [row["id"] for row in rows]
 
     def get_view_dto(self, source_id: int) -> Optional[IngestSource]:
         """单条查询导入源；不存在返回 ``None``。"""
-        query = f"""
+        return self._fetch_one_dto(
+            IngestSource,
+            f"""
             SELECT {self._ALL_COLUMNS}
             FROM ingest_source
             WHERE id = ? AND is_deleted = 0
-        """
-        row = self._fetchone(query, (source_id,))
-        if row is None:
-            return None
-        return IngestSource.from_row(row)
+            """,
+            (source_id,),
+        )
 
-    def get_id_list(self) -> List[int]:
-        rows = self._fetchall("""
-        SELECT id 
-          FROM ingest_source 
-         WHERE is_deleted = 0
-         ORDER BY id ASC 
-        """)
-        if not rows:
-            return []
+    def get_id_list(self) -> list[int]:
+        rows = self._fetchall(
+            """
+            SELECT id
+              FROM ingest_source
+             WHERE is_deleted = 0
+             ORDER BY id ASC
+            """
+        )
         return [row["id"] for row in rows]
 
     # ==================================================================
@@ -168,8 +186,31 @@ class IngestSourceRepository(BaseRepository):
     #   3) 解析失败。
     # ==================================================================
 
-    # noinspection broad-exception
-    def get_all_trigger_configs(self) -> List[TriggerConfig]:
+    def _parse_trigger(
+            self, raw_config: Optional[str], source_id: int
+    ) -> Optional[TriggerConfig]:
+        """把 ``trigger_config`` 原始 JSON 解析为强类型配置。
+
+        - NULL / 空串 → ``None``（不报错）；
+        - 解析失败 → WARNING + ``None``（单条脏数据不阻塞启动）；
+        - 成功 → 回填 ``config.id = source_id``（``TriggerConfig`` 可变）。
+        """
+        if not raw_config:
+            return None
+        try:
+            config = TriggerConfig.from_json(raw_config)
+        except Exception as exc:  # noqa: BLE001 —— 见方法 docstring
+            self.logger.warning(
+                "解析 trigger_config 失败 (source_id=%s): %s",
+                source_id, exc,
+            )
+            return None
+        if config is None:
+            return None
+        config.id = source_id
+        return config
+
+    def get_all_trigger_configs(self) -> list[TriggerConfig]:
         """获取全部**存在** trigger_config 的导入源的强类型配置列表。
 
         * SQL 层过滤掉 NULL / 空串；
@@ -181,40 +222,22 @@ class IngestSourceRepository(BaseRepository):
         结合 ``get_sync_candidate`` 判断是否跳过——或者更干净的做法是
         禁用时把 ``trigger_config`` 也清空（由 service 决定策略）。
         """
-        query = """
+        rows = self._fetchall(
+            """
             SELECT id, trigger_config
              FROM ingest_source
             WHERE trigger_config IS NOT NULL AND is_deleted = 0
               AND TRIM(trigger_config) != ''
             ORDER BY id ASC
-        """
-        rows = self._fetchall(query)
-        if not rows:
-            return []
-
-        configs: List[TriggerConfig] = []
+            """
+        )
+        configs: list[TriggerConfig] = []
         for row in rows:
-            source_id = row["id"]
-            raw_config = row["trigger_config"]
-            try:
-                config = TriggerConfig.from_json(raw_config)
-            except Exception as exc:  # noqa: BLE001 —— 见方法 docstring
-                self.logger.warning(
-                    "解析 trigger_config 失败 (source_id=%s): %s",
-                    source_id, exc,
-                )
-                continue
-            if config is None:
-                continue
-            try:
-                config.id = source_id
-            except Exception:
-                # TriggerConfig 可能 frozen；忽略注入失败。
-                pass
-            configs.append(config)
+            config = self._parse_trigger(row["trigger_config"], row["id"])
+            if config is not None:
+                configs.append(config)
         return configs
 
-    # noinspection broad-exception
     def get_trigger_config(self, source_id: int) -> Optional[TriggerConfig]:
         """单源 trigger_config 强类型读取。
 
@@ -223,32 +246,15 @@ class IngestSourceRepository(BaseRepository):
         * ``trigger_config`` 为 NULL / 空串；
         * 解析失败（此时会打 WARNING）。
         """
-        query = "SELECT id, trigger_config " \
-                "  FROM ingest_source " \
-                " WHERE id = ? AND is_deleted = 0"
-        row = self._fetchone(query, (source_id,))
+        row = self._fetchone(
+            "SELECT id, trigger_config"
+            "  FROM ingest_source"
+            " WHERE id = ? AND is_deleted = 0",
+            (source_id,),
+        )
         if row is None:
             return None
-
-        raw_config = row["trigger_config"]
-        if not raw_config:
-            return None
-
-        try:
-            config = TriggerConfig.from_json(raw_config)
-        except Exception as exc:  # noqa: BLE001 —— 见方法 docstring
-            self.logger.warning(
-                "解析 trigger_config 失败 (source_id=%s): %s",
-                source_id, exc,
-            )
-            return None
-        if config is None:
-            return None
-        try:
-            config.id = row["id"]
-        except Exception:
-            pass
-        return config
+        return self._parse_trigger(row["trigger_config"], row["id"])
 
     # ==================================================================
     # 写入：创建 / 更新
@@ -272,9 +278,8 @@ class IngestSourceRepository(BaseRepository):
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         trigger_json = (
-            json.dumps(source.trigger_config, ensure_ascii=False)
-            if source.trigger_config is not None
-            else None
+            None if source.trigger_config is None
+            else _dump_json(source.trigger_config)
         )
         params = (
             source.title,
@@ -285,14 +290,16 @@ class IngestSourceRepository(BaseRepository):
             int(source.auto_mount),
             int(source.disabled),
             source.file_type_check.value,
-            json.dumps(source.file_types, ensure_ascii=False),
-            json.dumps(source.tags, ensure_ascii=False),
+            _dump_json(source.file_types),
+            _dump_json(source.tags),
             int(source.subfolder_recursion),
             source.subfolder_recursion_depth,
             trigger_json,
         )
         cursor = self._execute(query, params)
-        return cursor.lastrowid  # type: ignore[return-value]
+        if cursor.lastrowid is None:
+            raise RuntimeError("INSERT INTO ingest_source returned no lastrowid")
+        return cursor.lastrowid
 
     def update(self, source_id: int, source: IngestSourceUpdate) -> bool:
         """PATCH 更新：仅更新已显式设置的字段。
@@ -326,11 +333,11 @@ class IngestSourceRepository(BaseRepository):
 
         # 始终更新 modified_at
         set_parts.append("modified_at = ?")
-        params.append(now_iso())
+        params.append(now_str())
         params.append(source_id)
 
         query = f"UPDATE ingest_source SET {', '.join(set_parts)} WHERE id = ?"
-        cursor = self._execute(query, params)
+        cursor = self._execute(query, tuple(params))
         return cursor.rowcount > 0
 
     # ==================================================================
@@ -356,12 +363,7 @@ class IngestSourceRepository(BaseRepository):
             "SELECT COUNT(*) AS cnt FROM assets WHERE source_id = ?",
             (source_id,),
         )
-        if row is None:
-            return 0
-        try:
-            return int(row["cnt"])
-        except (KeyError, TypeError):
-            return 0
+        return int(row["cnt"]) if row else 0
 
     # ==================================================================
     # 删除
@@ -395,13 +397,13 @@ class IngestSourceRepository(BaseRepository):
                     asset_ids=[], asset_uuids=[],
                 )
 
-            # 2. 收清单
+            # 2. 收清单（契约：asset_uuids 对外是 UUID）
             rows = conn.execute(
                 "SELECT id, uuid FROM assets WHERE source_id = ?",
                 (source_id,),
             ).fetchall()
-            asset_ids = [r["id"] for r in rows]
-            asset_uuids = [r["uuid"] for r in rows]
+            asset_ids = [row["id"] for row in rows]
+            asset_uuids: list[UUID] = [to_uuid(row["uuid"]) for row in rows]
 
             # 3. 删 assets
             conn.execute("DELETE FROM assets WHERE source_id = ?", (source_id,))
@@ -414,18 +416,17 @@ class IngestSourceRepository(BaseRepository):
             asset_ids=asset_ids, asset_uuids=asset_uuids,
         )
 
-    #
-    def list_deleted_dtos(self) -> List[IngestSource]:
+    def list_deleted_dtos(self) -> list[IngestSource]:
         """回收站列表：所有 is_deleted=1 的源，按删除时间倒序。"""
-        rows = self._fetchall(
+        return self._fetch_all_dtos(
+            IngestSource,
             f"""
             SELECT {self._ALL_COLUMNS}
             FROM ingest_source
             WHERE is_deleted = 1 AND id != 0
             ORDER BY deleted_at DESC, id DESC
-            """
+            """,
         )
-        return [IngestSource.from_row(r) for r in rows] if rows else []
 
     def soft_delete(self, source_id: int) -> bool:
         """标记软删。已是删除态 / 不存在 / id=0 时返回 False。"""
@@ -433,7 +434,7 @@ class IngestSourceRepository(BaseRepository):
             raise ValueError(
                 f"Cannot delete manual/virtual source (id={MANUAL_SOURCE_ID})"
             )
-        now = now_iso()
+        now = now_str()
         cursor = self._execute(
             """
             UPDATE ingest_source
@@ -452,6 +453,6 @@ class IngestSourceRepository(BaseRepository):
                SET is_deleted = 0, deleted_at = NULL, modified_at = ?
              WHERE id = ? AND is_deleted = 1
             """,
-            (now_iso(), source_id),
+            (now_str(), source_id),
         )
         return cursor.rowcount > 0

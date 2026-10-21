@@ -296,7 +296,7 @@ CREATE TABLE IF NOT EXISTS asset_candidate_cache (
 -- =============================================================================
 
 -- ── 排序契约支撑索引 ────────────────────────────────────────────
--- 排序契约 `_ASSET_ORDER_SQL` 是两段式：
+-- 排序契约 `repositories/utils/asset_order.py :: ASSET_ORDER_SQL` 是两段式：
 --   active : (taken_at IS NULL), taken_at DESC, id DESC
 --   deleted: (deleted_at IS NULL), deleted_at DESC, id DESC
 -- 单列索引撑不起 “DESC + 复合 tie-break”，必须复合 + DESC 方向。

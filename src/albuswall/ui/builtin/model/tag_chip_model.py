@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt
 
 from albuswall.dto.tag import Tag
@@ -32,14 +34,15 @@ class TagChipModel(QAbstractListModel):
     def tags(self) -> list[Tag]:
         return list(self._tags)
 
-    def uuid_at(self, row: int) -> str | None:
+    def uuid_at(self, row: int) -> UUID | None:
         if 0 <= row < len(self._tags):
             return self._tags[row].uuid
         return None
 
-    def index_of(self, uuid: str) -> QModelIndex:
+    def index_of(self, uuid: "UUID | str") -> QModelIndex:
+        target = str(uuid)
         for row, t in enumerate(self._tags):
-            if t.uuid == uuid:
+            if str(t.uuid) == target:
                 return self.index(row, 0)
         return QModelIndex()
 

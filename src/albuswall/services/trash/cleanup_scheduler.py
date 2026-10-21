@@ -30,7 +30,7 @@ from concurrent.futures import Future
 from datetime import timedelta
 from typing import Optional
 
-from albuswall.dto.task import ExecutorType
+from albuswall.common.enums import ExecutorType
 from albuswall.infrastructure.task.protocol import TaskServiceProtocol
 from albuswall.log import getLogger
 

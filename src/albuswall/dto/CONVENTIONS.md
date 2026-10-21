@@ -1,5 +1,8 @@
 # DTO 契约约定
 
+> 跨层契约（枚举值域 / 异常位置 / 常量分域 / 并发工具边界 / 两条待定项）的**正文**见
+> `common/CONVENTIONS.md`。本文件只写 DTO 层落地约束；引用跨层规则一律用指针，不复述正文。
+
 ## 一、已定
 
 ### UUID 统一
@@ -81,14 +84,17 @@
 
 ### 枚举容错
 
-- 结论：读路径遇非法枚举值降级到显式默认；写路径抛 `ValueError`；`FileTypeCheckMode.NONE` 保留枚举值，只删 `_missing_` 静默映射。
-- 结论（读路径统一入口）：所有读路径枚举容错统一走 `dto.utils.coerce_enum`，禁止各 DTO 自建 `_coerce_*` 私有函数。
+- 跨层规则（枚举位置 / 读降级 / 写抛错 / 禁止 `_missing_` / `NONE` 保留）见
+  `common/CONVENTIONS.md` · 枚举值域与容错。
+- 本层落地约束：所有读路径枚举容错统一走 `dto.utils.coerce_enum`，禁止各 DTO 自建 `_coerce_*` 私有函数。
     - 有默认值：`coerce_enum(value, EnumCls, default)` → 返回 `EnumCls`；
     - 无默认值：`coerce_enum(value, EnumCls)` → 返回 `EnumCls | None`，写路径拿到 `None` 后由调用方 `raise ValueError`。
-- 理由：读侧不阻塞，写侧不吞错，去掉有害降级；枚举容错规则只写一次，避免各 DTO 各写一份。
+- 本层不留枚举定义：`dto/task.py` 的 `ExecutorType` / `BackpressureReason` / `PermitKind` 已迁入
+  `common/enums/task.py`，只保留入参类型别名 `ExecutorArg`。
+- 理由：容错只在 DTO 边界发生一次，避免各 DTO 各写一份；读侧不阻塞，写侧不吞错。
 - 锚点：`tests/dto/test_contracts.py::test_enum_read_degrades_write_raises`、
   `tests/dto/test_utils_convert.py::test_coerce_enum`
-- 影响文件：`dto/source.py`、`dto/import_.py`、`dto/trigger.py`、`dto/utils/convert.py`
+- 影响文件：`dto/source.py`、`dto/import_.py`、`dto/trigger.py`、`dto/task.py`、`dto/utils/convert.py`
 
 ### 对外用 uuid
 
@@ -127,7 +133,8 @@
     - `to_uuid` —— `str` / `UUID` → `UUID`；
     - `coerce_enum` —— 读路径枚举容错（见「枚举容错」）；
     - `row_get` —— `sqlite3.Row` 缺列兜底（见「from_row 字段容错分层」）；
-    - `to_json` / `json_default` —— JSON 序列化兜底（`Enum → value`）；
+    - `dump_json` / `json_default` —— JSON 序列化兜底（`Enum → value`）；原名 `to_json`，已改名并删除
+      `dump_json = to_json` 别名，避免与 DTO 的 `to_json()` 方法同名混淆；
     - `normalize_tag_name` —— tag 名归一化契约。
 - 结论（禁止）：不得在各 DTO 内自建 `_coerce_*` / `_row_get` / `_get` / 私有 `normal` 等副本；历史副本已删除（
   `_coerce_status`、`_coerce_file_type_check`、`_row_get`、`thumbnail._get`、`normal(v, t)`），由 grep 清单守护。
@@ -138,18 +145,21 @@
 
 ## 二、待定
 
-> 原 9 条待定中 8 条已在 review 中拍板并落入「已定」；此处只列仍待定的项，按影响面小 → 大排序。
+> 本层待定项已上移至 `common/CONVENTIONS.md` · 待定（单一正文），本文件不再维护候选方案。
 
-| # | 问题                                                                                                                        | 候选方案                                                       | 影响文件                          | 影响面评估                                                                                          | 我的建议（标注“待你拍板”）                                        |
-|---|-----------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------|-----------------------------------|-----------------------------------------------------------------------------------------------------|-------------------------------------------------------------------|
-| 1 | `FileTypeCheckMode.NONE` 保留后，`is_void()` 中 `file_type_check is FileTypeCheckMode.NONE` 分支是否随之调整？              | A. 保持现状；B. 改为显式默认值判断；C. 删除该分支              | `dto/source.py`                   | 小：仅 `IngestSource.is_void()` 一处判断                                                            | 建议随文件类型检查设计一起定，先不动；待你拍板                    |
-| 2 | 文件类型检查的设计与使用方式未完成，连带 `trigger_config.update_mode` 的 `list[str]` / `str` 形态（两条写入路径目前不一致） | A. 统一 `str`；B. 统一 `list[str]`；C. 存储 `list`、表单 `str` | `dto/source.py`、`dto/trigger.py` | 大：跨 `IngestSourceFormData.to_trigger_config()` 与 `TriggerConfig.update_mode`，存储/表单两套形态 | 建议先完成文件类型检查许愿再定；当前只留 TODO，不改形态；待你拍板 |
+| # | 问题 | 状态 | 正文 |
+|---|------|------|------|
+| 1 | `FileTypeCheckMode.NONE` 与 `IngestSource.is_void()` 的联动 | 已拍板 B（显式白名单） | `common/CONVENTIONS.md` · 5.1 |
+| 2 | `trigger_config.update_mode` 的 `str` / `list[str]` 形态 | 本阶段不改形态，留 TODO | `common/CONVENTIONS.md` · 5.2 |
 
 ## 三、例外
 
-- `dto/utils/convert.py`：DTO 层共享转换工具（`to_uuid` / `coerce_enum` / `row_get` / `to_json` / `json_default` /
+- `dto/utils/convert.py`：DTO 层共享转换工具（`to_uuid` / `coerce_enum` / `row_get` / `dump_json` / `json_default` /
   `normalize_tag_name`），被所有 `from_row` / `__post_init__` / 写路径依赖。不映射表、不套表 DTO 契约；必须集中维护、不得各域自建私有副本（历史副本
   `_coerce_status` / `_coerce_file_type_check` / `_row_get` / `_get` 已删除）。
+- `dto/thumbnail.py` 不再定义 schema 常量：`ALL_SPECS` / `SPEC_TO_COLUMN` / `COLUMN_TO_SPEC` / `BASE_COLUMN` /
+  `ALL_THUMB_COLUMNS` 已搬到 `common/constants/thumbnail.py`（见 `common/CONVENTIONS.md` · 常量）；DTO 只从该模块
+  import 自己用到的 `ALL_SPECS`，不再对外转口 schema 常量。
 - 原 `dto/trash.py` 的 TypedDict 例外已撤销：全部改 dataclass，纳入通用契约（见「已定 · 全改 dataclass」）。
 - 其余写 DTO、事件 DTO、报告 DTO、service/UI 视图（如 `TagTreeNode`、`ThumbnailPaths`、`SourceScanFinished`、
   `SourcePurgeReport`）按通用契约的不同子类处理，不列为例外。
@@ -173,8 +183,12 @@
   `grep -rn "TriggerConfig\\|trigger_config\\|to_json()" --include=*.py`
 - update_mode 的字符串/列表写入路径
   `grep -rn "update_mode" --include=*.py`
-- FileTypeCheckMode.NONE / _missing_ 的定义与使用点
+- FileTypeCheckMode.NONE / _missing_ 的定义与使用点（`_missing_` 应为 0）
   `grep -rn "FileTypeCheckMode.NONE\\|_missing_" --include=*.py`
+- 旧别名 `to_json = dump_json` 残留（应为 0）
+  `grep -rn "dump_json = \\|to_json = " --include=*.py src`
+- schema 常量是否仍从 dto 反向取（`ALL_SPECS` 等常量应为 0，DTO 类与 `ThumbSpec` 除外）
+  `grep -rn "from albuswall.dto.thumbnail import" --include=*.py src/albuswall/repositories src/albuswall/services`
 - COLUMNS 与 dataclasses.fields() 的消费点
   `grep -rn "COLUMNS\\|dataclasses.fields" --include=*.py`
 - TypedDict 定义（确认改 dataclass 范围无遗漏）
@@ -189,6 +203,9 @@
 [//]: # (修好了)
 
 - `AssetCreateDTO.is_deleted` 改 `bool` 会波及现有 `int` 绑定/写入点，需 grep 确认。
-- `TriggerConfig.update_mode` 与 `IngestSourceFormData.to_trigger_config()` 仍两套形态，存储/表单桥未统一。
-- `FileTypeCheckMode.NONE` 保留后，`IngestSource.is_void()` 的行为是否随文件类型检查设计调整尚未定。
+- `TriggerConfig.update_mode` 与 `IngestSourceFormData.to_trigger_config()` 的两套形态**本阶段不改**，见
+  `common/CONVENTIONS.md` · 5.2（遗留 `__post_init__` 不归一化 `str` 的拆字符隐患）。
+- `FileTypeCheckMode.NONE` 与 `IngestSource.is_void()` 已按 `common/CONVENTIONS.md` · 5.1 拍板为**显式白名单**；
+  若 `NONE` 将来代表「关闭文件类型检查」，再同步调整语义与 schema 值域。
+- 删除 `_missing_` 后，任何 `EnumCls(未知值)` 直调都会抛 `ValueError`；读路径必须走 `coerce_enum`，不得依赖枚举自身降级。
 - TypedDict 全改 dataclass 后，`BackpressureEvent` 消费方原先的键存在性判断需改为 `is UNSET`，调用点需排查。

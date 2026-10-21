@@ -1,13 +1,13 @@
 #
 """"""
 
-from datetime import datetime
 from logging import getLogger
 from typing import TYPE_CHECKING, NamedTuple, Optional, Union
 from uuid import UUID
 
 from albuswall.log import TRACE, Logger
 from albuswall.dto.album import Album, AssetDTO
+from albuswall.utils.time import now_str
 
 if TYPE_CHECKING:
     from albuswall.repositories import ViewRepository
@@ -15,8 +15,9 @@ if TYPE_CHECKING:
 _logger: Logger = getLogger(__name__)  # type: ignore
 _logger.trace = lambda msg, *args: _logger.log(TRACE, msg, *args)
 
-# 模块加载时间，用作虚拟相册的创建/修改时间（import 时定格一次）
-_MODULE_STARTED_AT: str = datetime.now().isoformat()
+# 模块加载时间，用作虚拟相册的创建/修改时间（import 时定格一次）。
+# 与落库时间同格式（utils.time），避免 UI 上出现两种时间形态。
+_MODULE_STARTED_AT: str = now_str()
 
 # ======================================================================
 # 公开常量
@@ -106,7 +107,7 @@ class ViewService:
     def list_album_uuids(self) -> list[UUID]:
         """返回所有可见相册 uuid（虚拟在前，物理在后）。"""
         virtual = self.list_virtual_album_uuids()
-        physical = [UUID(i) for i in self._repo.list_album_uuids()]
+        physical = self._repo.list_album_uuids()
         result = virtual + physical
         _logger.trace("album uuids: virtual=%s, result=%s", virtual, result)
         return result
@@ -141,8 +142,9 @@ class ViewService:
             self, asset_uuid: Union[UUID, str]
     ) -> list[UUID]:
         """返回包含指定资产的全部可见相册 uuid。"""
-        rows = self._repo.get_album_uuids_of_asset(self._as_uuid_str(asset_uuid))
-        return [UUID(u) for u in (rows or [])]
+        return self._repo.get_album_uuids_of_asset(
+            self._as_uuid_str(asset_uuid)
+        )
 
     # ==================================================================
     # 资产（DTO / 列表 / uuid 列表）
@@ -186,16 +188,16 @@ class ViewService:
     def get_asset_uuids(self, album: Union[Album, UUID, str]) -> list[UUID]:
         """按相册列出可见 asset uuid。
 
-        排序契约由 ViewRepository._ASSET_ORDER_SQL 单点决定，
+        排序契约由 ``repositories/utils/asset_order.py`` 单点决定，
         本方法与 list_assets / get_asset_neighbours 完全同源。
         """
         uuid = album.uuid if isinstance(album, Album) else album
         spec = self._spec(uuid)
         if spec is None:
-            rows = self._repo.list_asset_uuids_by_album(self._as_uuid_str(uuid))
-        else:
-            rows = self._repo.list_asset_uuids_by_scope(spec.scope)
-        return [UUID(u) for u in (rows or [])]
+            return self._repo.list_asset_uuids_by_album(
+                self._as_uuid_str(uuid)
+            )
+        return self._repo.list_asset_uuids_by_scope(spec.scope)
 
     # ==================================================================
     # 磁盘完整路径
@@ -269,7 +271,7 @@ class ViewService:
         """定位资产在相册中的上/下一张。
 
         分派规则与 get_asset_uuids / list_assets 完全一致；排序契约由
-        ViewRepository._ASSET_ORDER_SQL 单点决定。
+        ``repositories/utils/asset_order.py`` 单点决定。
 
         Returns:
             (prev_uuid, next_uuid, index, total)
@@ -279,19 +281,12 @@ class ViewService:
         """
         spec = self._spec(album_uuid)
         if spec is not None:
-            prev_s, next_s, index, total = self._repo.get_neighbours_by_scope(
+            return self._repo.get_neighbours_by_scope(
                 spec.scope, self._as_uuid_str(current_asset_uuid)
             )
-        else:
-            prev_s, next_s, index, total = self._repo.get_neighbours_by_album(
-                self._as_uuid_str(album_uuid),
-                self._as_uuid_str(current_asset_uuid),
-            )
-        return (
-            UUID(prev_s) if prev_s else None,
-            UUID(next_s) if next_s else None,
-            index,
-            total,
+        return self._repo.get_neighbours_by_album(
+            self._as_uuid_str(album_uuid),
+            self._as_uuid_str(current_asset_uuid),
         )
 
     def locate_in_album(

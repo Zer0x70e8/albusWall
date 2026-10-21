@@ -74,6 +74,10 @@ class TriggerConfig:
     绕过默认工厂，不参与类型收窄，故不写进注解。
     """
     id: Optional[int] = None
+    # TODO(形态待定)：存储形态是单值 str（IngestSourceFormData.to_trigger_config），
+    #  运行时是 list[UpdateMode]；两套形态暂不统一，见
+    #  common/CONVENTIONS.md · 待定 · update_mode。遗留隐患：本类不归一化
+    #  str，``to_dict()`` 里 ``list("manual")`` 会拆成字符，统一形态时一并处理。
     update_mode: List[UpdateMode] = field(default_factory=lambda: [UpdateMode.MANUAL])
     device_trigger: DeviceTrigger = field(default_factory=DeviceTrigger)
     scheduled: ScheduledTrigger = field(default_factory=ScheduledTrigger)
@@ -126,7 +130,7 @@ class TriggerConfig:
         }
 
     def to_json(self) -> str:
-        """转换为 JSON 字符串；``Enum`` 成员由 ``to_json`` 兜底转 ``value``。"""
+        """转换为 JSON 字符串；``Enum`` 成员由 ``dto.utils.dump_json`` 兜底转 ``value``。"""
         return dump_json(self)
 
     @classmethod

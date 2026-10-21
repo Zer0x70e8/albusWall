@@ -5,30 +5,44 @@
     - 列清单 / INSERT 占位符全部从 DTO 派生（DTO.COLUMNS / to_insert_params），
       仓储层不再手写第二份，字段增删只动 DTO。
     - 状态字面量统一走 CandidateStatus 枚举，禁止裸字符串。
+    - 读路径的枚举容错走 ``dto.utils.coerce_enum``（读降级、写抛错）。
 """
 
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone, timedelta
-from typing import Sequence, Optional
+from datetime import timedelta
+from typing import Optional, Sequence
+from uuid import UUID
 
 from albuswall.common.enums import CandidateStatus
 from albuswall.dto.import_ import AssetCandidateCacheDTO, AssetCreateDTO
+from albuswall.dto.utils import coerce_enum
+from albuswall.utils.time import cutoff_str, now_str
 
 from .base import BaseRepository
-from .utils.sql_helpers import placeholders
+from .utils.sql_helpers import as_uuid_str, placeholders
 
 # ---- 从 DTO 派生的 SQL 片段（单一事实源：DTO.COLUMNS） ----
 
 # 候选表 SELECT 列清单
 _CANDIDATE_COLUMNS = ", ".join(AssetCandidateCacheDTO.COLUMNS)
 
+# 候选表 INSERT 只写「用户提供」的列；其余列（id / created_at / status /
+# claimed_*）交给 schema DEFAULT。显式绑定 NULL 会绕过 DEFAULT，反而把
+# NOT NULL 列写坏，因此这里不能用 to_insert_params()。
+_CANDIDATE_INSERT_COLUMNS = ("uuid", "path", "source_id", "mime_type")
+_CANDIDATE_INSERT_SQL = (
+    "INSERT OR IGNORE INTO asset_candidate_cache "
+    f"({', '.join(_CANDIDATE_INSERT_COLUMNS)}) "
+    f"VALUES ({placeholders(len(_CANDIDATE_INSERT_COLUMNS))})"
+)
+
 # 资产 INSERT：列名与占位符均从 AssetCreateDTO.COLUMNS 生成，
 # 与 AssetCreateDTO.to_insert_params() 严格同序。
-_INSERT_ASSET_SQL = "INSERT INTO assets ({cols}) VALUES ({phs})".format(
-    cols=", ".join(AssetCreateDTO.COLUMNS),
-    phs=placeholders(len(AssetCreateDTO.COLUMNS)),
+_INSERT_ASSET_SQL = (
+    f"INSERT INTO assets ({', '.join(AssetCreateDTO.COLUMNS)}) "
+    f"VALUES ({placeholders(len(AssetCreateDTO.COLUMNS))})"
 )
 
 _UPDATE_CANDIDATE_STATUS_SQL = (
@@ -73,22 +87,23 @@ class ImportRepository(BaseRepository):
 
         ph = placeholders(len(unique_paths))
 
+        params = (source_id, *unique_paths)
         rows_assets = self._fetchall(
-            "SELECT file_path FROM assets "
-            "WHERE source_id = ? AND file_path IN ({})".format(ph),
-            [source_id, *unique_paths],
+            f"SELECT file_path FROM assets "
+            f"WHERE source_id = ? AND file_path IN ({ph})",
+            params,
         )
         rows_cache = self._fetchall(
-            "SELECT path FROM asset_candidate_cache "
-            "WHERE source_id = ? AND path IN ({})".format(ph),
-            [source_id, *unique_paths],
+            f"SELECT path FROM asset_candidate_cache "
+            f"WHERE source_id = ? AND path IN ({ph})",
+            params,
         )
 
         existing: set[str] = set()
         if rows_assets:
-            existing.update(row[0] for row in rows_assets)
+            existing.update(row["file_path"] for row in rows_assets)
         if rows_cache:
-            existing.update(row[0] for row in rows_cache)
+            existing.update(row["path"] for row in rows_cache)
 
         return [p for p in unique_paths if p not in existing]
 
@@ -100,22 +115,20 @@ class ImportRepository(BaseRepository):
         limit=None 时使用 _DEFAULT_PENDING_LIMIT，避免无界全量拉取。
         """
         effective_limit = _DEFAULT_PENDING_LIMIT if limit is None else limit
-        sql = (
-            "SELECT {cols} FROM asset_candidate_cache "
-            "WHERE status = ? ORDER BY id LIMIT ?"
-        ).format(cols=_CANDIDATE_COLUMNS)
-
-        rows = self._fetchall(
-            sql, (CandidateStatus.PENDING.value, effective_limit)
+        return self._fetch_all_dtos(
+            AssetCandidateCacheDTO,
+            f"SELECT {_CANDIDATE_COLUMNS} FROM asset_candidate_cache "
+            f"WHERE status = ? ORDER BY id LIMIT ?",
+            (CandidateStatus.PENDING.value, effective_limit),
         )
-        if not rows:
-            return []
-        return [AssetCandidateCacheDTO.from_row(row) for row in rows]
 
     def get_candidate_status(
             self, candidate_id: int
     ) -> Optional[CandidateStatus]:
         """返回候选记录的当前状态；不存在时返回 None。
+
+        读路径按 DTO 契约用 ``coerce_enum`` 降级：脏状态不会抛错，
+        会落到 ``pending``（与 schema DEFAULT 一致）。
 
         供 ImportService 在 finalize_candidate 返回 None 时，
         判断终态是 SKIPPED（重复导入）还是 FAILED（真失败）。
@@ -124,7 +137,11 @@ class ImportRepository(BaseRepository):
             "SELECT status FROM asset_candidate_cache WHERE id = ?",
             (candidate_id,),
         )
-        return CandidateStatus(row[0]) if row else None
+        if row is None:
+            return None
+        return coerce_enum(
+            row["status"], CandidateStatus, CandidateStatus.PENDING
+        )
 
     def get_source_paths(self) -> dict[int, str]:
         """返回 {source_id: source_path}。
@@ -142,37 +159,37 @@ class ImportRepository(BaseRepository):
     ) -> None:
         """批量插入资产候选缓存记录。
 
-        仅写入 (uuid, path, source_id, mime_type) 四个显式列；
-        其余列（id / created_at / status / claimed_*）交给 schema DEFAULT。
+        仅写入 ``_CANDIDATE_INSERT_COLUMNS``（uuid / path / source_id /
+        mime_type）；其余列（id / created_at / status / claimed_*）交给
+        schema DEFAULT。``uuid`` 在写路径由 ``UUID→str`` 收口。
         """
         if not candidates:
             return
 
-        insert_sql = (
-            "INSERT OR IGNORE INTO asset_candidate_cache "
-            "(uuid, path, source_id, mime_type) "
-            "VALUES (?, ?, ?, ?)"
-        )
         params = [
-            (c.uuid, c.path, c.source_id, c.mime_type) for c in candidates
+            (as_uuid_str(c.uuid), c.path, c.source_id, c.mime_type)
+            for c in candidates
         ]
 
         with self._transaction() as conn:
-            conn.executemany(insert_sql, params)
+            conn.executemany(_CANDIDATE_INSERT_SQL, params)
 
         self.logger.debug(
             "Inserted %d candidate cache records (ignored duplicates if any).",
             len(candidates),
         )
 
-    def create_asset(self, dto: AssetCreateDTO) -> Optional[int]:
-        """插入新资产记录，返回自增 ID；失败返回 None。"""
+    def create_asset(self, dto: AssetCreateDTO) -> Optional[UUID]:
+        """插入新资产记录，成功返回资产 uuid；失败返回 None。
+
+        契约：仓储**不暴露** ``assets.id``（内部自增键），对外标识统一用
+        ``uuid``（见 ``asset.py`` 的接口契约与 ``dto/CONVENTIONS.md`` ·
+        UUID 统一）。
+        """
         try:
             with self._transaction() as conn:
-                cursor = conn.execute(
-                    _INSERT_ASSET_SQL, dto.to_insert_params()
-                )
-                return cursor.lastrowid
+                conn.execute(_INSERT_ASSET_SQL, dto.to_insert_params())
+            return dto.uuid
         except Exception as e:
             self.logger.error(
                 "Failed to create asset (uuid=%s): %s", dto.uuid, e
@@ -183,7 +200,7 @@ class ImportRepository(BaseRepository):
             self, worker_id: str
     ) -> Optional[AssetCandidateCacheDTO]:
         """原子性地领取一条 pending 状态的候选记录，标记为 processing。"""
-        now_str = datetime.now(timezone.utc).isoformat()
+        claimed_at = now_str()
 
         pending = CandidateStatus.PENDING.value
         processing = CandidateStatus.PROCESSING.value
@@ -198,18 +215,19 @@ class ImportRepository(BaseRepository):
             "WHERE status = ? ORDER BY id LIMIT 1"
         )
         fetch_sql = (
-            "SELECT {cols} FROM asset_candidate_cache WHERE id = ?"
-        ).format(cols=_CANDIDATE_COLUMNS)
+            f"SELECT {_CANDIDATE_COLUMNS} FROM asset_candidate_cache "
+            f"WHERE id = ?"
+        )
 
         while True:
             with self._transaction() as conn:
                 row = conn.execute(select_id_sql, (pending,)).fetchone()
                 if not row:
                     return None
-                candidate_id = row[0]
+                candidate_id = row["id"]
                 cursor = conn.execute(
                     update_sql,
-                    (processing, worker_id, now_str, candidate_id, pending),
+                    (processing, worker_id, claimed_at, candidate_id, pending),
                 )
                 if cursor.rowcount == 0:
                     # 被其它 worker 抢走，重试
@@ -217,19 +235,23 @@ class ImportRepository(BaseRepository):
                 full_row = conn.execute(
                     fetch_sql, (candidate_id,)
                 ).fetchone()
+                if full_row is None:
+                    return None
                 return AssetCandidateCacheDTO.from_row(full_row)
 
     def finalize_candidate(
             self,
             candidate_id: int,
             dto: AssetCreateDTO,
-    ) -> Optional[int]:
-        """在一个事务里完成 create_asset + 候选状态更新。
+    ) -> Optional[UUID]:
+        """在一个事务里完成「插入资产 + 候选置终态」。
 
         返回值 / 候选终态：
-        - 插入成功                → 返回 asset_uuid，候选置 DONE
+        - 插入成功                → 返回 ``dto.uuid``（资产对外标识），候选置 DONE
         - 唯一约束冲突（重复导入）→ 返回 None，候选置 SKIPPED
         - 其他异常                → 返回 None，候选置 FAILED
+
+        契约：仓储不暴露 ``assets.id``（内部自增键），返回值是资产 uuid。
 
         注意：异常/IntegrityError 时外层 with 已经 rollback 完成，
         再通过 _safe_set_candidate_status 用独立事务落状态，
@@ -237,15 +259,12 @@ class ImportRepository(BaseRepository):
         """
         try:
             with self._transaction() as conn:
-                cursor = conn.execute(
-                    _INSERT_ASSET_SQL, dto.to_insert_params()
-                )
-                asset_id = cursor.lastrowid
+                conn.execute(_INSERT_ASSET_SQL, dto.to_insert_params())
                 conn.execute(
                     _UPDATE_CANDIDATE_STATUS_SQL,
                     (CandidateStatus.DONE.value, candidate_id),
                 )
-                return asset_id
+            return dto.uuid
 
         except sqlite3.IntegrityError as e:
             msg = str(e).lower()
@@ -306,9 +325,7 @@ class ImportRepository(BaseRepository):
 
     def recover_stale_candidates(self, timeout_seconds: int = 3600) -> int:
         """回收长时间停留在 processing 状态的候选记录，重置为 pending。"""
-        cutoff = (
-                datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
-        ).isoformat()
+        cutoff = cutoff_str(timedelta(seconds=timeout_seconds))
 
         with self._transaction() as conn:
             cursor = conn.execute(

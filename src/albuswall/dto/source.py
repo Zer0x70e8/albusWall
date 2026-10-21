@@ -41,7 +41,6 @@ MANUAL_SOURCE_ID: Final[int] = 0
 
 __all__ = [
     "MANUAL_SOURCE_ID",
-    "UpdateMode",
     "IngestSource",
     "IngestSourceCreate",
     "IngestSourceUpdate",
@@ -202,7 +201,15 @@ class IngestSource:
                 or not Path(self.source_path).is_dir()
         ):
             return True
-        if self.file_type_check is FileTypeCheckMode.NONE:
+        if self.file_type_check not in (
+                FileTypeCheckMode.SUFFIX,
+                FileTypeCheckMode.MAGIC,
+        ):
+            # 显式白名单：只有 suffix / magic 视为"配置完整"。
+            # NONE 是 Python 侧哨兵（schema CHECK 只允许 suffix/magic，
+            # 且读路径经 coerce_enum 后拿不到 NONE），此处与显式 ``is NONE``
+            # 行为等价，但对未来新增成员默认收紧为 void。
+            # 见 common/CONVENTIONS.md · 待定 · FileTypeCheckMode.NONE。
             return True
         if (
                 self.auto_mount
@@ -515,6 +522,10 @@ class IngestSourceFormData:
 
         契约（``CONVENTIONS.md`` · TriggerConfig.to_dict）：这是**存储形态**
         的唯一出口，``TriggerConfig.to_dict`` 仅作运行时视图，不进存储。
+
+        TODO(形态待定)：本方法恒写单值 str，而 ``TriggerConfig.update_mode``
+        是 ``list[UpdateMode]``；两套形态的取舍见
+        ``common/CONVENTIONS.md`` · 待定 · update_mode，本阶段不改形态。
         """
         if not self.scheduled_enabled and not self.device_trigger_enabled:
             return {"update_mode": UpdateMode.MANUAL.value}

@@ -10,7 +10,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from albuswall.dto.task import ExecutorType
+from albuswall.common.enums import ExecutorType
 
 
 @dataclass(order=True)

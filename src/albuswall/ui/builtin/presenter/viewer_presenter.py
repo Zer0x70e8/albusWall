@@ -8,7 +8,7 @@ from logging import getLogger
 from typing import TYPE_CHECKING, Any, Iterable, Optional
 from uuid import UUID, uuid4
 
-from albuswall.dto.thumbnail import ThumbSpec
+from albuswall.common.enums import ThumbSpec
 from albuswall.services.view import SCOPE_DELETED
 
 from ..model.metadata_model import MetadataModel

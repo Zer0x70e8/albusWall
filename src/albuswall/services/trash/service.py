@@ -45,6 +45,7 @@ from functools import partial
 from typing import Callable, List, Optional
 
 from albuswall.log import getLogger
+from albuswall.utils.time import format_iso, parse_iso
 from albuswall.dto.trash import (
     CleanupReportDTO,
     ClockJumpDTO,
@@ -88,31 +89,9 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _format_iso(dt: datetime) -> str:
-    """与 SQLite ``strftime('%Y-%m-%dT%H:%M:%f','now')`` 同构：UTC + 毫秒。
-
-    ``%f`` 输出 6 位微秒，截断到 3 位毫秒，与 SQLite 一致。
-    在该格式下字符串字典序等于时间序，``deleted_at <= ?`` 成立。
-    """
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
-
-
-# noinspection SpellCheckingInspection
-def _parse_iso(raw: str) -> datetime:
-    """容错解析：兼容带/不带 ``Z``、带/不带 tzinfo。
-
-    schema 生成的时间串不带 tz，视为 UTC。
-    """
-    s = raw.strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(s)
-    except ValueError:
-        dt = datetime.strptime(s, "%Y-%m-%dT%H:%M:%S.%f")
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
+# 时间字符串格式的唯一来源见 utils/time.py：UTC + 3 位毫秒，
+# 与 schema 的 strftime('%Y-%m-%dT%H:%M:%f','now') 同构，
+# 可直接参与 ``deleted_at <= ?`` 的字符串比较。
 
 
 class TrashService:
@@ -223,7 +202,7 @@ class TrashService:
         """
         now = self._clock()
         old_state = self._state.get()
-        watermark = _parse_iso(old_state.last_observed_at)
+        watermark = parse_iso(old_state.last_observed_at)
 
         kind, cutoff_iso, new_watermark = self._resolve_cleanup_window(
             now, watermark,
@@ -243,8 +222,8 @@ class TrashService:
             thumb_failures = report.thumb_failures
 
         self._state.update(
-            last_observed_at=_format_iso(new_watermark),
-            last_cleanup_at=_format_iso(now),
+            last_observed_at=format_iso(new_watermark),
+            last_cleanup_at=format_iso(now),
             cleaned=len(purged),
             clock_jumps=0 if kind == "normal" else 1,
         )
@@ -252,14 +231,14 @@ class TrashService:
         if kind == "normal":
             logger.info(
                 "Trash cleanup done: purged=%d cutoff=%s watermark=%s",
-                len(purged), cutoff_iso, _format_iso(new_watermark),
+                len(purged), cutoff_iso, format_iso(new_watermark),
             )
         else:
             logger.warning(
                 "Trash cleanup skipped (%s): now=%s watermark=%s "
                 "new_watermark=%s",
-                kind, _format_iso(now), _format_iso(watermark),
-                _format_iso(new_watermark),
+                kind, format_iso(now), format_iso(watermark),
+                format_iso(new_watermark),
             )
         if thumb_failures:
             logger.warning(
@@ -321,7 +300,7 @@ class TrashService:
             new_wm = min(now, watermark + ADVANCE_PER_CYCLE)
             return "forward", None, new_wm
 
-        cutoff_iso = _format_iso(now - TRASH_GRACE)
+        cutoff_iso = format_iso(now - TRASH_GRACE)
         return "normal", cutoff_iso, now
 
     # ────────────────────────────────────────────────────────────────

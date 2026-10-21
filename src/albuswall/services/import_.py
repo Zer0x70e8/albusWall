@@ -24,6 +24,7 @@ from concurrent.futures import (
     TimeoutError as FutureTimeoutError,
 )
 
+from albuswall.common.enums import CandidateStatus
 from albuswall.configue import ConfigField
 from albuswall.dto.import_ import AssetCandidateCacheDTO, AssetCreateDTO
 from albuswall.log import getLogger
@@ -471,7 +472,7 @@ class ImportService:
 
     def _finalize(self, cand, asset_dto: AssetCreateDTO, totals: Dict[str, int]) -> None:
         try:
-            asset_id = self._repo.finalize_candidate(cand.id, asset_dto)
+            asset_uuid = self._repo.finalize_candidate(cand.id, asset_dto)
         except Exception:
             # 临时 DB 错误：不动候选状态，下一轮重新取到后重试。
             # 若反复失败，可由 repo 侧根据 retry 计数做退避/上限。
@@ -481,14 +482,16 @@ class ImportService:
             totals["retry"] += 1
             return
 
-        if asset_id:
+        if asset_uuid:
             totals["ok"] += 1
-            _logger.debug("候选 %s → asset_uuid=%s", cand.uuid, asset_id)
+            _logger.debug("候选 %s → asset_uuid=%s", cand.uuid, asset_uuid)
             return
 
         # repo 判定为永久失败（唯一约束冲突 → skipped，其余 → failed）。
+        # get_candidate_status 返回 CandidateStatus 枚举，必须与枚举比较，
+        # 不能拿字符串字面量比较（否则永远走 failed 分支）。
         status = self._repo.get_candidate_status(cand.id)
-        if status == "skipped":
+        if status is CandidateStatus.SKIPPED:
             totals["skipped"] += 1
             _logger.info("候选 %s 判定为重复资产，已跳过", cand.uuid)
         else:

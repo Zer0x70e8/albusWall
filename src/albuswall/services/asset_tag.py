@@ -14,12 +14,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Sequence
+from uuid import UUID
 
 from albuswall.dto.album import AssetDTO
 from albuswall.dto.tag import Tag
 from albuswall.repositories.asset import AssetRepository
 from albuswall.repositories.tag import TagRepository
+from albuswall.repositories.utils.types import UuidKeyed
 from albuswall.repositories.view import ViewRepository
+
+_UUIDLike = UUID | str
 
 
 # ============================== 错误 ==============================
@@ -42,7 +46,7 @@ class AssetNotFound(AssetTagError):
 class AddTagsResult:
     added: int
     existing: int  # 已存在绑定（幂等跳过）
-    skipped_uuids: tuple[str, ...]  # 不存在或软删的标签
+    skipped_uuids: tuple[_UUIDLike, ...]  # 不存在或软删的标签
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +54,7 @@ class SetTagsResult:
     added: int
     removed: int
     existing: int
-    skipped_uuids: tuple[str, ...]
+    skipped_uuids: tuple[_UUIDLike, ...]
 
 
 # ============================== Service ==============================
@@ -79,8 +83,8 @@ class AssetTagService:
 
     def add(
             self,
-            asset_uuid: str,
-            tag_uuids: Sequence[str],
+            asset_uuid: _UUIDLike,
+            tag_uuids: Sequence[_UUIDLike],
     ) -> AddTagsResult:
         """给资产打标签。
 
@@ -88,11 +92,11 @@ class AssetTagService:
         返回：实际新增 / 已存在 / 被跳过的数量与 uuid。
         """
         if self._view.get_asset(asset_uuid, include_deleted=False) is None:
-            raise AssetNotFound(asset_uuid)
+            raise AssetNotFound(str(asset_uuid))
 
         unique = list(dict.fromkeys(tag_uuids))
-        valid: list[str] = []
-        skipped: list[str] = []
+        valid: list[_UUIDLike] = []
+        skipped: list[_UUIDLike] = []
         for u in unique:
             if self._tag.exists(u):
                 valid.append(u)
@@ -113,16 +117,16 @@ class AssetTagService:
 
     def remove(
             self,
-            asset_uuid: str,
-            tag_uuids: Sequence[str],
+            asset_uuid: _UUIDLike,
+            tag_uuids: Sequence[_UUIDLike],
     ) -> int:
         """移除绑定；软删标签的绑定保留（与 repo 语义一致）。"""
         return self._asset.remove_tags_from_asset(asset_uuid, tag_uuids)
 
     def set(
             self,
-            asset_uuid: str,
-            tag_uuids: Sequence[str],
+            asset_uuid: _UUIDLike,
+            tag_uuids: Sequence[_UUIDLike],
     ) -> SetTagsResult:
         """全量设置：按当前绑定 diff 出新增和移除。
 
@@ -130,11 +134,14 @@ class AssetTagService:
         中途失败时重试会收敛到目标状态。
         """
         if self._view.get_asset(asset_uuid, include_deleted=False) is None:
-            raise AssetNotFound(asset_uuid)
+            raise AssetNotFound(str(asset_uuid))
 
-        current = set(self._tag.get_tag_uuids_of_asset(asset_uuid))
-        target = set(tag_uuids)
-        to_add = [u for u in dict.fromkeys(tag_uuids) if u not in current]
+        # repo 返回 UUID；UI 传来的可能是 str。统一成 canonical str 再 diff。
+        current = {str(u) for u in self._tag.get_tag_uuids_of_asset(asset_uuid)}
+        target = {str(u) for u in tag_uuids}
+        to_add = [
+            u for u in dict.fromkeys(tag_uuids) if str(u) not in current
+        ]
         to_remove = [u for u in current if u not in target]
 
         add_result = (
@@ -154,18 +161,20 @@ class AssetTagService:
     # 读（转发，方便 presenter 只注一个 service）
     # ---------------------------------------------------------------- #
 
-    def list_of_asset(self, asset_uuid: str) -> list[Tag]:
+    def list_of_asset(self, asset_uuid: _UUIDLike) -> list[Tag]:
         return self._tag.get_tags_of_asset(asset_uuid)
 
-    def count_for_tag(self, tag_uuid: str) -> int:
+    def count_for_tag(self, tag_uuid: _UUIDLike) -> int:
         return self._tag.count_assets(tag_uuid)
 
-    def count_for_tags(self, tag_uuids: Sequence[str]) -> dict[str, int]:
+    def count_for_tags(
+            self, tag_uuids: Sequence[_UUIDLike]
+    ) -> UuidKeyed[int]:
         return self._tag.count_assets_bulk(tag_uuids)
 
     def list_assets_of_tag(
             self,
-            tag_uuid: str,
+            tag_uuid: _UUIDLike,
             offset: int = 0,
             limit: int = 100,
     ) -> list[AssetDTO]:

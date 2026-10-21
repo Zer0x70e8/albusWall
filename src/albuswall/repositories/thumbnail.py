@@ -23,33 +23,38 @@ assets 表里与缩略图相关的列：
 常量来源
 --------
 ALL_SPECS / SPEC_TO_COLUMN / BASE_COLUMN / ALL_THUMB_COLUMNS
-均来自 albuswall.dto.thumbnail，本模块不再就地定义，避免多处漂移。
+均来自 albuswall.common.constants.thumbnail（schema 契约，不属 DTO），
+本模块不再就地定义，避免多处漂移。
 """
 
-from typing import Any, Iterable, Mapping, Optional, Sequence, Iterator
+from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence, Union
+from uuid import UUID
 
-from albuswall.log import getLogger
-from albuswall.dto.sentinel import UnsetType, UNSET
-from albuswall.dto.thumbnail import (
+from albuswall.common.constants.thumbnail import (
     ALL_SPECS,
     ALL_THUMB_COLUMNS,
     BASE_COLUMN,
     SPEC_TO_COLUMN,
+)
+from albuswall.common.enums import ThumbSpec
+from albuswall.dto.sentinel import UNSET, UnsetType
+from albuswall.dto.thumbnail import (
     MissingThumbnailRow,
     ThumbnailHashRow,
     ThumbnailPaths,
     ThumbnailStats,
     ThumbnailTaskInput,
-    ThumbSpec,
 )
+from albuswall.log import getLogger
 # from albuswall.utils.path import join_path
 
 from .base import BaseRepository
+from .utils.sql_helpers import as_uuid_str, chunked, placeholders
+from .utils.types import UuidKeyed
 
 logger = getLogger(__name__)  # albuswall.database.thumbnail
 
-# 接近但小于 SQLite 默认 SQLITE_MAX_VARIABLE_NUMBER，兼顾旧版
-_IN_CLAUSE_CHUNK = 900
+_UUIDLike = Union[UUID, str]
 
 
 class ThumbnailRepository(BaseRepository):
@@ -98,13 +103,15 @@ class ThumbnailRepository(BaseRepository):
 
     def update_paths_by_uuid(
             self,
-            uuid: str,
+            asset_uuid: _UUIDLike,
             paths: Mapping[ThumbSpec, Optional[str]],
             *,
             base_dir: str | None | UnsetType = UNSET,
     ) -> int:
-        """同 update_paths，但用 uuid 定位。"""
-        return self._update_where("uuid", uuid, paths, base_dir=base_dir)
+        """同 update_paths，但用 uuid 定位（收 ``UUID | str``）。"""
+        return self._update_where(
+            "uuid", as_uuid_str(asset_uuid), paths, base_dir=base_dir
+        )
 
     def bulk_update_paths(
             self,
@@ -145,7 +152,7 @@ class ThumbnailRepository(BaseRepository):
                     continue
                 params.append(asset_id)
                 sql = f"UPDATE assets SET {', '.join(sets)} WHERE id = ?"
-                cursor = conn.execute(sql, params)
+                cursor = conn.execute(sql, tuple(params))
                 updated += cursor.rowcount
         return updated
 
@@ -256,25 +263,26 @@ class ThumbnailRepository(BaseRepository):
         return snapshots
 
     def clear_and_snapshot_by_uuid(
-            self, uuid: str
+            self, asset_uuid: _UUIDLike
     ) -> Optional[ThumbnailPaths]:
         """clear_and_snapshot 的 uuid 版。返回清空前的路径快照或 None。"""
-        snapshot = self.get_paths_by_uuid(uuid)
+        value = as_uuid_str(asset_uuid)
+        snapshot = self.get_paths_by_uuid(value)
         if snapshot is None:
             return None
 
         set_clause = ", ".join(f"{c} = NULL" for c in ALL_THUMB_COLUMNS)
         self._execute(
-            f"UPDATE assets SET {set_clause} WHERE uuid = ?", (uuid,)
+            f"UPDATE assets SET {set_clause} WHERE uuid = ?", (value,)
         )
         logger.info(
-            "cleared thumbnail paths uuid=%s base=%r", uuid, snapshot.base,
+            "cleared thumbnail paths uuid=%s base=%r", value, snapshot.base,
         )
         return snapshot
 
     def clear_and_snapshot_bulk_by_uuid(
-            self, uuids: Sequence[str]
-    ) -> dict[str, ThumbnailPaths]:
+            self, uuids: Sequence[_UUIDLike]
+    ) -> UuidKeyed[ThumbnailPaths]:
         """批量清空并返回快照（uuid 版）。返回 {uuid: 清空前的路径快照}。"""
         snapshots = self.get_paths_bulk_by_uuid(uuids)
         if not snapshots:
@@ -313,7 +321,8 @@ class ThumbnailRepository(BaseRepository):
     # ------------------------------------------------------------------ #
     def get_paths(self, asset_id: int) -> Optional[ThumbnailPaths]:
         """返回 ThumbnailPaths；资产不存在返回 None。不过滤 is_deleted。"""
-        row = self._fetchone(
+        return self._fetch_one_dto(
+            ThumbnailPaths,
             f"""
             SELECT id, {self._path_columns()}
               FROM assets
@@ -321,19 +330,20 @@ class ThumbnailRepository(BaseRepository):
             """,
             (asset_id,),
         )
-        return self._row_to_paths(row)
 
-    def get_paths_by_uuid(self, uuid: str) -> Optional[ThumbnailPaths]:
-        """同 get_paths，按 uuid 查。不过滤 is_deleted。"""
-        row = self._fetchone(
+    def get_paths_by_uuid(
+            self, asset_uuid: _UUIDLike
+    ) -> Optional[ThumbnailPaths]:
+        """同 get_paths，按 uuid 查（收 ``UUID | str``）。不过滤 is_deleted。"""
+        return self._fetch_one_dto(
+            ThumbnailPaths,
             f"""
             SELECT id, {self._path_columns()}
               FROM assets
              WHERE uuid = ?
             """,
-            (uuid,),
+            (as_uuid_str(asset_uuid),),
         )
-        return self._row_to_paths(row)
 
     def get_paths_bulk(
             self, asset_ids: Sequence[int]
@@ -341,61 +351,55 @@ class ThumbnailRepository(BaseRepository):
         """批量读缩略图路径。
 
         不区分 is_deleted：读取侧（含回收站）都走这里。
-        返回 {asset_uuid: ThumbnailPaths}，缺失的 id 不在结果里。
+        返回 {asset_id: ThumbnailPaths}，缺失的 id 不在结果里。
         """
-        if not asset_ids:
-            return {}
-
         result: dict[int, ThumbnailPaths] = {}
         ids = list(asset_ids)
         cols = self._path_columns()
-        for start in range(0, len(ids), _IN_CLAUSE_CHUNK):
-            chunk = ids[start:start + _IN_CLAUSE_CHUNK]
-            placeholders = ",".join("?" * len(chunk))
+        for chunk in chunked(ids):
             rows = self._fetchall(
                 f"""
                 SELECT id, {cols}
                   FROM assets
-                 WHERE id IN ({placeholders})
+                 WHERE id IN ({placeholders(len(chunk))})
                 """,
-                chunk,
-            ) or []
-            for r in rows:
-                result[r["id"]] = ThumbnailPaths.from_row(r)
+                tuple(chunk),
+            )
+            for row in rows:
+                result[row["id"]] = ThumbnailPaths.from_row(row)
         return result
 
     def get_paths_bulk_by_uuid(
-            self, uuids: Sequence[str]
-    ) -> dict[str, ThumbnailPaths]:
+            self, uuids: Sequence[_UUIDLike]
+    ) -> UuidKeyed[ThumbnailPaths]:
         """批量读缩略图路径（uuid 版）。
 
-        返回 {asset_uuid: ThumbnailPaths}，缺失的 uuid 不在结果里。
-        与 get_paths_bulk 语义相同，仅换键。
+        返回 {asset_uuid: ThumbnailPaths}，缺失的 uuid 不在结果里；键为
+        canonical ``str``（与 SQL/UI 侧口径一致）。与 get_paths_bulk
+        语义相同，仅换键。
         """
-        if not uuids:
+        values = list(dict.fromkeys(as_uuid_str(u) for u in uuids))
+        if not values:
             return {}
 
         result: dict[str, ThumbnailPaths] = {}
-        values = list(uuids)
         cols = self._path_columns()
-        for start in range(0, len(values), _IN_CLAUSE_CHUNK):
-            chunk = values[start:start + _IN_CLAUSE_CHUNK]
-            placeholders = ",".join("?" * len(chunk))
+        for chunk in chunked(values):
             rows = self._fetchall(
                 f"""
                 SELECT uuid, {cols}
                   FROM assets
-                 WHERE uuid IN ({placeholders})
+                 WHERE uuid IN ({placeholders(len(chunk))})
                 """,
-                chunk,
-            ) or []
-            for r in rows:
-                result[r["uuid"]] = ThumbnailPaths.from_row(r)
+                tuple(chunk),
+            )
+            for row in rows:
+                result[row["uuid"]] = ThumbnailPaths.from_row(row)
         return result
 
     def get_paths_by_source(
             self, source_id: int
-    ) -> dict[str, ThumbnailPaths]:
+    ) -> UuidKeyed[ThumbnailPaths]:
         """读某 source 下所有资产的缩略图路径快照，键是 asset uuid。
 
         供 SourceTrashService 在 purge 前调用——purge 之后 assets 行
@@ -461,7 +465,7 @@ class ThumbnailRepository(BaseRepository):
              ORDER BY modified_at ASC
              LIMIT ?
         """
-        rows = self._fetchall(sql, params) or []
+        rows = self._fetchall(sql, tuple(params)) or []
         return [MissingThumbnailRow.from_row(r) for r in rows]
 
     def list_all_with_hashes(
@@ -492,11 +496,12 @@ class ThumbnailRepository(BaseRepository):
             include_deleted: bool = False,
             batch_size: int = 1000,
     ) -> Iterator[ThumbnailPaths]:
-        """流式迭代所有资产的缩略图路径 DTO。
+        """流式迭代资产的缩略图路径 DTO。
 
         - 内部用 id 游标分页，避免一次性 fetchall 全表。
-        - 不过滤 is_deleted 是默认 False（与 list_missing 一致），
-          但参数可开，因为回收站清理也常要全量遍历。
+        - ``include_deleted=False``（默认）：**只遍历活跃资产**（过滤
+          ``is_deleted = 1``），与 ``list_missing`` 的默认口径一致；
+          回收站清理等需要全量遍历的场景显式传 ``True``。
         """
         last_id = 0
         cols = self._path_columns()
@@ -571,13 +576,14 @@ class ThumbnailRepository(BaseRepository):
 
     def get_task_input_by_uuid(
             self,
-            uuid: str,
+            asset_uuid: _UUIDLike,
             *,
             include_deleted: bool = False,
     ) -> Optional[ThumbnailTaskInput]:
-        """同 get_task_input，但按 assets.uuid 定位。"""
+        """同 get_task_input，但按 assets.uuid 定位（收 ``UUID | str``）。"""
         return self._task_input_where(
-            "a.uuid", uuid, include_deleted=include_deleted,
+            "a.uuid", as_uuid_str(asset_uuid),
+            include_deleted=include_deleted,
         )
 
     # ------------------------------------------------------------------ #
@@ -610,7 +616,7 @@ class ThumbnailRepository(BaseRepository):
             return 0
         params.append(where_val)
         sql = f"UPDATE assets SET {', '.join(sets)} WHERE {where_col} = ?"
-        return self._execute(sql, params).rowcount
+        return self._execute(sql, tuple(params)).rowcount
 
     def _task_input_where(
             self,
@@ -627,7 +633,8 @@ class ThumbnailRepository(BaseRepository):
         if not include_deleted:
             where += " AND a.is_deleted = 0"
 
-        row = self._fetchone(
+        return self._fetch_one_dto(
+            ThumbnailTaskInput,
             f"""
                 SELECT a.id            AS id,
                        a.uuid          AS uuid,
@@ -642,9 +649,6 @@ class ThumbnailRepository(BaseRepository):
                 """,
             (where_val,),
         )
-        if row is None:
-            return None
-        return ThumbnailTaskInput.from_row(row)
 
     @staticmethod
     def _escape_like(s: str) -> str:
@@ -682,12 +686,6 @@ class ThumbnailRepository(BaseRepository):
             params.append(rel_path)
 
         return sets, params
-
-    @staticmethod
-    def _row_to_paths(row) -> Optional[ThumbnailPaths]:
-        if row is None:
-            return None
-        return ThumbnailPaths.from_row(row)
 
     # # ------------------------------------------------------------------ #
     # # 向后兼容别名（一个版本周期后删除）

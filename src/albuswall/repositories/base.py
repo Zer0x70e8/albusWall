@@ -4,13 +4,28 @@
 import threading
 from contextlib import contextmanager
 from sqlite3 import Cursor, Row, Connection
-from typing import Optional, List, Generator
+from typing import Generator, List, Optional, Protocol, TypeVar
 
 from albuswall.infrastructure.database import Connector
 from albuswall.log import getLogger
 from albuswall.utils.sql_log import format_params, format_query
 
 logger = getLogger("albuswall.database")
+
+
+class RowConstructible(Protocol):
+    """DTO 边界契约：``from_row(row)`` 由 DTO 自己提供。
+
+    DTO 层的 ``from_row`` 固定接受 ``sqlite3.Row``，负责 ``str→UUID`` /
+    ``Enum`` / ``bool`` 等边界转换（见 ``dto/CONVENTIONS.md``）。
+    仓储只调用它，不再自己拼 DTO：``self._fetch_one_dto(AssetDTO, ...)``。
+    """
+
+    @classmethod
+    def from_row(cls, row: Row) -> "RowConstructible": ...
+
+
+_DTO = TypeVar("_DTO", bound=RowConstructible)
 
 # SQLite 单写者：写操作必须串行。保持模块级 RLock 是当前最简且正确的选择。
 # 若未来后端换成支持并发写的数据库，应把锁下移到 Connector 层，由后端决定
@@ -101,6 +116,32 @@ class BaseRepository:
         rows: List[Row] = cursor.fetchall()
         logger.debug("Fetched %d rows.", len(rows))
         return rows
+
+    # ---------- read → DTO ----------
+    def _fetch_one_dto(
+            self,
+            dto_cls: type[_DTO],
+            query: str,
+            params=None,
+    ) -> Optional[_DTO]:
+        """读单行并交给 ``dto_cls.from_row`` 构造 DTO；无行返回 ``None``。
+
+        统一了各仓储里满地的 ``X.from_row(row) if row else None``，
+        并保证行 → DTO 的边界转换只发生在 DTO 自己手里。
+        """
+        row = self._fetchone(query, params)
+        if row is None:
+            return None
+        return dto_cls.from_row(row)
+
+    def _fetch_all_dtos(
+            self,
+            dto_cls: type[_DTO],
+            query: str,
+            params=None,
+    ) -> List[_DTO]:
+        """读多行并逐行构造 DTO；无行返回空列表。"""
+        return [dto_cls.from_row(row) for row in self._fetchall(query, params)]
 
     # ---------- transaction ----------
     @contextmanager

@@ -1,5 +1,5 @@
 #
-""""""
+"""source 域枚举：导入源候选状态。"""
 
 from __future__ import annotations
 

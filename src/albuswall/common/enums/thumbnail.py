@@ -1,5 +1,5 @@
 #
-""""""
+"""thumbnail 域枚举：缩略图规格。"""
 
 from enum import Enum
 

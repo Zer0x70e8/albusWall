@@ -51,7 +51,8 @@ from albuswall.configue.state import (
     ObservableContext
 )
 from albuswall.log import getLogger
-from albuswall.dto.task import ExecutorType, Task
+from albuswall.common.enums import ExecutorType
+from albuswall.dto.task import Task
 from albuswall.dto.import_ import AssetCandidateCacheDTO
 from albuswall.dto.source import (
     MANUAL_SOURCE_ID,
