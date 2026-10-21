@@ -39,12 +39,16 @@
 - 锚点：TODO（本阶段不处理，无法硬凑锚点）
 - 影响文件：`dto/__init__.py`、`dto/source.py`
 
-### from_row / to_dict Protocol
+### from_row 字段容错分层
 
-- 结论：`from_row` / `to_dict` 需要 Protocol 声明。
-- 理由：统一读/写转换入口。
-- 锚点：TODO（Protocol 未落地前不可执行）
-- 影响文件：`dto/album.py`、`dto/import_.py`、`dto/source.py`、`dto/thumbnail.py`、`dto/trash.py`、`dto/trigger.py`
+- 结论：`from_row` 中 **身份 / 必填字段直取 `row[key]`**（缺列即 schema/SELECT 错误，应暴露）； **可选 / 展示字段走
+  `dto.utils.row_get`**（缺列返回 default）。
+- 理由：容错是给“本来就可能没有的列”的，不是给“应该有但没有”的列。全容错会把 SELECT/schema 错误静默成 `-1` / `""` / `None`
+  ，错误拖到 UI 才暴露；全严格会杀掉轻查询（只 select 部分列）的能力。
+- 锚点：`tests/dto/test_utils_convert.py::test_row_get_strict_vs_lenient`
+- 影响文件：`dto/album.py`、`dto/import_.py`、`dto/source.py`、`dto/thumbnail.py`、`dto/trash.py`
+- 备注：`AssetDTO.from_row` 采用 `dict(row)` + `.get()` 风格，语义等价（身份直取、可选容错），属于 **已承认的并存风格**
+  ，本阶段不迁移。
 
 ### Album.description
 
@@ -78,9 +82,13 @@
 ### 枚举容错
 
 - 结论：读路径遇非法枚举值降级到显式默认；写路径抛 `ValueError`；`FileTypeCheckMode.NONE` 保留枚举值，只删 `_missing_` 静默映射。
-- 理由：读侧不阻塞，写侧不吞错，去掉有害降级。
-- 锚点：`tests/dto/test_contracts.py::test_enum_read_degrades_write_raises`
-- 影响文件：`dto/source.py`、`dto/import_.py`、`dto/trigger.py`
+- 结论（读路径统一入口）：所有读路径枚举容错统一走 `dto.utils.coerce_enum`，禁止各 DTO 自建 `_coerce_*` 私有函数。
+    - 有默认值：`coerce_enum(value, EnumCls, default)` → 返回 `EnumCls`；
+    - 无默认值：`coerce_enum(value, EnumCls)` → 返回 `EnumCls | None`，写路径拿到 `None` 后由调用方 `raise ValueError`。
+- 理由：读侧不阻塞，写侧不吞错，去掉有害降级；枚举容错规则只写一次，避免各 DTO 各写一份。
+- 锚点：`tests/dto/test_contracts.py::test_enum_read_degrades_write_raises`、
+  `tests/dto/test_utils_convert.py::test_coerce_enum`
+- 影响文件：`dto/source.py`、`dto/import_.py`、`dto/trigger.py`、`dto/utils/convert.py`
 
 ### 对外用 uuid
 
@@ -113,6 +121,21 @@
 - 锚点：`tests/dto/test_contracts.py::test_maybe_unset_alias_matches_patch_field`
 - 影响文件：`dto/sentinel.py`、`dto/task.py`、`dto/source.py`、`dto/tag.py`
 
+### 转换工具集中维护
+
+- 结论：DTO 层的边界转换统一收敛到 `dto/utils/convert.py`：
+    - `to_uuid` —— `str` / `UUID` → `UUID`；
+    - `coerce_enum` —— 读路径枚举容错（见「枚举容错」）；
+    - `row_get` —— `sqlite3.Row` 缺列兜底（见「from_row 字段容错分层」）；
+    - `to_json` / `json_default` —— JSON 序列化兜底（`Enum → value`）；
+    - `normalize_tag_name` —— tag 名归一化契约。
+- 结论（禁止）：不得在各 DTO 内自建 `_coerce_*` / `_row_get` / `_get` / 私有 `normal` 等副本；历史副本已删除（
+  `_coerce_status`、`_coerce_file_type_check`、`_row_get`、`thumbnail._get`、`normal(v, t)`），由 grep 清单守护。
+- 理由：同上（`sentinel`）——契约只写一次，避免各域自建导致语义漂移。
+- 锚点：`tests/dto/test_utils_convert.py::test_coerce_enum`、`::test_row_get_strict_vs_lenient`
+- 影响文件：`dto/utils/convert.py`、`dto/utils/__init__.py`、`dto/source.py`、`dto/import_.py`、`dto/thumbnail.py`、
+  `dto/trigger.py`
+
 ## 二、待定
 
 > 原 9 条待定中 8 条已在 review 中拍板并落入「已定」；此处只列仍待定的项，按影响面小 → 大排序。
@@ -124,8 +147,9 @@
 
 ## 三、例外
 
-- `dto/sentinel.py`：DTO 层共享基础设施（`UNSET` / `_UnsetType` / `PatchField` / `MaybeUnset`），不映射表、不套表 DTO 契约；被
-  `IngestSourceUpdate`、`TagUpdate`、`BackpressureEvent` 等依赖，必须集中维护、不得各域自建。
+- `dto/utils/convert.py`：DTO 层共享转换工具（`to_uuid` / `coerce_enum` / `row_get` / `to_json` / `json_default` /
+  `normalize_tag_name`），被所有 `from_row` / `__post_init__` / 写路径依赖。不映射表、不套表 DTO 契约；必须集中维护、不得各域自建私有副本（历史副本
+  `_coerce_status` / `_coerce_file_type_check` / `_row_get` / `_get` 已删除）。
 - 原 `dto/trash.py` 的 TypedDict 例外已撤销：全部改 dataclass，纳入通用契约（见「已定 · 全改 dataclass」）。
 - 其余写 DTO、事件 DTO、报告 DTO、service/UI 视图（如 `TagTreeNode`、`ThumbnailPaths`、`SourceScanFinished`、
   `SourcePurgeReport`）按通用契约的不同子类处理，不列为例外。
@@ -161,7 +185,9 @@
 
 ## ⚠️ 风险提示
 
-- `AssetDTO.uuid`、`AssetCreateDTO.uuid`、`AssetCandidateCacheDTO.uuid` 等仍为 `str`，UUID 统一的迁移边界未被阶段 0 覆盖。
+[//]: # (- `AssetDTO.uuid`、`AssetCreateDTO.uuid`、`AssetCandidateCacheDTO.uuid` 等仍为 `str`，UUID 统一的迁移边界未被阶段 0 覆盖。)
+[//]: # (修好了)
+
 - `AssetCreateDTO.is_deleted` 改 `bool` 会波及现有 `int` 绑定/写入点，需 grep 确认。
 - `TriggerConfig.update_mode` 与 `IngestSourceFormData.to_trigger_config()` 仍两套形态，存储/表单桥未统一。
 - `FileTypeCheckMode.NONE` 保留后，`IngestSource.is_void()` 的行为是否随文件类型检查设计调整尚未定。

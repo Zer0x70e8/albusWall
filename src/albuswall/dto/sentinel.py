@@ -67,12 +67,20 @@ PatchField: TypeAlias = Union[T, None, UnsetType]
 
 # 中性别名：与 PatchField 语义完全等价，命名适用于非 PATCH 场景
 # （例如 BackpressureEvent 的 seq/priority/kind 等按 reason 动态附加字段）。
-# 保持为 PatchField 的别名而非独立 Union，保证二者类型上不可区分，
-# 避免出现"看着等价实际上不一样"的隐性分裂。
-MaybeUnset: TypeAlias = PatchField
+#
+# 注意：这里**刻意**写成独立的 Union[...]，而不是 ``= PatchField``。
+# PyCharm 会把 ``MaybeUnset = PatchField`` 视为已特殊化的别名，
+# 导致 `MaybeUnset[int]` 报 "Type alias is not generic or already
+# specialized"。两处独立展开后结构等价（同一 T、同一 UnsetType），
+# mypy / pyright / PyCharm 均判定可互换；等价性由
+# ``tests/dto/test_contracts.py::test_maybe_unset_alias_matches_patch_field``
+# 守护。
+MaybeUnset: TypeAlias = Union[T, None, UnsetType]
 
 # TODO(py3.12): 最低支持版本升到 3.12 后，替换为 PEP 695 的
 #     type PatchField[T] = T | None | UnsetType
-#     type MaybeUnset[T] = T | None | UnsetType
+#     type MaybeUnset[T] = PatchField[T]
 # 现在用 Union 写法是因为 3.11 下 `T | None` 不返回 _UnionGenericAlias，
 # 泛型替换不生效；3.12 起 `|` 可直接用于 TypeVar 组合。
+# 届时 ``MaybeUnset[T] = PatchField[T]`` 的"别名指向别名"写法在 PEP 695
+# 下也能被 PyCharm 正确识别为泛型别名，可以恢复"单一来源"的结构。

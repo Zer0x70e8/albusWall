@@ -38,6 +38,7 @@ from albuswall.log import getLogger, Logger
 from albuswall.dto.task import (
     BackpressureEvent,
     BackpressureReason,
+    ExecutorArg,
     ExecutorType,
     PermitKind,
     TaskServiceStats,
@@ -162,7 +163,7 @@ class TaskService:
 
         # 背压可观测性
         self._stats_lock = threading.Lock()
-        self._stats: TaskServiceStats = {
+        self._stats: dict[str, int | float] = {
             "submitted": 0,
             "rejected": 0,
             "backpressure_reject": 0,
@@ -192,7 +193,7 @@ class TaskService:
     # 公共契约（TaskServiceProtocol）
     # ============================================================
     def submit(self, fn: Callable, *args,
-               executor: ExecutorType = ExecutorType.THREAD,
+               executor: ExecutorArg = ExecutorType.THREAD,
                priority: int = 0,
                **kwargs) -> Future:
         # 归一化 + 运行时白名单：非法值（含大小写错误）直接 ValueError。
@@ -279,7 +280,7 @@ class TaskService:
 
     def get_stats(self) -> TaskServiceStats:
         with self._stats_lock:
-            return dict(self._stats)  # type: ignore[return-value]
+            return TaskServiceStats(**self._stats)
 
     def set_backpressure_callback(
             self, cb: Optional[Callable[[BackpressureEvent], None]]
@@ -337,15 +338,15 @@ class TaskService:
         if cb is not None:
             try:
                 # noinspection calling-non-callable
-                cb({
-                    "reason": reason,
-                    "queue_size": qsize,
-                    "queue_max": qmax,
-                    "concurrency_current": self._global_sem.current,
-                    "concurrency_max": self._global_sem.max,
-                    "ts": now,
+                cb(BackpressureEvent(
+                    reason=reason,
+                    queue_size=qsize,
+                    queue_max=qmax,
+                    concurrency_current=self._global_sem.current,
+                    concurrency_max=self._global_sem.max,
+                    ts=now,
                     **extra,
-                })
+                ))
             except Exception as exc:
                 _logger.error("Backpressure callback raised: %s", exc)
 

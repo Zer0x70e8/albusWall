@@ -1,22 +1,15 @@
 #
 """"""
 
+from sqlite3 import Row
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from albuswall.common.enums import ThumbSpec
 from albuswall.utils.path import join_path
 
-
-def _get(row: Any, key: str, default: Any = None) -> Any:
-    """兼容 sqlite3.Row / dict / Mapping 的取值。"""
-    try:
-        return row[key]
-    except (KeyError, IndexError, TypeError):
-        return default
-
-
+from .utils import to_uuid, row_get
 
 # --------------------------------------------------------------------------- #
 # 唯一权威定义：spec / column 映射
@@ -105,17 +98,18 @@ class ThumbnailPaths:
         }
 
     @classmethod
-    def from_row(cls, row: Mapping) -> "ThumbnailPaths":
+    def from_row(cls, row: Row) -> "ThumbnailPaths":
         """从含 thumb_path / thumb_*_path 列的行构造。
 
-        用 ``_get`` 容错：迁移期不少 SELECT 只挑了部分 spec 列
+        契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。
+        用 ``row_get`` 容错：迁移期不少 SELECT 只挑了部分 spec 列
         （甚至只挑 thumb_path），缺列按 None 处理，不抛 KeyError。
         """
         return cls(
-            base=_get(row, "thumb_path"),
-            small=_get(row, "thumb_small_path"),
-            medium=_get(row, "thumb_medium_path"),
-            large=_get(row, "thumb_large_path"),
+            base=row_get(row, "thumb_path"),
+            small=row_get(row, "thumb_small_path"),
+            medium=row_get(row, "thumb_medium_path"),
+            large=row_get(row, "thumb_large_path"),
         )
 
     @classmethod
@@ -134,19 +128,23 @@ class ThumbnailPaths:
 
 @dataclass(frozen=True, slots=True)
 class MissingThumbnailRow:
-    """list_missing 的返回行：待补齐缩略图的活跃资产。"""
+    """list_missing 的返回行：待补齐缩略图的活跃资产。
+
+    契约：``uuid`` 对外统一为 ``UUID``；``from_row`` 负责 ``str→UUID``。
+    """
     id: int
-    uuid: str
+    uuid: UUID
     source_id: Optional[int]
     file_path: str
     file_hash: str
     paths: ThumbnailPaths
 
     @classmethod
-    def from_row(cls, row: Mapping) -> "MissingThumbnailRow":
+    def from_row(cls, row: Row) -> "MissingThumbnailRow":
+        """契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。"""
         return cls(
             id=row["id"],
-            uuid=row["uuid"],
+            uuid=to_uuid(row["uuid"]),
             source_id=row["source_id"],
             file_path=row["file_path"],
             file_hash=row["file_hash"],
@@ -156,17 +154,21 @@ class MissingThumbnailRow:
 
 @dataclass(frozen=True, slots=True)
 class ThumbnailHashRow:
-    """list_all_with_hashes 的返回行：用于与磁盘反向比对。"""
+    """list_all_with_hashes 的返回行：用于与磁盘反向比对。
+
+    契约：``uuid`` 对外统一为 ``UUID``；``from_row`` 负责 ``str→UUID``。
+    """
     id: int
-    uuid: str
+    uuid: UUID
     file_hash: str
     paths: ThumbnailPaths
 
     @classmethod
-    def from_row(cls, row: Mapping) -> "ThumbnailHashRow":
+    def from_row(cls, row: Row) -> "ThumbnailHashRow":
+        """契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。"""
         return cls(
             id=row["id"],
-            uuid=row["uuid"],
+            uuid=to_uuid(row["uuid"]),
             file_hash=row["file_hash"],
             paths=ThumbnailPaths.from_row(row),
         )
@@ -197,9 +199,13 @@ class ThumbnailStats:
 
 @dataclass(frozen=True, slots=True)
 class ThumbnailTask:
-    """一次缩略图生成任务的输入。"""
+    """一次缩略图生成任务的输入。
+
+    契约：``uuid`` 对外统一为 ``UUID``；构造点负责 ``str→UUID``
+    （本类无 ``from_row``，由 Scanner / 调度侧构造）。
+    """
     asset_id: int
-    uuid: str
+    uuid: UUID
     source_id: int
     file_path: str
     file_hash: str
@@ -215,21 +221,28 @@ class ThumbnailTaskInput:
 
     由 ThumbnailRepository.get_task_input(asset_uuid)
     或 ThumbnailRepository.get_task_input_by_uuid(uuid) 构造。
+
+    契约：``uuid`` 对外统一为 ``UUID``；``from_row`` 负责 ``str→UUID``。
     """
     asset_id: int
-    uuid: str
+    uuid: UUID
     source_id: Optional[int]
     source_path: Optional[str]  # sources 表里的根目录/基础路径
     file_path: str  # assets 表里的相对路径
 
     @classmethod
-    def from_row(cls, row: Any) -> "ThumbnailTaskInput":
+    def from_row(cls, row: Row) -> "ThumbnailTaskInput":
+        """契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。
+
+        ``asset_id`` 优先取 ``id`` 列，缺失时回退到 ``asset_uuid``
+        （历史调用点兼容，待调用方统一后收紧）。
+        """
         return cls(
-            asset_id=_get(row, "id") or _get(row, "asset_uuid"),
-            uuid=_get(row, "uuid"),
-            source_id=_get(row, "source_id"),
-            source_path=_get(row, "source_path"),
-            file_path=_get(row, "file_path"),
+            asset_id=row_get(row, "id") or row_get(row, "asset_uuid"),
+            uuid=to_uuid(row["uuid"]),
+            source_id=row_get(row, "source_id"),
+            source_path=row_get(row, "source_path"),
+            file_path=row_get(row, "file_path"),
         )
 
 
@@ -241,7 +254,7 @@ class ThumbnailResult:
     """_work_one() 的执行结果。
 
     ok          —— 是否成功
-    asset_uuid    —— 对应资产 id
+    asset_uuid  —— 对应资产 uuid（契约：``UUID``，与 ``AssetDTO.uuid`` 同口径）
     error       —— 失败标记，形如 "render:UnidentifiedImageError"
     duration_ms —— 成功耗时（毫秒）
     retryable   —— False 表示重试没有意义（资产已删、源丢失、非法图片）；

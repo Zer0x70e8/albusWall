@@ -8,9 +8,6 @@ from albuswall.dto.trash import (
     PurgeCandidateDTO,
     TrashedAssetDTO,
     TrashStateDTO,
-    purge_candidate_from_row,
-    trashed_asset_from_row,
-    trash_state_from_row,
 )
 
 from .utils.sql_helpers import placeholders
@@ -46,7 +43,7 @@ class TrashRepository(BaseRepository):
             """,
             (limit, offset),
         )
-        return [trashed_asset_from_row(r) for r in rows]
+        return [TrashedAssetDTO.from_row(r) for r in rows]
 
     def get_deleted(self, asset_id: int) -> Optional[TrashedAssetDTO]:
         row = self._fetchone(
@@ -57,7 +54,7 @@ class TrashRepository(BaseRepository):
             """,
             (asset_id,),
         )
-        return trashed_asset_from_row(row) if row is not None else None
+        return TrashedAssetDTO.from_row(row) if row is not None else None
 
     # ---------- 恢复 ----------
 
@@ -116,7 +113,7 @@ class TrashRepository(BaseRepository):
             """,
             (cutoff_iso, limit),
         )
-        return [purge_candidate_from_row(r) for r in rows]
+        return [PurgeCandidateDTO.from_row(r) for r in rows]
 
     def find_any_deleted(self, limit: int) -> List[PurgeCandidateDTO]:
         if limit <= 0:
@@ -131,7 +128,7 @@ class TrashRepository(BaseRepository):
             """,
             (limit,),
         )
-        return [purge_candidate_from_row(r) for r in rows]
+        return [PurgeCandidateDTO.from_row(r) for r in rows]
 
     def purge_batch(self, asset_ids: List[int]) -> List[int]:
         """物理删除；返回实际删除的 id 列表。未列出的 id 表示未在软删状态。"""
@@ -191,7 +188,7 @@ class TrashStateRepository(BaseRepository):
             raise RuntimeError(
                 "trash_state singleton row missing after INSERT OR IGNORE"
             )
-        return trash_state_from_row(row)
+        return TrashStateDTO.from_row(row)
 
     def update(
             self,

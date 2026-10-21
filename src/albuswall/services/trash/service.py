@@ -54,6 +54,7 @@ from albuswall.dto.trash import (
     RestoreReportDTO,
     TrashedAssetDTO,
     ThumbFailureDTO,
+    TrashStateDTO,
 )
 from albuswall.repositories.trash import (
     TrashRepository,
@@ -121,10 +122,10 @@ class TrashService:
     """
 
     def __init__(
-        self,
-        trash_repo: TrashRepository,
-        state_repo: TrashStateRepository,
-        clock: Callable[[], datetime] = utcnow,
+            self,
+            trash_repo: TrashRepository,
+            state_repo: TrashStateRepository,
+            clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self._trash = trash_repo
         self._state = state_repo
@@ -142,7 +143,7 @@ class TrashService:
     def get_deleted(self, asset_id: int) -> Optional[TrashedAssetDTO]:
         return self._trash.get_deleted(asset_id)
 
-    def get_state(self):
+    def get_state(self) -> TrashStateDTO:
         """暴露单例水位状态，供 UI / 运维展示。"""
         return self._state.get()
 
@@ -193,7 +194,7 @@ class TrashService:
             except sqlite3.IntegrityError:
                 # 事务已回滚，资产仍在垃圾箱，可以查到 file_path
                 asset = self._trash.get_deleted(aid)
-                file_path = asset["file_path"] if asset is not None else "<unknown>"
+                file_path = asset.file_path if asset is not None else "<unknown>"
                 conflicts.append(RestoreConflictDTO(
                     asset_id=aid,
                     file_path=file_path,
@@ -222,7 +223,7 @@ class TrashService:
         """
         now = self._clock()
         old_state = self._state.get()
-        watermark = _parse_iso(old_state["last_observed_at"])
+        watermark = _parse_iso(old_state.last_observed_at)
 
         kind, cutoff_iso, new_watermark = self._resolve_cleanup_window(
             now, watermark,
@@ -238,8 +239,8 @@ class TrashService:
                     cutoff_iso
                 ),
             )
-            purged = report["purged"]
-            thumb_failures = report["thumb_failures"]
+            purged = report.purged
+            thumb_failures = report.thumb_failures
 
         self._state.update(
             last_observed_at=_format_iso(new_watermark),
@@ -289,7 +290,7 @@ class TrashService:
         )
         logger.info(
             "Trash emptied: purged=%d thumb_failures=%d",
-            len(report["purged"]), len(report["thumb_failures"]),
+            len(report.purged), len(report.thumb_failures),
         )
         return report
 
@@ -344,7 +345,7 @@ class TrashService:
             if not batch:
                 break
 
-            ids = [c["id"] for c in batch]
+            ids = [c.id for c in batch]
             deleted = self._trash.purge_batch(ids)
             deleted_set = set(deleted)
             purged_all.extend(deleted)
@@ -352,12 +353,12 @@ class TrashService:
             # 仅对"实际被删除"的候选行删缩略图：并发恢复可能让某几行
             # 逃过 purge_batch 的二次校验，其文件必须保留。
             for cand in batch:
-                if cand["id"] not in deleted_set:
+                if cand.id not in deleted_set:
                     continue
                 err = self._delete_thumb_files(cand)
                 if err is not None:
                     failures.append(ThumbFailureDTO(
-                        asset_id=cand["id"], error=err,
+                        asset_id=cand.id, error=err,
                     ))
 
             # 乐观推进：本批不足配额 → 已到底
@@ -381,7 +382,7 @@ class TrashService:
 
         ``thumb_path`` 为空表示从未生成过缩略图，跳过。
         """
-        thumb_path = cand["thumb_path"]
+        thumb_path = cand.thumb_path
         if not thumb_path:
             return None
 

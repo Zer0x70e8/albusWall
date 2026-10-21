@@ -8,6 +8,8 @@ spec_rels 是**相对 base** 的文件名。
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from albuswall.dto.thumbnail import ThumbSpec
 
 # 输出格式 → 文件扩展名
@@ -24,7 +26,7 @@ def _ext_for(fmt: str) -> str:
 
 
 def build_thumb_paths(
-        uuid: str, version: str, fmt: str,
+        uuid: str | UUID, version: str, fmt: str,
 ) -> tuple[str, dict[ThumbSpec, str]]:
     """构造 (base_rel, {spec: rel})。
 
@@ -35,6 +37,7 @@ def build_thumb_paths(
     按 uuid 前两位分片，避免单目录下文件过多。
     version 进路径，使升级策略后旧资产仍指向旧目录（不覆盖，可回滚）。
     """
+    uuid = str(uuid)
     ext = _ext_for(fmt)
     base_rel = f"{version}/{uuid[:2]}/{uuid}"
     spec_rels: dict[ThumbSpec, str] = {

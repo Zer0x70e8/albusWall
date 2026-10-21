@@ -15,15 +15,18 @@ DTO 列表
 * :class:`IngestSourceUpdate`      —— PATCH 更新
 * :class:`IngestSourceFormData`    —— UI 表单快照
 * :class:`SourceScanFinished`      —— 扫描完成事件
+* :class:`SourcePurgeReport`       —— purge 返回报告
 """
 
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass, field, fields
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Dict, Final, List, Mapping, Optional, Self, TypedDict
+from typing import Any, Dict, Final, List, Mapping, Optional, Self
+from uuid import UUID
 
 from albuswall.common.enums import FileTypeCheckMode, UpdateMode
 from albuswall.utils.path import is_valid_mount_point
@@ -31,6 +34,7 @@ from albuswall.utils.decode_json import json_loads_dict, json_loads_list
 
 from .sentinel import UNSET, PatchField
 from .trigger import TriggerConfig
+from .utils import row_get, coerce_enum
 
 MANUAL_SOURCE_ID: Final[int] = 0
 """虚拟根 / 手动导入源的固定主键。禁止删除、禁止自动同步。"""
@@ -47,43 +51,18 @@ __all__ = [
 ]
 
 
-# =============================================================================
-# JSON / 枚举规范化辅助（模块私有，不导出）
-# =============================================================================
-
-def _row_get(row: Mapping[str, Any], key: str, default: Any = None) -> Any:
-    """兼容 sqlite3.Row / dict 的安全取值。
-
-    sqlite3.Row 在 key 不存在时可能抛 ``IndexError`` 或 ``KeyError``；
-    dict 抛 ``KeyError``。轻查询（只 select 部分列）依赖此函数。
-    """
-    try:
-        return row[key]
-    except (KeyError, IndexError):
-        return default
-
-
-def _coerce_file_type_check(
-        value: Any,
-        default: Optional[FileTypeCheckMode] = None,
-) -> Optional[FileTypeCheckMode]:
-    """把 str / enum 统一为 ``FileTypeCheckMode``；非法值返回 ``None``。"""
-    if value is None:
-        return default
-    if isinstance(value, FileTypeCheckMode):
-        return value
-    try:
-        return FileTypeCheckMode(value)
-    except (ValueError, TypeError):
-        return default
-
-
 # noinspection broad-exception
 def _normalize_trigger_dict(value: Any) -> Optional[Dict[str, Any]]:
     """把不同形态的 trigger_config 归一化为 dict（写入路径用）。
 
-    接受：``None`` / ``dict`` / JSON 字符串 / 带 ``to_dict`` 或
-    ``to_json`` 的对象（例如 :class:`TriggerConfig`）。
+    接受：``None`` / ``dict`` / JSON 字符串 / 带 ``to_json`` 或
+    ``to_dict`` 的对象（例如 :class:`TriggerConfig`）。
+
+    优先级：``to_json`` 优先于 ``to_dict``。原因：
+    :meth:`TriggerConfig.to_dict` 按契约保留 ``Enum`` 原样（运行时视图），
+    直接落库在 ``json.dumps`` 时会炸；:meth:`TriggerConfig.to_json` 有
+    ``default=`` 兜底把 ``Enum`` 转 ``value``，输出是 JSON-able 的
+    **存储形态**。存储视图与运行时视图职责分离。
     """
     if value is None:
         return None
@@ -92,14 +71,14 @@ def _normalize_trigger_dict(value: Any) -> Optional[Dict[str, Any]]:
     if isinstance(value, str):
         return json_loads_dict(value)
 
+    to_json = getattr(value, "to_json", None)
+    if callable(to_json):
+        return json_loads_dict(_safe_call(to_json))
+
     to_dict = getattr(value, "to_dict", None)
     if callable(to_dict):
         result = _safe_call(to_dict)
         return result if isinstance(result, dict) else None
-
-    to_json = getattr(value, "to_json", None)
-    if callable(to_json):
-        return json_loads_dict(_safe_call(to_json))
 
     return None
 
@@ -177,31 +156,36 @@ class IngestSource:
 
     # ------------------------------------------------------------------ 构造
     @classmethod
-    def from_row(cls, row: Mapping[str, Any]) -> Self:
-        """从 DB row 构造。缺失的列按空值处理（支持轻查询）。"""
+    def from_row(cls, row: sqlite3.Row) -> Self:
+        """从 ``sqlite3.Row`` 构造。
+
+        契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。
+        缺失的列按空值处理（支持轻查询只 select 部分列）。
+        """
         return cls(
             id=int(row["id"]),
-            title=_row_get(row, "title") or "",
-            description=_row_get(row, "description"),
-            source_path=_row_get(row, "source_path") or "",
-            target_path=_row_get(row, "target_path"),
-            mount_point=_row_get(row, "mount_point"),
-            auto_mount=bool(_row_get(row, "auto_mount", 0)),
-            file_type_check=(
-                    _coerce_file_type_check(_row_get(row, "file_type_check"))
-                    or FileTypeCheckMode.SUFFIX
+            title=row_get(row, "title") or "",
+            description=row_get(row, "description"),
+            source_path=row_get(row, "source_path") or "",
+            target_path=row_get(row, "target_path"),
+            mount_point=row_get(row, "mount_point"),
+            auto_mount=bool(row_get(row, "auto_mount", 0)),
+            file_type_check=coerce_enum(
+                row_get(row, "file_type_check"),
+                FileTypeCheckMode,
+                FileTypeCheckMode.SUFFIX,
             ),
-            file_types=json_loads_list(_row_get(row, "file_types")),
-            tags=json_loads_list(_row_get(row, "tags")),
-            subfolder_recursion=bool(_row_get(row, "subfolder_recursion", 0)),
-            subfolder_recursion_depth=_row_get(row, "subfolder_recursion_depth"),
-            trigger_config=json_loads_dict(_row_get(row, "trigger_config")),
-            disabled=bool(_row_get(row, "disabled", 0)),
-            is_deleted=bool(_row_get(row, "is_deleted", 0)),
+            file_types=json_loads_list(row_get(row, "file_types")),
+            tags=json_loads_list(row_get(row, "tags")),
+            subfolder_recursion=bool(row_get(row, "subfolder_recursion", 0)),
+            subfolder_recursion_depth=row_get(row, "subfolder_recursion_depth"),
+            trigger_config=json_loads_dict(row_get(row, "trigger_config")),
+            disabled=bool(row_get(row, "disabled", 0)),
+            is_deleted=bool(row_get(row, "is_deleted", 0)),
 
-            deleted_at=_row_get(row, "deleted_at"),
-            created_at=_row_get(row, "created_at"),
-            modified_at=_row_get(row, "modified_at"),
+            deleted_at=row_get(row, "deleted_at"),
+            created_at=row_get(row, "created_at"),
+            modified_at=row_get(row, "modified_at"),
         )
 
     # ------------------------------------------------------------------ 语义
@@ -243,7 +227,7 @@ class IngestSource:
             if not s:
                 continue
             if not s.startswith("."):
-                s = "." + s
+                s = "." + s.lstrip()
             allowed.add(s)
         return allowed
 
@@ -360,8 +344,14 @@ class IngestSourceCreate:
     disabled: bool = False
 
     def __post_init__(self) -> None:
-        mode = _coerce_file_type_check(self.file_type_check)
-        self.file_type_check = mode or FileTypeCheckMode.SUFFIX
+        # 写路径遇非法枚举值抛 ValueError，不静默降级
+        # （CONVENTIONS.md · 枚举容错：读路径降级、写路径抛错）
+        mode = coerce_enum(self.file_type_check, FileTypeCheckMode)
+        if mode is None:
+            raise ValueError(
+                f"Invalid file_type_check: {self.file_type_check!r}"
+            )
+        self.file_type_check = mode
         self.file_types = list(self.file_types or [])
         self.tags = list(self.tags or [])
         if self.trigger_config is not None:
@@ -401,7 +391,7 @@ class IngestSourceUpdate:
 
     def __post_init__(self) -> None:
         if self.file_type_check is not UNSET and self.file_type_check is not None:
-            mode = _coerce_file_type_check(self.file_type_check)
+            mode = coerce_enum(self.file_type_check, FileTypeCheckMode)
             if mode is None:
                 raise ValueError(
                     f"Invalid file_type_check: {self.file_type_check!r}"
@@ -486,16 +476,19 @@ class IngestSourceFormData:
 
     # ------------------------------------------------------------------ 规范化
     def __post_init__(self) -> None:
-        mode = _coerce_file_type_check(self.file_type_check)
-        self.file_type_check = mode or FileTypeCheckMode.SUFFIX
+        self.file_type_check = coerce_enum(
+            self.file_type_check,
+            FileTypeCheckMode,
+            FileTypeCheckMode.SUFFIX,
+        )
         self.file_types = list(self.file_types or [])
         self.tags = list(self.tags or [])
 
-        # update_mode 归一化：UI 可能传 str；只接受 SCHEDULED / INTERVAL。
-        try:
-            normalized = UpdateMode(self.update_mode)
-        except (ValueError, TypeError):
-            normalized = UpdateMode.SCHEDULED_TIME
+        normalized = coerce_enum(
+            self.update_mode,
+            UpdateMode,
+            UpdateMode.SCHEDULED_TIME,
+        )
         if normalized not in (UpdateMode.SCHEDULED_TIME, UpdateMode.INTERVAL_TIME):
             normalized = UpdateMode.SCHEDULED_TIME
         self.update_mode = normalized
@@ -519,6 +512,9 @@ class IngestSourceFormData:
         （``IngestSourceCreate`` / ``IngestSourceUpdate``）的
         ``trigger_config`` 字段就是 dict，JSON 序列化零成本；
         强类型视图由 :meth:`IngestSource.trigger` 按需提供。
+
+        契约（``CONVENTIONS.md`` · TriggerConfig.to_dict）：这是**存储形态**
+        的唯一出口，``TriggerConfig.to_dict`` 仅作运行时视图，不进存储。
         """
         if not self.scheduled_enabled and not self.device_trigger_enabled:
             return {"update_mode": UpdateMode.MANUAL.value}
@@ -607,7 +603,8 @@ class SourceScanFinished:
         return self.ok and not self.has_new_content
 
 
-class SourcePurgeReport(TypedDict):
+@dataclass(frozen=True, slots=True)
+class SourcePurgeReport:
     """``IngestSourceRepository.purge`` 的返回。
 
     * ``purged=False``  → source 不存在（幂等，不是错误）
@@ -616,8 +613,14 @@ class SourcePurgeReport(TypedDict):
                           清理缩略图目录。
     * ``asset_ids`` / ``asset_uuids`` 在 ``purged=True`` 且 source 下
       无资产时为空列表——不是 None，调用方可以无条件迭代。
+
+    契约：
+    * ``asset_uuids`` 对外统一为 ``UUID``；repo 构造本报告时负责
+      ``str→UUID``（与 ``from_row`` 同一口径，见 ``CONVENTIONS.md`` ·
+      UUID 统一）。
+    * 全改 dataclass：原 TypedDict 形式已撤销。
     """
     source_id: int
     purged: bool
     asset_ids: List[int]
-    asset_uuids: List[str]
+    asset_uuids: List[UUID]

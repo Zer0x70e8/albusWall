@@ -1,18 +1,33 @@
 #
 """"""
 
+from sqlite3 import Row
 from dataclasses import dataclass, field, fields
 from typing import Optional
+from uuid import UUID
 
 from albuswall.dto.sentinel import UNSET, PatchField
-from albuswall.utils.text import normalize_tag_name
+from .utils import to_uuid, normalize_tag_name
+
+__all__ = [
+    "Tag",
+    "TagCreate",
+    "TagSelection",
+    "TagTreeNode",
+    "TagUpdate",
+    "TagWithStats"
+]
 
 
 @dataclass
 class Tag:
-    """读模型：如实映射 tags 行。"""
-    uuid: str
-    parent_uuid: Optional[str]
+    """读模型：如实映射 tags 行。
+
+    契约：``uuid`` / ``parent_uuid`` 对外为 ``UUID``；
+    ``from_row`` 负责 ``str→UUID``。
+    """
+    uuid: UUID
+    parent_uuid: Optional[UUID]
     name: str
     norm_name: str
     display_name: Optional[str]
@@ -23,12 +38,39 @@ class Tag:
     created_at: str
     modified_at: str
 
+    @classmethod
+    def from_row(cls, row: Row) -> "Tag":
+        """从 ``sqlite3.Row`` 构造。
+
+        契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。
+        """
+        raw_parent = row["parent_uuid"]
+        return cls(
+            uuid=to_uuid(row["uuid"]),
+            parent_uuid=(
+                to_uuid(raw_parent) if raw_parent is not None else None
+            ),
+            name=row["name"],
+            norm_name=row["norm_name"],
+            display_name=row["display_name"],
+            description=row["description"],
+            sort_order=row["sort_order"],
+            is_deleted=bool(row["is_deleted"]),
+            deleted_at=row["deleted_at"],
+            created_at=row["created_at"],
+            modified_at=row["modified_at"],
+        )
+
 
 @dataclass
 class TagCreate:
-    """创建输入：只有用户能提供的字段。"""
+    """创建输入：只有用户能提供的字段。
+
+    契约：``parent_uuid`` 对外为 ``Optional[UUID]``；
+    repo 的 INSERT 绑定负责 ``UUID→str``。
+    """
     name: str
-    parent_uuid: Optional[str] = None
+    parent_uuid: Optional[UUID] = None
     display_name: Optional[str] = None
     description: Optional[str] = None
     sort_order: int = 0
@@ -72,7 +114,7 @@ class TagUpdate:
 
 
 # service
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TagTreeNode:
     """UI 树节点。由 TagService 构建，repo 不产生。"""
     tag: Tag
@@ -82,13 +124,13 @@ class TagTreeNode:
     path: str = ""
 
     @property
-    def uuid(self) -> str: return self.tag.uuid
+    def uuid(self) -> UUID: return self.tag.uuid
 
     @property
     def is_leaf(self) -> bool: return not self.children
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TagWithStats:
     """列表/详情用的带统计视图。"""
     tag: Tag
@@ -97,8 +139,9 @@ class TagWithStats:
     subtree_asset_count: int = 0  # 含子孙，可选
 
 
-@dataclass(frozen=True)
+# noinspection SpellCheckingInspection
+@dataclass(frozen=True, slots=True)
 class TagSelection:
     """当前选中的标签集合，用于 tagbar 回显。"""
-    uuids: tuple[str, ...] = ()
-    primary_uuid: str | None = None
+    uuids: tuple[UUID, ...] = ()
+    primary_uuid: UUID | None = None

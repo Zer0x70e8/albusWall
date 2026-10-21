@@ -97,6 +97,7 @@ class TrashCleanupScheduler:
                 name="albuswall-trash-scheduler",
                 daemon=True,
             )
+            # noinspection unresolved-references
             self._worker.start()
             logger.info(
                 "TrashCleanupScheduler started (initial_delay=%s, interval=%s)",

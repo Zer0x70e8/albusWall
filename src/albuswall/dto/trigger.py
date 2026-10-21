@@ -9,8 +9,7 @@ from typing import Optional, List, Dict, Any
 
 from albuswall.common.enums import UpdateMode
 
-from .utils import normal
-from .utils.normal import to_json
+from .utils import dump_json, none_or
 
 
 @dataclass
@@ -121,14 +120,14 @@ class TriggerConfig:
         """
         return {
             "id": self.id,
-            "update_mode": list(normal(self.update_mode, list)),
-            "device_trigger": asdict(normal(self.device_trigger, DeviceTrigger)),
-            "scheduled": asdict(normal(self.scheduled, ScheduledTrigger)),
+            "update_mode": list(none_or(self.update_mode, list)),
+            "device_trigger": asdict(none_or(self.device_trigger, DeviceTrigger)),
+            "scheduled": asdict(none_or(self.scheduled, ScheduledTrigger)),
         }
 
     def to_json(self) -> str:
         """转换为 JSON 字符串；``Enum`` 成员由 ``to_json`` 兜底转 ``value``。"""
-        return to_json(self)
+        return dump_json(self)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TriggerConfig":

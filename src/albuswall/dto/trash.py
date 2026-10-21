@@ -8,24 +8,84 @@
 * 布尔字段在 DTO 边界归一化为 ``bool``。DB 里是 INTEGER 0/1。
 * 时间字段保持字符串（与 schema ``strftime('%Y-%m-%dT%H:%M:%f','now')``
   同构）。DTO 层不做 datetime 解析——需要时由消费方自行转换。
-* DTO 是**只读值对象**：构造后不应修改。TypedDict 不强制这一点，
-  由使用约定保证。
+* DTO 是**只读值对象**：``frozen=True`` 强制构造后不可修改。
+* ``uuid`` 字段对外统一为 ``UUID``；``from_row`` 负责 ``str→UUID``，
+  写路径（repo 的 INSERT 绑定）负责 ``UUID→str``。
 """
 
-from typing import List, Optional, TypedDict
-from sqlite3 import Row
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+from typing import List, Optional
+from uuid import UUID
+
+from .utils import to_uuid
 
 
 # ──────────────────────────────────────────────────────────────────────
 # 实体型 DTO
 # ──────────────────────────────────────────────────────────────────────
-class TrashedAssetDTO(TypedDict):
+@dataclass(frozen=True, slots=True)
+class TrashStateDTO:
+    """``trash_state`` 单例行。
+
+    ``last_observed_at`` 是单调水位，只增不减。
+    """
+    last_observed_at: str
+    last_cleanup_at: Optional[str]
+    last_cleanup_deleted: int
+    suspicious_clock_jumps: int
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "TrashStateDTO":
+        """契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。"""
+        return cls(
+            last_observed_at=row["last_observed_at"],
+            last_cleanup_at=row["last_cleanup_at"],
+            last_cleanup_deleted=row["last_cleanup_deleted"],
+            suspicious_clock_jumps=row["suspicious_clock_jumps"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreConflictDTO:
+    """单条恢复冲突记录。"""
+    asset_id: int
+    file_path: str
+    reason: str  # 当前统一为 "path_conflict"，未来可扩展
+
+
+@dataclass(frozen=True, slots=True)
+class ThumbFailureDTO:
+    asset_id: int
+    error: str
+
+
+@dataclass(frozen=True, slots=True)
+class ClockJumpDTO:
+    """时钟诊断结论。
+
+    ``kind`` 取值：
+      * ``"normal"``   —— 正常推进，本轮允许清理
+      * ``"backward"`` —— 时钟回拨，本轮**不**清理，水位冻结
+      * ``"forward"``  —— 时钟前跳，本轮**不**清理，水位受限推进
+
+    ``advised_cutoff``：本轮若允许清理，使用的截止时间；
+    为 None 时表示本轮跳过清理（``kind`` 非 normal）。
+    """
+    kind: str
+    advised_cutoff: Optional[str]
+
+
+@dataclass(frozen=True, slots=True)
+class TrashedAssetDTO:
     """垃圾箱列表项 / 单条详情。
 
     与 ``TrashRepository._LIST_COLUMNS`` 一一对应。
     """
     id: int
-    uuid: str
+    uuid: UUID
     file_path: str
     source_id: int
     original_name: str
@@ -42,8 +102,32 @@ class TrashedAssetDTO(TypedDict):
     deleted_at: Optional[str]
     created_at: str
 
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "TrashedAssetDTO":
+        """契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。"""
+        return cls(
+            id=row["id"],
+            uuid=to_uuid(row["uuid"]),
+            file_path=row["file_path"],
+            source_id=row["source_id"],
+            original_name=row["original_name"],
+            mime_type=row["mime_type"],
+            file_size=row["file_size"],
+            width=row["width"],
+            height=row["height"],
+            taken_at=row["taken_at"],
+            thumb_path=row["thumb_path"],
+            thumb_small_path=row["thumb_small_path"],
+            thumb_medium_path=row["thumb_medium_path"],
+            thumb_large_path=row["thumb_large_path"],
+            is_favorite=bool(row["is_favorite"]),
+            deleted_at=row["deleted_at"],
+            created_at=row["created_at"],
+        )
 
-class PurgeCandidateDTO(TypedDict):
+
+@dataclass(frozen=True, slots=True)
+class PurgeCandidateDTO:
     """物理清除流程的候选行。
 
     故意不携带 ``original_name`` / ``mime_type`` 等展示字段：
@@ -51,7 +135,7 @@ class PurgeCandidateDTO(TypedDict):
     与 ``TrashRepository._PURGE_COLUMNS`` 一一对应。
     """
     id: int
-    uuid: str
+    uuid: UUID
     source_id: int
     file_path: str
     thumb_path: Optional[str]
@@ -59,22 +143,26 @@ class PurgeCandidateDTO(TypedDict):
     thumb_medium_path: Optional[str]
     thumb_large_path: Optional[str]
 
-
-class TrashStateDTO(TypedDict):
-    """``trash_state`` 单例行。
-
-    ``last_observed_at`` 是单调水位，只增不减。
-    """
-    last_observed_at: str
-    last_cleanup_at: Optional[str]
-    last_cleanup_deleted: int
-    suspicious_clock_jumps: int
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "PurgeCandidateDTO":
+        """契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。"""
+        return cls(
+            id=row["id"],
+            uuid=to_uuid(row["uuid"]),
+            source_id=row["source_id"],
+            file_path=row["file_path"],
+            thumb_path=row["thumb_path"],
+            thumb_small_path=row["thumb_small_path"],
+            thumb_medium_path=row["thumb_medium_path"],
+            thumb_large_path=row["thumb_large_path"],
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────
 # 结果型 DTO
 # ──────────────────────────────────────────────────────────────────────
-class RestoreReportDTO(TypedDict):
+@dataclass(frozen=True, slots=True)
+class RestoreReportDTO:
     """恢复操作结果。
 
     * ``restored``：实际恢复的 id 列表。
@@ -85,17 +173,11 @@ class RestoreReportDTO(TypedDict):
     """
     restored: List[int]
     not_found: List[int]
-    conflicts: List["RestoreConflictDTO"]
+    conflicts: List[RestoreConflictDTO]
 
 
-class RestoreConflictDTO(TypedDict):
-    """单条恢复冲突记录。"""
-    asset_id: int
-    file_path: str
-    reason: str  # 当前统一为 "path_conflict"，未来可扩展
-
-
-class PurgeReportDTO(TypedDict):
+@dataclass(frozen=True, slots=True)
+class PurgeReportDTO:
     """物理清除结果。
 
     * ``purged``：实际删除的 id 列表（Service 需要它定位缩略图目录）。
@@ -103,15 +185,11 @@ class PurgeReportDTO(TypedDict):
       DB 层已删，文件残留不会回滚——这条信息用于上层记录告警。
     """
     purged: List[int]
-    thumb_failures: List["ThumbFailureDTO"]
+    thumb_failures: List[ThumbFailureDTO]
 
 
-class ThumbFailureDTO(TypedDict):
-    asset_id: int
-    error: str
-
-
-class CleanupReportDTO(TypedDict):
+@dataclass(frozen=True, slots=True)
+class CleanupReportDTO:
     """一轮清理周期的完整结果。
 
     * ``purged``：本轮物理删除的 id 列表。
@@ -119,67 +197,5 @@ class CleanupReportDTO(TypedDict):
     * ``state``：更新后的水位状态，方便上层直接展示。
     """
     purged: List[int]
-    clock_jump: "ClockJumpDTO"
+    clock_jump: ClockJumpDTO
     state: TrashStateDTO
-
-
-class ClockJumpDTO(TypedDict):
-    """时钟诊断结论。
-
-    ``kind`` 取值：
-      * ``"normal"``   —— 正常推进，本轮允许清理
-      * ``"backward"`` —— 时钟回拨，本轮**不**清理，水位冻结
-      * ``"forward"``  —— 时钟前跳，本轮**不**清理，水位受限推进
-
-    ``advised_cutoff``：本轮若允许清理，使用的截止时间；
-    为 None 时表示本轮跳过清理（``kind`` 非 normal）。
-    """
-    kind: str
-    advised_cutoff: Optional[str]
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Row → DTO 转换器
-# ──────────────────────────────────────────────────────────────────────
-def trashed_asset_from_row(row: Row) -> TrashedAssetDTO:
-    return TrashedAssetDTO(
-        id=row["id"],
-        uuid=row["uuid"],
-        file_path=row["file_path"],
-        source_id=row["source_id"],
-        original_name=row["original_name"],
-        mime_type=row["mime_type"],
-        file_size=row["file_size"],
-        width=row["width"],
-        height=row["height"],
-        taken_at=row["taken_at"],
-        thumb_path=row["thumb_path"],
-        thumb_small_path=row["thumb_small_path"],
-        thumb_medium_path=row["thumb_medium_path"],
-        thumb_large_path=row["thumb_large_path"],
-        is_favorite=bool(row["is_favorite"]),
-        deleted_at=row["deleted_at"],
-        created_at=row["created_at"],
-    )
-
-
-def purge_candidate_from_row(row: Row) -> PurgeCandidateDTO:
-    return PurgeCandidateDTO(
-        id=row["id"],
-        uuid=row["uuid"],
-        source_id=row["source_id"],
-        file_path=row["file_path"],
-        thumb_path=row["thumb_path"],
-        thumb_small_path=row["thumb_small_path"],
-        thumb_medium_path=row["thumb_medium_path"],
-        thumb_large_path=row["thumb_large_path"],
-    )
-
-
-def trash_state_from_row(row: Row) -> TrashStateDTO:
-    return TrashStateDTO(
-        last_observed_at=row["last_observed_at"],
-        last_cleanup_at=row["last_cleanup_at"],
-        last_cleanup_deleted=row["last_cleanup_deleted"],
-        suspicious_clock_jumps=row["suspicious_clock_jumps"],
-    )

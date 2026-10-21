@@ -28,8 +28,9 @@ from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
 from albuswall.dto.task import (
     BackpressureEvent,
-    ExecutorType,
+    ExecutorArg,
     TaskServiceStats,
+    ExecutorType,
 )
 
 BackpressureCallback = Callable[[BackpressureEvent], None]
@@ -43,7 +44,7 @@ class TaskServiceProtocol(Protocol):
             self,
             fn: Callable[..., Any],
             *args: Any,
-            executor: ExecutorType = ExecutorType.THREAD,
+            executor: ExecutorArg = ExecutorType.THREAD,
             priority: int = 0,
             **kwargs: Any,
     ) -> Future:
@@ -93,7 +94,14 @@ class TaskServiceProtocol(Protocol):
     ) -> None:
         """注册/注销背压事件回调。
 
-        ``cb`` 会收到 :class:`BackpressureEvent` 形态的 dict，
-        必填字段见该 TypedDict 定义，附加字段随 ``reason`` 变化。
+        ``cb`` 会收到一个 :class:`BackpressureEvent` 实例（不是 dict）。
+        必填字段任何 reason 都有；附加字段随 ``reason`` 变化：
+
+        - ``QUEUE_FULL``      -> ``seq`` / ``priority``
+        - ``PUT_BACK_FAILED`` -> ``seq``
+        - ``PERMIT_WAIT``     -> ``seq`` / ``kind`` / ``waited``
+
+        可选字段用 :data:`MaybeUnset` 表达：未携带时为 ``UNSET``；
+        判断"是否携带"用 ``evt.seq is not UNSET``，而不是 ``"seq" in evt``。
         """
         ...

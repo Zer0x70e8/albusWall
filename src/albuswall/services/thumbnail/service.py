@@ -1,4 +1,5 @@
-#
+# coding: utf-8
+# noinspection SpellCheckingInspection
 """缩略图编排者（uuid 唯一对外键）。
 
 契约（P1 收敛）：
@@ -77,6 +78,7 @@ class _FailureRecord:
     failed_at: float
 
 
+# noinspection broad-exception,SpellCheckingInspection
 class ThumbnailService:
     """缩略图编排。
 
@@ -169,7 +171,7 @@ class ThumbnailService:
         """提交单个资产（uuid）。同一 (uuid, version) 在途时返回 None。"""
         if self._stopped:
             raise RuntimeError("ThumbnailService is stopped")
-        if executor != "thread":
+        if executor != ExecutorType.THREAD:
             raise ValueError(...)
 
         # 去重键 (uuid, version)：删/未删决定的是“能不能查到”，
@@ -260,7 +262,10 @@ class ThumbnailService:
         if not rows:
             return 0
 
-        eligible = [r.uuid for r in rows if not self._is_in_cooldown(r.uuid)]
+        eligible = [
+            str(r.uuid) for r in rows
+            if not self._is_in_cooldown(str(r.uuid))
+        ]
         skipped = len(rows) - len(eligible)
         if skipped:
             _logger.info(
@@ -281,7 +286,7 @@ class ThumbnailService:
             return {"scanned": 0, "ok": 0, "failed": 0, "skipped": 0}
 
         futures = self.submit_bulk_by_uuid(
-            [r.uuid for r in rows], priority=PRIORITY_BACKFILL,
+            [str(r.uuid) for r in rows], priority=PRIORITY_BACKFILL,
         )
         skipped = len(rows) - len(futures)
 
@@ -387,6 +392,8 @@ class ThumbnailService:
 
         去重标记由 submit_by_uuid() 挂在 future 上的 done callback 释放。
         """
+        # asset_uuid = asset_uuid if isinstance(asset_uuid, UUID) else UUID(asset_uuid)
+
         started = time.monotonic()
 
         # 1. 取上下文（默认过滤 is_deleted=0；Trash 视图传 True 放行）

@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Optional
 
 from albuswall.repositories.source import IngestSourceRepository
@@ -132,12 +131,12 @@ class SourceTrashService:
         thumbs = self._thumbs.get_paths_by_source(source_id)
         report = self._sources.purge(source_id)
 
-        if not report["purged"]:
+        if not report.purged:
             return report
 
         self._log.info(
             "purged source %d: %d asset rows, %d thumb dirs",
-            source_id, len(report["asset_ids"]), len(thumbs),
+            source_id, len(report.asset_ids), len(thumbs),
         )
         self._remove_thumbnail_files(source_id, thumbs)
         self.sources_changed.send(self, source_id=source_id, kind="purged")

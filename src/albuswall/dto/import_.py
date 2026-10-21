@@ -5,30 +5,15 @@ from __future__ import annotations
 
 from sqlite3 import Row
 from dataclasses import dataclass
-from typing import Any, ClassVar, Optional
+from typing import ClassVar, Optional
 from uuid import UUID
 
 from albuswall.common.enums import CandidateStatus
 
-from .utils import to_uuid
+from .utils import to_uuid, coerce_enum
 
 __all__ = ["AssetCreateDTO", "AssetCandidateCacheDTO"]
 
-
-def _coerce_status(
-        value: Any,
-        default: CandidateStatus = CandidateStatus.PENDING,
-) -> CandidateStatus:
-    """读路径枚举容错：非法值降级到显式默认，不阻塞。
-
-    契约：读路径遇非法枚举值降级到显式默认；写路径抛 ``ValueError``。
-    """
-    if isinstance(value, CandidateStatus):
-        return value
-    try:
-        return CandidateStatus(value)
-    except (ValueError, TypeError):
-        return default
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +60,7 @@ class AssetCandidateCacheDTO:
             source_id=row["source_id"],
             mime_type=row["mime_type"],
             created_at=row["created_at"],
-            status=_coerce_status(row["status"]),
+            status=coerce_enum(row["status"], CandidateStatus, CandidateStatus.PENDING),
             claimed_by=row["claimed_by"],
             claimed_at=row["claimed_at"],
         )

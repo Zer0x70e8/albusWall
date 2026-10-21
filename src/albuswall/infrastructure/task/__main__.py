@@ -8,6 +8,7 @@ import random
 import time
 
 from albuswall.common.exceptions import BackpressureError
+from albuswall.dto.task import BackpressureEvent
 from albuswall.infrastructure.task import TaskService
 
 
@@ -27,7 +28,7 @@ def cpu_task(task_id, n):
     return f"process-{task_id}"
 
 
-def on_bp(evt: dict):
+def on_bp(evt: BackpressureEvent):
     print(f"[ALERT] backpressure triggered: {evt}")
 
 
