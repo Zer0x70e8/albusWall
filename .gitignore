@@ -26,6 +26,10 @@ eggs/
 # my tool
 tree.py
 
+# local debugging leftovers (never part of a release)
+tmp_probe.py
+.tmpdict/
+
 # archive
 test/archive/
 
