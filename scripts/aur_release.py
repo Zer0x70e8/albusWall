@@ -22,10 +22,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import re
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -34,6 +37,8 @@ AUR_DIR = ROOT / "packaging" / "aur"
 PKGBUILD = AUR_DIR / "PKGBUILD"
 SRCINFO = AUR_DIR / ".SRCINFO"
 REPO = "Zer0x70e8/albusWall"
+USER_AGENT = f"albuswall-aur-release (+https://github.com/{REPO})"
+DOWNLOAD_ATTEMPTS = 3
 
 
 def _read(path: Path) -> str:
@@ -70,11 +75,38 @@ def _sha256(path: Path) -> str:
 
 
 def _download(url: str, dest: Path) -> Path:
-    print(f"下载 {url}")
-    with urllib.request.urlopen(url, timeout=120) as response, dest.open("wb") as out:
-        while chunk := response.read(1024 * 1024):
-            out.write(chunk)
-    return dest
+    """下载 tag 归档。
+
+    国内网络下 codeload.github.com 经常直接掐断连接（RemoteDisconnected），
+    所以带重试 + 明确的失败提示，而不是把 urllib 的堆栈甩给用户。
+    """
+    last_error: Exception | None = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        suffix = "" if attempt == 1 else f"（第 {attempt}/{DOWNLOAD_ATTEMPTS} 次尝试）"
+        print(f"下载 {url}{suffix}")
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with (
+                urllib.request.urlopen(request, timeout=120) as response,
+                dest.open("wb") as out,
+            ):
+                while chunk := response.read(1024 * 1024):
+                    out.write(chunk)
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+            last_error = exc
+            dest.unlink(missing_ok=True)
+            print(f"  失败：{exc!r}", file=sys.stderr)
+            if attempt < DOWNLOAD_ATTEMPTS:
+                time.sleep(attempt * 3)
+            continue
+        return dest
+
+    raise SystemExit(
+        f"下载失败：{last_error!r}\n"
+        "网络受限时可以先手动下载再离线算哈希：\n"
+        f"  wget -O albuswall-{_pkgver()}.tar.gz {url}\n"
+        f"  python scripts/aur_release.py --tarball albuswall-{_pkgver()}.tar.gz"
+    )
 
 
 def _set_checksum(digest: str) -> None:

@@ -23,7 +23,7 @@ makedepends=(
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 # 发布 tag 之后用 `python scripts/aur_release.py` 填入真实哈希并生成 .SRCINFO。
 # 未填入前 makepkg 会跳过校验（-C/--check 会报警）。
-sha256sums=('SKIP')
+sha256sums=('6f92dfd22ab26a078602bca934aae43b1b37192e9938dbc725c292bf68131be3')
 
 build() {
   cd "$srcdir/albusWall-$pkgver"
