@@ -1,15 +1,25 @@
 #
-""""""
+"""UI 静态配置声明。
 
-import shutil
+这里的 ``ConfigField`` / ``PathField`` 是**默认值与类型的唯一来源**：
+UI 各层拿配置一律通过 ``builtin/config/typed.py`` 的 typed dict 加载器
+（``load_typed``），不再直接读 ``config.static.*``。
+
+本模块只保留声明 + 旧版描述符 API 的兼容入口；
+主题补全的实现在 ``builtin/config/typed.py``。
+"""
+
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from albuswall.log import getLogger
-from albuswall.configue import ConfigField, PathField, Configue
-from albuswall.resources import theme
+from albuswall.configue import (
+    ConfigField,
+    PathField,
+    register_dynamic_state,
+)
 
-_logger = getLogger(__package__)
+if TYPE_CHECKING:
+    from albuswall.configue import Configue
 
 
 class WindowPresenterConfs:
@@ -29,91 +39,17 @@ class WindowPresenterConfs:
     auto_complete_icons: bool = ConfigField("ui", "auto_complete_icons", default=True)
     auto_complete_only_once: bool = ConfigField("ui", "auto_complete_only_once", default=True)
 
-    _MARKER_NAME = ".albuswall_theme_initialized"
-    _BUILTIN_THEME = Path(theme)
-    _QSS_SOURCE_NAMES = ("main_window.qss", "qss.qss", "style.qss")
-    _ICON_SOURCE_DIR_NAME = "icon"
-    _MARKER_CONTENT = (
-        "albuswall theme initialized\n"
-        "Delete this file to re-enable auto completion.\n"
-    )
+    # API（兼容入口）
+    def ensure_theme_files_completed(
+            self, config: Optional["Configue"] = None,
+    ) -> None:
+        """兼容入口：按 typed dict 把内置主题缺失的文件补到用户主题目录。
 
-    # API
-    def ensure_theme_files_completed(self, config: Configue) -> None:
-        """按配置把内置主题里缺失的文件补到用户主题目录。
-
-        路径全部由 _config.ini 插值算好：
-            ui.style_sheet  -> 目标 QSS（PathField 保证是 Path | None）
-            path.icon       -> 目标图标目录（同上）
-        通过以下开关精细控制：
-            ui.auto_complete_theme / auto_complete_qss / auto_complete_icons
-            ui.auto_complete_only_once
+        取值改走 ``window_config()``，``config`` 参数只为兼容旧调用保留。
         """
-        ui = config.static.ui
+        from .typed import ensure_theme_files_completed as _ensure
 
-        if not ui.auto_complete_theme:
-            _logger.debug("auto_complete_theme disabled, skip")
-            return
-
-        style_sheet = ui.style_sheet
-        icon_dir = config.static.path.icon
-
-        # marker 跟随主题目录（即 style_sheet 所在目录）
-        marker: Optional[Path] = (
-            style_sheet.parent / self._MARKER_NAME if style_sheet else None
-        )
-        only_once = ui.auto_complete_only_once
-
-        if only_once and marker and marker.exists():
-            _logger.debug("Theme already initialized (marker %s), skip", marker)
-            return
-
-        qss_copied = self._ensure_qss(style_sheet) if ui.auto_complete_qss else False
-        icons_copied = self._ensure_icons(icon_dir) if ui.auto_complete_icons else False
-
-        if only_once and marker and (qss_copied or icons_copied):
-            self._write_marker(marker)
-
-    # sub-ops
-    def _ensure_qss(self, target: Optional[Path]) -> bool:
-        if target is None:
-            return False
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            _logger.debug("QSS exists, keep user version: %s", target)
-            return False
-        for name in self._QSS_SOURCE_NAMES:
-            src = self._BUILTIN_THEME / name
-            if src.is_file():
-                shutil.copy2(src, target)
-                _logger.info("Copied QSS %s -> %s", src, target)
-                return True
-        _logger.warning("No QSS source in built-in theme %s", self._BUILTIN_THEME)
-        return False
-
-    def _ensure_icons(self, icon_dir: Optional[Path]) -> bool:
-        if icon_dir is None:
-            return False
-        src_dir = self._BUILTIN_THEME / self._ICON_SOURCE_DIR_NAME
-        if not src_dir.is_dir():
-            return False
-        icon_dir.mkdir(parents=True, exist_ok=True)
-        copied = False
-        for src in src_dir.glob("*"):
-            target = icon_dir / src.name
-            if src.is_file() and not target.exists():
-                shutil.copy2(src, target)
-                copied = True
-                _logger.trace("Copied icon %s -> %s", src.name, target)
-        return copied
-
-    def _write_marker(self, marker: Path) -> None:
-        try:
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text(self._MARKER_CONTENT, encoding="utf-8")
-            _logger.debug("Wrote theme marker: %s", marker)
-        except OSError as exc:
-            _logger.warning("Failed to write marker %s: %s", marker, exc)
+        _ensure()
 
 
 class AlbumPresenterConfs:
@@ -123,3 +59,22 @@ class AlbumPresenterConfs:
 class ThumbnailGridPresenterConfs:
     favorite_on_icon: Optional[Path] = PathField(
         "ui", "favorite_on_icon", default="${path:icon}/favorite_icon.svg")
+
+
+# ══════════════════════════════════════════════════
+# 动态子树登记（窗口几何）
+# ══════════════════════════════════════════════════
+# 本模块在插件 setup() 阶段就被 import（早于静态配置加载），而状态类住在
+# ``presenter.window_presenter``——它要等配置就绪才 import。所以这里手动指定：
+#
+#   - cls 用 "pkg.mod:Class" 字符串 → 首次访问 config.dynamic.window 时才 import
+#   - filename 用 ConfigField 声明 → 访问期从静态配置取 files.window_state
+#
+# autosave=False：几何变更由 WindowPresenter 做 debounce 后统一 save()。
+register_dynamic_state(
+    "window",
+    "albuswall.ui.builtin.presenter.window_presenter:WindowState",
+    ("path", "cache"),
+    WindowPresenterConfs.window_state_file_name,
+    autosave=False,
+)

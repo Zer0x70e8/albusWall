@@ -1,7 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
 [project]
 name = "albuswall"
-version = "0.1.3"
+version = "1.0.0"
+description = "A modular, plugin-driven image gallery for Hyprland ricing screenshots."
+readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Zer0x70e8", email = "zer0x70e8@users.noreply.github.com" },
+]
+keywords = [
+    "hyprland",
+    "image-gallery",
+    "photo-gallery",
+    "pyside6",
+    "qt",
+    "thumbnails",
+    "ricing",
+    "wallpaper",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Multimedia :: Graphics :: Viewers",
+    "Topic :: Desktop Environment",
+]
 dependencies = [
     "psutil>=7.2.2", # Viewing system resource information, used for resource allocation.
     "apscheduler>=3.10.0", # Scheduler, Timer.
@@ -15,6 +51,38 @@ ui = [
 ]
 all = [
     "pyside6>=6.11.0",
+]
+
+[project.scripts]
+# GUI / 无 UI 主程序
+albuswall = "albuswall.__main__:main"
+# 进程外控制台：与正在运行的实例通信（不 import 应用本体）
+albusctl = "albuswall.client.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Zer0x70e8/albusWall"
+Repository = "https://github.com/Zer0x70e8/albusWall"
+Issues = "https://github.com/Zer0x70e8/albusWall/issues"
+Changelog = "https://github.com/Zer0x70e8/albusWall/commits/main"
+
+
+# ---------------------------------------------------------------- packaging --
+# 源码树是 src 布局：wheel 只打包 src/albuswall，包内的非 .py 资源
+# (resources/config、resources/sql、resources/themes、resources/i18n、
+# resources/icons) 由 hatchling 全量收集，无需额外配置。
+[tool.hatch.build.targets.wheel]
+packages = ["src/albuswall"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/scripts",
+    "/test",
+    "/packaging",
+    "/docs",
+    "/README.md",
+    "/LICENSE",
+    "/pyproject.toml",
 ]
 
 
@@ -45,3 +113,5 @@ ignore = ["E501"]  # 交给 formatter
 "**/window/source/detail_widget.py" = ["E402"]  # __main__ 段
 "**/__main__.py" = ["T20"]  # 示例入口靠 print 给用户看结果
 "src/albuswall/tasks/demo.py" = ["T20"]  # 示例任务本体同样是演示输出
+"src/albuswall/client/cli.py" = ["T20"]  # CLI 的职责就是 print
+"scripts/*.py" = ["T20"]  # 构建 / 打包脚本靠 print 汇报

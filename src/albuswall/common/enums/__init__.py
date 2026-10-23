@@ -5,6 +5,7 @@ DTO / repo / service / UI 一律从这里取枚举，不在各层声明平行枚
 """
 
 from .import_ import FileTypeCheckMode
+from .ipc import IpcErrorCode
 from .source import CandidateStatus
 from .task import BackpressureReason, ExecutorType, PermitKind
 from .thumbnail import ThumbSpec
@@ -15,6 +16,7 @@ __all__ = [
     "CandidateStatus",
     "ExecutorType",
     "FileTypeCheckMode",
+    "IpcErrorCode",
     "PermitKind",
     "ThumbSpec",
     "UpdateMode",

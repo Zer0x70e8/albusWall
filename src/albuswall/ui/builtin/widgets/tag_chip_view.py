@@ -31,9 +31,9 @@ class TagChipView(QListView):
                     event.position().toPoint()
                 ):
                     uuid = index.data(TagChipModel.TagRole).uuid
-                    self.chip_remove_requested.emit(uuid)
+                    self.chip_remove_requested.emit(str(uuid))
                 else:
                     uuid = index.data(TagChipModel.TagRole).uuid
-                    self.chip_activated.emit(uuid)
+                    self.chip_activated.emit(str(uuid))
                 return
         super().mouseReleaseEvent(event)

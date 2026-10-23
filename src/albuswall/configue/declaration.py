@@ -72,6 +72,18 @@ class ConfigDeclaration:
     def registry(self) -> Dict[str, ConfigMeta]:
         return self._registry
 
+    @classmethod
+    def metas(cls) -> Dict[str, ConfigMeta]:
+        """``{字段属性名: ConfigMeta}``。
+
+        注册表的键是 ``module.qualname.attr``，这里把最后一截属性名抽出来，
+        供 ``albuswall.configue.typed.load_typed`` 按 typed dict 的键查表。
+        同名属性后者覆盖前者（同一 Declaration 内部）。
+        """
+        return {
+            key.rsplit(".", 1)[-1]: meta for key, meta in cls._registry.items()
+        }
+
     # ── 新增：给 bootstrap 注册内建字段用 ─────────
     @classmethod
     def add_builtin(
@@ -223,6 +235,10 @@ class PathField(ConfigField[Optional[Path]]):
 
     def __get__(self, instance, owner):
         value = super().__get__(instance, owner)
+        # 类访问（instance is None）必须返回描述符自身，否则
+        # ``SomeConfs.qss`` 会尝试 Path(PathField) 直接炸掉。
+        if instance is None:
+            return value
         if value is None or isinstance(value, Path):
             return value
         return Path(value)

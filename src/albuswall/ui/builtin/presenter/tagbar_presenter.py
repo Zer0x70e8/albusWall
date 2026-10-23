@@ -35,6 +35,10 @@ class TagBarPresenter(QObject):
     tags_changed = Signal()  # 供外层（grid / tree）刷新
     tag_activated = Signal(str)  # chip 点击 → 打开筛选
     error_occurred = Signal(str)  # 供 main window 显示 toast
+    # 标签结构编辑意图（真正的对话框 / 规则在 TagEditorPresenter）
+    tag_create_requested = Signal(str)  # 父标签 uuid；空串 = 根
+    tag_rename_requested = Signal(str)
+    tag_delete_requested = Signal(str)
 
     def __init__(
             self,
@@ -68,6 +72,15 @@ class TagBarPresenter(QObject):
         )
         self._adapter.connect(v.layer_tree_open_requested, self.refresh_tree)
         self._adapter.connect(v.layer_tree_activated, self._on_tree_activated)
+        self._adapter.connect(
+            v.tag_create_requested, self._on_tag_create_requested,
+        )
+        self._adapter.connect(
+            v.tag_rename_requested, self._on_tag_rename_requested,
+        )
+        self._adapter.connect(
+            v.tag_delete_requested, self._on_tag_delete_requested,
+        )
 
     # ---------------- 刷新 ----------------
     def refresh(self) -> None:
@@ -96,33 +109,50 @@ class TagBarPresenter(QObject):
 
     # ---------------- 槽 ----------------
     def _on_apply_requested(self, text: str) -> None:
-        """新建标签并绑定到当前资产；重名时降级为绑定已有标签。"""
+        """按 ``父/子`` 路径创建（或复用）标签并绑定到当前资产。
+
+        输入 ``旅行/日本`` 时会补齐整条链；已存在的段直接复用，
+        因此重复输入不会报重名，也不会生成重复子树。
+        """
         asset_uuid = self._current_asset()
         if asset_uuid is None:
             return
         try:
-            new_uuid = self._tag.create(text)
-            result = self._asset_tag.add(asset_uuid, [new_uuid])
+            tag_uuid = self._tag.ensure_path(text)
         except TagNameConflict as e:
             if e.existing_uuid is None:
-                self.error_occurred.emit(f"标签已存在：{text}")
+                self.error_occurred.emit(
+                    self.tr("标签已存在：{text}").format(text=text)
+                )
                 return
-            try:
-                result = self._asset_tag.add(asset_uuid, [e.existing_uuid])
-            except AssetTagError as ae:
-                self.error_occurred.emit(str(ae))
-                return
-        except (TagError, AssetTagError) as e:
+            tag_uuid = e.existing_uuid
+        except TagError as e:
+            self.error_occurred.emit(str(e))
+            return
+
+        try:
+            result = self._asset_tag.add(asset_uuid, [tag_uuid])
+        except AssetTagError as e:
             self.error_occurred.emit(str(e))
             return
 
         self._view.clear_apply_input()
         self.refresh()
+        self.refresh_tree()
         if result.added > 0:
             self.tags_changed.emit()
 
     def _on_chip_activated(self, uuid: str) -> None:
         self.tag_activated.emit(uuid)
+
+    def _on_tag_create_requested(self, parent_uuid: str) -> None:
+        self.tag_create_requested.emit(parent_uuid)
+
+    def _on_tag_rename_requested(self, uuid: str) -> None:
+        self.tag_rename_requested.emit(uuid)
+
+    def _on_tag_delete_requested(self, uuid: str) -> None:
+        self.tag_delete_requested.emit(uuid)
 
     def _on_chip_remove_requested(self, uuid: str) -> None:
         asset_uuid = self._current_asset()

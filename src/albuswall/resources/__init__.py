@@ -7,6 +7,7 @@ albuswall.resources 包 - 提供资源路径的快捷访问。
     theme   -> Path('.../themes/default')          # 文件夹
     qss     -> Path('.../themes/default/main_window.qss')  # 文件
     icon_dir -> Path('.../cover')                   # 强制获取文件夹（如果别名本身是文件则会报错）
+    i18n_dir -> Path('.../i18n')                    # 翻译文件（.ts 源 / .qm 运行期）
 """
 
 from .core import get, CURRENT_PATH, PATH_ALIASES
@@ -42,9 +43,11 @@ if False:
     from pathlib import Path
 
     theme: Path
+    i18n: Path
     ico: Path
     sql: Path
     qss: Path
+    app_icon: Path
     theme_dir: Path
     ico_dir: Path
     sql_dir: Path

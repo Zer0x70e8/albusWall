@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..delegate.square_thumb_delegate import SquareThumbDelegate
+from ..i18n import Retranslatable
 
 from ..model.navigation_bar_model import ThumbnailModel
 from ..widgets import BlurLabel
@@ -26,7 +27,7 @@ from .panel import InformationPanel
 from .tagbar import TagBar
 
 
-class Detail(BlurLabel):
+class Detail(Retranslatable, BlurLabel):
     """照片详情页容器（继承自 BlurLabel，背景自动模糊）。
 
     契约（与 PresenterManager / ViewService 一致）：所有对外接口只走
@@ -82,6 +83,7 @@ class Detail(BlurLabel):
 
         self.setup_ui()
         self.setup_key()
+        self.retranslate_ui()
 
     def setup_ui(self):
         self.main_layout = QVBoxLayout(self)
@@ -131,11 +133,12 @@ class Detail(BlurLabel):
         self.tag_bar = TagBar(self)
 
         # 按钮
-        self.multiple_choice_button = QPushButton(self.tr("choice"), self.overlay)
-        self.favourite_button = QPushButton(self.tr("favourite"), self.overlay)
-        self.information_button = QPushButton(self.tr("info"), self.overlay)
-        self.edit_button = QPushButton(self.tr("edit"), self.overlay)
-        self.trash_button = QPushButton(self.tr("trash"), self.overlay)
+        # 文案由 retranslate_ui() 统一填，这里只建控件
+        self.multiple_choice_button = QPushButton("", self.overlay)
+        self.favourite_button = QPushButton("", self.overlay)
+        self.information_button = QPushButton("", self.overlay)
+        self.edit_button = QPushButton("", self.overlay)
+        self.trash_button = QPushButton("", self.overlay)
 
         self.operation_container_widget = QWidget(self.overlay)
         self.operation_container_layout = QHBoxLayout(self.operation_container_widget)
@@ -305,9 +308,19 @@ class Detail(BlurLabel):
     def set_deleted_state(self, is_deleted: bool) -> None:
         """切换 trash 按钮语义：未删 → "trash"；已删 → "recover"。"""
         self._is_deleted = bool(is_deleted)
-        self.trash_button.setText(
-            self.tr("recover") if self._is_deleted else self.tr("trash")
-        )
+        self.trash_button.setText(self._trash_button_text())
+
+    def _trash_button_text(self) -> str:
+        """trash 按钮文案随「是否已软删」变化，语言切换时也要跟着重算。"""
+        return self.tr("recover") if self._is_deleted else self.tr("trash")
+
+    def retranslate_ui(self) -> None:
+        """重新应用详情页所有按钮文案（含 trash 的双态文案）。"""
+        self.multiple_choice_button.setText(self.tr("choice"))
+        self.favourite_button.setText(self.tr("favourite"))
+        self.information_button.setText(self.tr("info"))
+        self.edit_button.setText(self.tr("edit"))
+        self.trash_button.setText(self._trash_button_text())
 
     def notify_assets_changed(self, asset_uuids: Sequence[str]) -> None:
         """写操作完成后由 presenter 调用，把受影响的资产 uuid 广播出去。

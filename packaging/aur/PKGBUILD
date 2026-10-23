@@ -1,0 +1,48 @@
+# Maintainer: Zer0x70e8 <zer0x70e8@users.noreply.github.com>
+
+pkgname=albuswall
+pkgver=1.0.0
+pkgrel=1
+pkgdesc='A modular, plugin-driven image gallery for Hyprland ricing screenshots'
+arch=('any')
+url='https://github.com/Zer0x70e8/albusWall'
+license=('MIT')
+depends=(
+  'python'
+  'python-psutil'   # extra
+  'python-pillow'   # extra
+  'python-apscheduler' # AUR
+  'pyside6'         # extra
+)
+makedepends=(
+  'python-build'
+  'python-hatchling'
+  'python-installer'
+  'python-wheel'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# 发布 tag 之后用 `python scripts/aur_release.py` 填入真实哈希并生成 .SRCINFO。
+# 未填入前 makepkg 会跳过校验（-C/--check 会报警）。
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/albusWall-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "$srcdir/albusWall-$pkgver"
+
+  # Python 包本体：console_scripts (albuswall / albusctl) 由 wheel 元数据安装，
+  # 包内资源 (resources/config, sql, themes, i18n, icons) 随 wheel 一起落盘。
+  python -m installer --destdir="$pkgdir" dist/*.whl
+
+  # 桌面集成：菜单项 + 矢量图标
+  install -Dm644 packaging/albuswall.desktop \
+    "$pkgdir/usr/share/applications/albuswall.desktop"
+  install -Dm644 src/albuswall/resources/icons/albuswall.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/albuswall.svg"
+
+  # MIT 许可证
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

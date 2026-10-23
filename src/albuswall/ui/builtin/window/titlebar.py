@@ -9,6 +9,7 @@ from PySide6.QtGui import QIcon, QMouseEvent, QWheelEvent  # , QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget, QAbstractButton, QApplication)
 
+from ..i18n import Retranslatable
 from ..widgets.action_buttons import (
     CloseButton, MaximizeButton, MinimizeButton)
 from ..widgets.floating_search_bar import (
@@ -18,7 +19,7 @@ from ..widgets.floating_search_bar import (
 from ...vo.album import TitleBarVO
 
 
-class TitleBar(QWidget):
+class TitleBar(Retranslatable, QWidget):
     height_size_changed = Signal(int)
 
     main_layout: QVBoxLayout
@@ -56,13 +57,11 @@ class TitleBar(QWidget):
         self._passthrough_target = None
 
         self._vo: TitleBarVO = TitleBarVO()
-        self._default_texts: dict[str, str] = {
-            "album": self.tr("album"),
-            "extra": self.tr("extra"),
-            "search": self.tr("search"),
-        }
+        # 按钮缺文案时用它们兜底；文案在 retranslate_ui() 里填充
+        self._default_texts: dict[str, str] = {}
 
         self.setup_ui()
+        self.retranslate_ui()
 
         # # self.floating_search_bar.setObjectName("SearchBar")
         #
@@ -263,13 +262,17 @@ class TitleBar(QWidget):
             self.action_bar.rect().bottomLeft()
         ).y()
 
-    def refresh_translations(self) -> None:
+    def retranslate_ui(self) -> None:
+        """重建按钮兜底文案，并把当前 VO 重新渲染一遍。"""
         self._default_texts = {
             "album": self.tr("album"),
             "extra": self.tr("extra"),
             "search": self.tr("search"),
         }
         self._apply_vo(self._vo)  # 重刷按钮文案
+
+    # 兼容旧名字（历史上只用于「刷新翻译」）
+    refresh_translations = retranslate_ui
 
     def _apply_button(
             self,

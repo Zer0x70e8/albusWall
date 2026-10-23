@@ -201,7 +201,7 @@ class IngestSourceRepository(BaseRepository):
             config = TriggerConfig.from_json(raw_config)
         except Exception as exc:  # noqa: BLE001 —— 见方法 docstring
             self.logger.warning(
-                "解析 trigger_config 失败 (source_id=%s): %s",
+                "Failed to parse trigger_config (source_id=%s): %s",
                 source_id, exc,
             )
             return None

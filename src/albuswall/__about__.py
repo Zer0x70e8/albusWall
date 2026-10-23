@@ -11,7 +11,8 @@ from importlib.metadata import version, PackageNotFoundError
 
 __title__ = "albuswall"
 __author__ = "Zer0x70e8"
-__version__ = "0.1.3.dev0"
+__license__ = "MIT"
+__version__ = "1.0.0"
 try:
     __version__ = version("albuswall")
 except PackageNotFoundError:

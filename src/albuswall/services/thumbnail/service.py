@@ -35,9 +35,10 @@
 
 配置来源
 --------
-从 ``services.thumbnail.config.config`` 单例上直接取。
+构造时取一份 ``thumbnail_config()`` 的 typed dict 快照（默认值来自静态
+配置声明），之后只读这份快照：服务生命周期内配置不再变化。
 需要归一化的字段（thumb_root / specs / xdg_spec_map）在 ``__init__``
-里调用 config 模块的 resolve_* 帮助函数，一次性缓存。``image_format``
+里调用 config 模块的 resolve_* 帮助函数，同样一次性缓存。``image_format``
 仍然读一次（保留字段），但不参与任何决策。
 
 路径契约
@@ -69,11 +70,12 @@ from albuswall.utils import path as path_util
 from albuswall.utils.signals import SignalDescriptor
 
 from .config import (
-    config,
-    resolve_thumb_root,
-    resolve_specs,
+    VERSION,
     resolve_image_format,
+    resolve_specs,
+    resolve_thumb_root,
     resolve_xdg_spec_map,
+    thumbnail_config,
 )
 from .paths import build_thumb_paths
 from .renderer import is_permanent_render_error, render
@@ -130,22 +132,23 @@ class ThumbnailService:
         self._repo = thumb_repo
         self._source_repo = source_repo
 
-        # 从 config 单例上取字段；需要归一化的在这里一次性缓存
-        self._version = str(config.version)
-        self._specs = resolve_specs()
+        # 取一份 typed dict 快照；需要归一化的在这里一次性缓存
+        conf = thumbnail_config()
+        self._version = str(VERSION)
+        self._specs = resolve_specs(conf)
         # 保留 image_format 字段（其它模块可能在读），但不再参与任何决策：
         # 两种模式都强制 PNG，见 storage.ThumbnailStorage。
-        self._image_format = resolve_image_format()
-        self._batch_size = int(config.batch_size)
-        self._failure_cooldown_sec = float(config.failure_cooldown_sec)
+        self._image_format = resolve_image_format(conf)
+        self._batch_size = int(conf["batch_size"])
+        self._failure_cooldown_sec = float(conf["failure_cooldown_sec"])
 
         # 模式开关只决定根目录：同构布局下再无第二种磁盘协议。
-        self._xdg_enabled = bool(config.xdg_enabled)
+        self._xdg_enabled = bool(conf["xdg_enabled"])
         self._root: Path = (
             xdg_thumbnails_root() if self._xdg_enabled
-            else resolve_thumb_root()
+            else resolve_thumb_root(conf)
         )
-        self._spec_map: dict[ThumbSpec, str] = resolve_xdg_spec_map()
+        self._spec_map: dict[ThumbSpec, str] = resolve_xdg_spec_map(conf)
         self._storage = ThumbnailStorage(self._root)
 
         self._stopped = False
@@ -158,9 +161,9 @@ class ThumbnailService:
         self._failed: dict[str, _FailureRecord] = {}
         self._failed_lock = threading.Lock()
 
-        self._write_max_retries = max(0, int(config.write_max_retries))
+        self._write_max_retries = max(0, int(conf["write_max_retries"]))
         self._write_retry_backoff_sec = max(
-            0.0, float(config.write_retry_backoff_sec),
+            0.0, float(conf["write_retry_backoff_sec"]),
         )
 
     # ------------------------------------------------------------------ #

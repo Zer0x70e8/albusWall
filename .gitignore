@@ -29,6 +29,16 @@ tree.py
 # archive
 test/archive/
 
+# makepkg (packaging/aur)
+packaging/aur/src/
+packaging/aur/pkg/
+packaging/aur/*.pkg.tar*
+packaging/aur/*.tar.gz
+packaging/aur/*.tar.xz
+packaging/aur/*.tar.zst
+packaging/aur/*.log
+
 # assets
 assets/
 .venv/
+.venv_win/

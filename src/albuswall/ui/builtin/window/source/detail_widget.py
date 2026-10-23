@@ -13,8 +13,10 @@ from PySide6.QtWidgets import (
 from albuswall.dto.source import IngestSourceFormData
 from albuswall.common.enums import FileTypeCheckMode
 
+from ...i18n import Retranslatable
 
-class IngestSourceDetailWidget(QFrame):
+
+class IngestSourceDetailWidget(Retranslatable, QFrame):
     main_layout: QVBoxLayout
 
     #
@@ -115,6 +117,7 @@ class IngestSourceDetailWidget(QFrame):
         self._file_types_model = QStringListModel(self)
 
         self.setup_ui()
+        self.retranslate_ui()
         self._wire_internal_signals()
         self.setup_object_names()
         self._apply_default_state()
@@ -124,27 +127,27 @@ class IngestSourceDetailWidget(QFrame):
         self.main_layout = QVBoxLayout(self)
 
         # ====
-        self.grp_meta = QGroupBox(self.tr("meta info"))
+        self.grp_meta = QGroupBox()
         self.grp_meta_layout = QFormLayout(self.grp_meta)
 
         #
         self.title_layout = QHBoxLayout()
-        self.title_label = QLabel(self.tr("title"), self.grp_meta)
-        self.title_line_edit = QLineEdit(self.tr("new ingest source"), self.grp_meta)
+        self.title_label = QLabel(self.grp_meta)
+        self.title_line_edit = QLineEdit(self.grp_meta)
 
         self.title_layout.addWidget(self.title_line_edit)
 
         self.description_layout = QHBoxLayout()
-        self.description_label = QLabel(self.tr("description"), self.grp_meta)
-        self.description_line_edit = QLineEdit(self.tr("example"), self.grp_meta)
+        self.description_label = QLabel(self.grp_meta)
+        self.description_line_edit = QLineEdit(self.grp_meta)
 
         self.description_layout.addWidget(self.description_line_edit)
 
         self.tags_layout = QHBoxLayout()
-        self.tags_label = QLabel(self.tr("tag: "), self.grp_meta)
+        self.tags_label = QLabel(self.grp_meta)
         self.tags_view = QListView(self.grp_meta)
-        self.tags_line_edit = QLineEdit(self.tr("tag1"), self.grp_meta)
-        self.tags_button = QPushButton(self.tr("add"), self.grp_meta)
+        self.tags_line_edit = QLineEdit(self.grp_meta)
+        self.tags_button = QPushButton(self.grp_meta)
 
         self.tags_view.setFlow(QListView.Flow.LeftToRight)
         self.tags_view.setWrapping(True)
@@ -162,23 +165,23 @@ class IngestSourceDetailWidget(QFrame):
         self.grp_meta_layout.addRow(self.tags_label, self.tags_layout)
 
         # ========== 摄入源分组 ==========
-        self.grp_source = QGroupBox(self.tr("Ingest Source"))
+        self.grp_source = QGroupBox()
         self.grp_source_layout = QFormLayout(self.grp_source)
 
         # 源路径
         self.source_path_line_edit = QLineEdit(self.grp_source)
-        self.source_path_browser_button = QPushButton(self.tr("browser"), self.grp_source)
-        self.source_path_label = QLabel(self.tr("source path (library path)"), self.grp_source)
+        self.source_path_browser_button = QPushButton(self.grp_source)
+        self.source_path_label = QLabel(self.grp_source)
 
         self.source_path_line_edit_layout = QHBoxLayout()
         self.source_path_line_edit_layout.addWidget(self.source_path_line_edit, 1)
         self.source_path_line_edit_layout.addWidget(self.source_path_browser_button)
 
         # 文件类型
-        self.file_type_label = QLabel(self.tr("file type(s)"), self.grp_source)
+        self.file_type_label = QLabel(self.grp_source)
         self.file_type_list_view = QListView(self.grp_source)
         self.file_type_line_edit = QLineEdit(self.grp_source)
-        self.file_type_add_button = QPushButton(self.tr("add"), self.grp_source)
+        self.file_type_add_button = QPushButton(self.grp_source)
 
         self.file_type_list_view.setFlow(QListView.Flow.LeftToRight)
         self.file_type_list_view.setWrapping(True)
@@ -195,16 +198,16 @@ class IngestSourceDetailWidget(QFrame):
         # 文件类型校验方式
         self.file_type_check_widget = QWidget(self.grp_source)
         self.file_type_check_layout = QHBoxLayout(self.file_type_check_widget)
-        self.file_type_check_label = QLabel(self.tr("File type verification method"), self.grp_source)
-        self.file_type_check_s_radio_button = QRadioButton(self.tr("Suffix Check"), self.grp_source)
-        self.file_type_check_mg_radio_button = QRadioButton(self.tr("Magic Number Check"), self.grp_source)
+        self.file_type_check_label = QLabel(self.grp_source)
+        self.file_type_check_s_radio_button = QRadioButton(self.grp_source)
+        self.file_type_check_mg_radio_button = QRadioButton(self.grp_source)
 
         self.file_type_check_layout.setContentsMargins(0, 0, 0, 0)
         self.file_type_check_layout.addWidget(self.file_type_check_s_radio_button)
         self.file_type_check_layout.addWidget(self.file_type_check_mg_radio_button)
 
         # 子文件夹递归
-        self.subfolder_recursion_label = QLabel(self.tr("Subfolder recursion"), self.grp_source)
+        self.subfolder_recursion_label = QLabel(self.grp_source)
         self.subfolder_recursion_check_box = QCheckBox(self.grp_source)
 
         self.subfolder_recursion_layout = QHBoxLayout()
@@ -212,8 +215,8 @@ class IngestSourceDetailWidget(QFrame):
         self.subfolder_recursion_layout.addStretch(1)
 
         # 递归深度
-        self.subfolder_recursion_depth_label = QLabel(self.tr("Subfolder recursion depth"), self.grp_source)
-        self.subfolder_recursion_depth_check_box = QCheckBox(self.tr("no limit"), self.grp_source)
+        self.subfolder_recursion_depth_label = QLabel(self.grp_source)
+        self.subfolder_recursion_depth_check_box = QCheckBox(self.grp_source)
         self.subfolder_recursion_depth_spin_box = QSpinBox(self.grp_source)
 
         self.subfolder_recursion_depth_spin_box.setRange(0, 16777215)
@@ -234,32 +237,30 @@ class IngestSourceDetailWidget(QFrame):
         self.grp_source_layout.addRow(spacer)
 
         # ====
-        self.grp_triggers = QGroupBox(self.tr("Triggers"), self)
+        self.grp_triggers = QGroupBox(self)
         self.grp_triggers_layout = QVBoxLayout(self.grp_triggers)
 
-        self.grp_scheduled = QGroupBox(self.tr("Scheduled Update"), self.grp_triggers)
+        self.grp_scheduled = QGroupBox(self.grp_triggers)
         self.grp_scheduled.setCheckable(True)
         self.grp_scheduled_layout = QVBoxLayout(self.grp_scheduled)
 
         self.update_mode_layout = QHBoxLayout()
-        self.update_mode_label = QLabel(self.tr("mode"), self.grp_scheduled)
+        self.update_mode_label = QLabel(self.grp_scheduled)
         self.update_mode_combo = QComboBox(self.grp_scheduled)
-        self.update_mode_combo.addItem(self.tr("Scheduled Time"))
-        self.update_mode_combo.addItem(self.tr("Interval Time"))
         self.update_mode_layout.addWidget(self.update_mode_label, 2)
         self.update_mode_layout.addWidget(self.update_mode_combo)
 
         self.scheduled_time_layout = QHBoxLayout()
-        self.scheduled_time_label = QLabel(self.tr("Scheduled Time"), self.grp_scheduled)
+        self.scheduled_time_label = QLabel(self.grp_scheduled)
         self.scheduled_time_edit = QLineEdit(self.grp_scheduled)
-        self.scheduled_time_edit.setPlaceholderText("HH:MM")
+
         self.scheduled_time_layout.addWidget(self.scheduled_time_label, 2)
         self.scheduled_time_layout.addWidget(self.scheduled_time_edit)
 
         self.interval_time_layout = QHBoxLayout()
-        self.interval_time_label = QLabel(self.tr("Interval Time"), self.grp_scheduled)
+        self.interval_time_label = QLabel(self.grp_scheduled)
         self.interval_time_edit = QLineEdit(self.grp_scheduled)
-        self.interval_time_edit.setPlaceholderText(self.tr("e.g., 30m or 1h"))
+
         self.interval_time_layout.addWidget(self.interval_time_label, 2)
         self.interval_time_layout.addWidget(self.interval_time_edit)
 
@@ -268,27 +269,26 @@ class IngestSourceDetailWidget(QFrame):
         self.grp_scheduled_layout.addLayout(self.interval_time_layout)
 
         # ----- 设备插入触发器 -----
-        self.grp_device_insertion_trigger = QGroupBox(self.tr("Device Insertion Trigger"), self.grp_triggers)
+        self.grp_device_insertion_trigger = QGroupBox(self.grp_triggers)
         self.grp_device_insertion_trigger.setCheckable(True)
         self.grp_device_insertion_layout = QVBoxLayout(self.grp_device_insertion_trigger)
 
         self.target_layout = QHBoxLayout()
-        self.target_label = QLabel(self.tr("Target"), self.grp_device_insertion_trigger)
+        self.target_label = QLabel(self.grp_device_insertion_trigger)
         self.target_combo = QComboBox(self.grp_device_insertion_trigger)
         self.target_layout.addWidget(self.target_label, 2)
         self.target_layout.addWidget(self.target_combo)
 
         self.auto_mount_layout = QHBoxLayout()
-        self.auto_mount_label = QLabel(self.tr("Auto-mount (Linux only, requires permissions)"),
-                                       self.grp_device_insertion_trigger)
+        self.auto_mount_label = QLabel(self.grp_device_insertion_trigger)
         self.auto_mount_checkbox = QCheckBox(self.grp_device_insertion_trigger)
         self.auto_mount_layout.addWidget(self.auto_mount_label, 2)
         self.auto_mount_layout.addWidget(self.auto_mount_checkbox)
 
         self.mount_point_layout = QHBoxLayout()
-        self.mount_point_label = QLabel(self.tr("Mount point"), self.grp_device_insertion_trigger)
+        self.mount_point_label = QLabel(self.grp_device_insertion_trigger)
         self.mount_point_edit = QLineEdit(self.grp_device_insertion_trigger)
-        self.mount_point_edit.setPlaceholderText("/media/example/auto_import")
+
         self.mount_point_layout.addWidget(self.mount_point_label, 2)
         self.mount_point_layout.addWidget(self.mount_point_edit)
 
@@ -303,6 +303,78 @@ class IngestSourceDetailWidget(QFrame):
         self.main_layout.addWidget(self.grp_source)
         self.main_layout.addWidget(self.grp_triggers)
         self.main_layout.addStretch()
+
+    def retranslate_ui(self) -> None:
+        """重新应用全部文案 / 占位提示（语言切换时由 TranslationManager 调用）。
+
+        注意：下拉框的条目要按索引改文案，否则会把用户的当前选择重置回第一项。
+        """
+        # ---- meta ----
+        self.grp_meta.setTitle(self.tr("meta info"))
+        self.title_label.setText(self.tr("title"))
+        self.title_line_edit.setPlaceholderText(self.tr("new ingest source"))
+        self.description_label.setText(self.tr("description"))
+        self.description_line_edit.setPlaceholderText(self.tr("example"))
+        self.tags_label.setText(self.tr("tag: "))
+        self.tags_line_edit.setPlaceholderText(self.tr("tag1"))
+        self.tags_button.setText(self.tr("add"))
+
+        # ---- source ----
+        self.grp_source.setTitle(self.tr("Ingest Source"))
+        self.source_path_browser_button.setText(self.tr("browser"))
+        self.source_path_label.setText(self.tr("source path (library path)"))
+        self.file_type_label.setText(self.tr("file type(s)"))
+        self.file_type_add_button.setText(self.tr("add"))
+        self.file_type_check_label.setText(
+            self.tr("File type verification method")
+        )
+        self.file_type_check_s_radio_button.setText(self.tr("Suffix Check"))
+        self.file_type_check_mg_radio_button.setText(
+            self.tr("Magic Number Check")
+        )
+        self.subfolder_recursion_label.setText(self.tr("Subfolder recursion"))
+        self.subfolder_recursion_depth_label.setText(
+            self.tr("Subfolder recursion depth")
+        )
+        self.subfolder_recursion_depth_check_box.setText(self.tr("no limit"))
+
+        # ---- triggers ----
+        self.grp_triggers.setTitle(self.tr("Triggers"))
+        self.grp_scheduled.setTitle(self.tr("Scheduled Update"))
+        self.update_mode_label.setText(self.tr("mode"))
+        self._retranslate_update_mode_combo()
+        self.scheduled_time_label.setText(self.tr("Scheduled Time"))
+        self.scheduled_time_edit.setPlaceholderText("HH:MM")
+        self.interval_time_label.setText(self.tr("Interval Time"))
+        self.interval_time_edit.setPlaceholderText(self.tr("e.g., 30m or 1h"))
+
+        self.grp_device_insertion_trigger.setTitle(
+            self.tr("Device Insertion Trigger")
+        )
+        self.target_label.setText(self.tr("Target"))
+        self.auto_mount_label.setText(
+            self.tr("Auto-mount (Linux only, requires permissions)")
+        )
+        self.mount_point_label.setText(self.tr("Mount point"))
+        self.mount_point_edit.setPlaceholderText("/media/example/auto_import")
+
+    def _retranslate_update_mode_combo(self) -> None:
+        """重写「更新模式」两个条目，保留当前选择。"""
+        labels = (self.tr("Scheduled Time"), self.tr("Interval Time"))
+        blocked = self.update_mode_combo.blockSignals(True)
+        try:
+            current = self.update_mode_combo.currentIndex()
+            if self.update_mode_combo.count() == 0:
+                for label in labels:
+                    self.update_mode_combo.addItem(label)
+                self.update_mode_combo.setCurrentIndex(0)
+            else:
+                for index, label in enumerate(labels):
+                    if index < self.update_mode_combo.count():
+                        self.update_mode_combo.setItemText(index, label)
+                self.update_mode_combo.setCurrentIndex(current)
+        finally:
+            self.update_mode_combo.blockSignals(blocked)
 
     def setup_object_names(self):
         """为自身及所有绑定在 self 上的控件/布局设置唯一 objectName"""

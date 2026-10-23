@@ -42,11 +42,20 @@ from PySide6.QtGui import (
     QPixmap,
 )
 
+from ..i18n import tr
 from ..widgets.virtual_scroll.delegate import CellDelegate, CellOption
 
 __all__ = ["InfoCellDelegate", "InfoMode"]
 
 _logger = logging.getLogger(__name__)
+
+#: 翻译上下文（delegate 不是 QObject，用模块级 ``tr``）
+_TR_CONTEXT = "InfoCellDelegate"
+
+
+def _tr(text: str) -> str:
+    """本模块的翻译入口（信息条上的倒计时文案）。"""
+    return tr(_TR_CONTEXT, text)
 
 IconLike = Union[QIcon, QPixmap, None]
 
@@ -497,7 +506,7 @@ class InfoCellDelegate(CellDelegate):
         if self._days_formatter is not None:
             return self._days_formatter(days)
         if days > 0:
-            return f"剩余 {days} 天"
+            return _tr("剩余 {days} 天").format(days=days)
         if days == 0:
-            return "今天删除"
-        return "已过期"
+            return _tr("今天删除")
+        return _tr("已过期")

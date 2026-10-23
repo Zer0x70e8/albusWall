@@ -78,9 +78,11 @@ class TagEditorPresenter(QObject):
         except TagHasChildren as e:
             ans = QMessageBox.question(
                 self._parent,
-                "标签含子节点",
-                f"该标签下有 {len(e.children_uuids)} 个子标签，"
-                "是否连同子标签一起删除？",
+                self.tr("标签含子节点"),
+                self.tr("该标签下有 {count} 个子标签，"
+                        "是否连同子标签一起删除？").format(
+                    count=len(e.children_uuids)
+                ),
                 QMessageBox.StandardButton.Yes
                 | QMessageBox.StandardButton.No,
             )
@@ -106,8 +108,8 @@ class TagEditorPresenter(QObject):
         if result.tag is not None and not result.parent_visible:
             QMessageBox.information(
                 self._parent,
-                "父标签仍在回收站",
-                "标签已恢复，但父标签仍在回收站，当前为孤儿状态。",
+                self.tr("父标签仍在回收站"),
+                self.tr("标签已恢复，但父标签仍在回收站，当前为孤儿状态。"),
             )
         self.changed.emit()
 

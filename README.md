@@ -3,10 +3,10 @@
 **Your wall of memories, frame by frame.**  
 *A modular, plugin-driven image gallery for your ricing shots.*
 
-[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://python.org)
+[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Stage](https://img.shields.io/badge/stage-alpha-orange.svg)]()
-[![Version](https://img.shields.io/badge/version-0.1.3--dev-lightgrey.svg)]()
+[![Stage](https://img.shields.io/badge/stage-1.0-brightgreen.svg)]()
+[![Version](https://img.shields.io/badge/version-1.0.0-lightgrey.svg)]()
 
 > ⚠️ **Early Development Notice**  
 > AlbusWall is still in **active development**.  
@@ -80,24 +80,54 @@ The built-in UI is only one possible frontend. In principle, another Qt UI, GTK 
 
 ## 🚀 Quick Start
 
-**There is no stable package release yet.**  
-Clone the repository and install the optional dependencies needed by the built-in UI.
+### Arch Linux (AUR)
+
+```bash
+yay -S albuswall          # or: paru -S albuswall
+```
+
+The AUR package pulls in `pyside6`, `python-psutil`, `python-pillow` and
+`python-apscheduler` (AUR), and installs:
+
+| Path | Content |
+|---|---|
+| `/usr/bin/albuswall` | GUI entry point |
+| `/usr/bin/albusctl` | out-of-process control CLI |
+| `/usr/share/applications/albuswall.desktop` | desktop entry (menu / launcher) |
+| `/usr/share/icons/hicolor/scalable/apps/albuswall.svg` | application icon |
+
+Everything the app needs at runtime (`config/`, `sql/`, `themes/`, `i18n/`,
+`icons/`) ships inside the Python package — the app reads it from
+`albuswall/resources/`, never from `/usr/share`.
+
+### From source
 
 ```bash
 git clone https://github.com/Zer0x70e8/albusWall.git
 cd albusWall
+python -m venv .venv && . .venv/bin/activate
+pip install -e .
 ```
 
-For the built-in PySide6 UI and image features:
+`pip install -e .` needs PySide6, Pillow, psutil and APScheduler, and registers
+both console scripts (`albuswall`, `albusctl`). For a throwaway environment you
+can also install only what the built-in UI needs:
 
 ```bash
-pip install PySide6 Pillow
+pip install PySide6 Pillow psutil apscheduler
 ```
 
 > The core is no longer hard-dependent on PySide6.  
 > If you only want to develop or test the core/plugin system, you may not need PySide6 until the built-in UI plugin is loaded.
 
 ### Launch the Application
+
+```bash
+albuswall                 # installed entry point
+python -m albuswall       # same thing, no install required (cd src first)
+```
+
+With an editable/not-installed checkout:
 
 ```bash
 cd src
@@ -139,6 +169,113 @@ AlbusWall now treats functionality and frontends as plugins.
 
 ---
 
+## 🔗 Cross-Process Calls (IPC)
+
+A running AlbusWall instance can be driven from **other processes** — a CLI,
+a shell script, a Hyprland keybind, or another app.
+
+The core idea: the GUI process owns the state (SQLite, `SourceService.state`,
+Qt models, the task queue). Another process cannot just import the code —
+it would get a second, empty copy of that state and race for the same rows.
+So the running instance listens on a local endpoint and executes calls **on
+its own main thread**.
+
+```bash
+albusctl ping           # is it running?
+albusctl sources        # list tracked import sources
+albusctl import         # wake the import worker
+albusctl thumbs         # queue thumbnail backfill
+albusctl stats          # task service counters
+albusctl watch import.assets_imported   # stream events
+albusctl call source.list '{}'          # any registered command
+albusctl quit
+```
+
+`albusctl` exists after `pip install -e .` (it is a `[project.scripts]` entry).
+From a plain source checkout — no install — use the wrapper, which puts `src/`
+on `PYTHONPATH` and picks the repo's own venv:
+
+```bash
+./scripts/albusctl.sh ping     # note the ./ — fish & zsh don't search CWD
+```
+
+Every name printed by `albusctl list` can be used directly as a subcommand
+(`albusctl task.stats` == `albusctl call task.stats`); the short aliases
+(`sources`, `import`, `thumbs`, `stats`, `status`, `quit`) are just sugar.
+
+Exit codes: `0` ok · `2` usage · `3` not running · `4` token mismatch ·
+`5` remote error · `6` timeout · `130` interrupted.
+
+### Design
+
+| Layer | Module | Responsibility |
+|---|---|---|
+| Endpoint | `utils/ipc_endpoint.py` | socket address + token, shared by both sides |
+| Protocol | `common/ipc.py` | JSON-RPC style frames, error codes, exceptions |
+| Commands | `services/command.py` | `@command` registry + `Dispatcher` |
+| Transport | `infrastructure/ipc/server.py` | accept loop, connections, forwarding |
+| Client | `client/` | `albusctl` — no GUI, no core imports |
+
+- **Transport is `multiprocessing.connection`**: `AF_UNIX` on POSIX,
+  named pipes (`AF_PIPE`) on Windows — one code path, zero dependencies.
+  Frames are `send_bytes`/`recv_bytes` JSON, never pickle.
+- **Commands run on the main loop thread**, dispatched via
+  `MainLoop.call_soon`, because service state has a single-thread owner.
+- **Address** lives in `$XDG_RUNTIME_DIR/albuswall/ipc.sock` (`0600`, dir
+  `0700`) or `\\.\pipe\albuswall-<user>`; the `authkey` token sits next to
+  it. Binding the endpoint doubles as a **single-instance lock**.
+- The endpoint is a plugin (`plugins/ipc.py`), so `[plugin_disables] ipc`
+  removes it entirely and `[ipc] enabled = false` just stops listening.
+
+### Adding a command
+
+```python
+from albuswall.services.command import command
+
+@command("source.rescan")
+def _rescan(container, *, source_id: int) -> dict:
+    # runs on the main loop thread; keep it short, or hand off to task_service
+    container.get("source_service").update_source(source_id)
+    return {"accepted": True}
+```
+
+Layout:
+
+```text
+common/ipc.py              # frames + error codes
+common/enums/ipc.py        # IpcErrorCode
+utils/ipc_endpoint.py      # address + token
+services/command.py        # @command + Dispatcher + builtin commands
+infrastructure/ipc/        # config, server, bootstrap
+client/                    # IpcClient + albusctl
+plugins/ipc.py             # plugin declaration
+test/test_ipc.py           # headless end-to-end tests
+```
+
+### Logs
+
+IPC activity follows the usual levels, so the global `[log] level` decides how
+much you see:
+
+| Event | Level |
+|---|---|
+| `IPC server listening / stopped` | INFO |
+| connection opened / closed, `req#N <method> ok in X ms` | DEBUG |
+| unknown command, bad params, broken frame (i.e. the **caller** is wrong) | WARNING |
+| command raised inside the app | ERROR (with traceback) |
+
+The shipped `conf.ini` defaults to `[log] level = WARNING`, which means a
+healthy start is silent and only caller mistakes show up. While working on
+IPC, set `level = DEBUG` (or `TRACE`) in `~/.config/albuswall/config.ini`.
+
+No-log quick check instead of reading logs:
+
+```bash
+albusctl status     # running / address / clients / accepted / handled / errors
+```
+
+---
+
 ## 📁 Project Layout
 
 ```text
@@ -155,13 +292,17 @@ src/
     ├── plugin/              # Plugin declaration, discovery, manager
     ├── plugins/             # Built-in plugins, e.g. builtin_ui
     ├── repositories/        # Data access layer
-    ├── resources/           # Config, SQL, themes
+    ├── resources/           # Config, SQL, themes, i18n, app icon (package data)
     ├── services/            # Business logic
     ├── ui/                  # UI abstraction and bootstrap
     │   ├── builtin/
     │   ├── protocol.py
     │   └── vo/
     └── utils/               # Path, signal, mount, time, SQL helpers
+
+packaging/
+├── albuswall.desktop        # Desktop entry
+└── aur/                     # PKGBUILD + .SRCINFO for Arch Linux
 ```
 
 > Note: the directory name `configue/` follows the current repository layout.
@@ -170,7 +311,7 @@ src/
 
 ## 🧩 Dependencies
 
-- Python ≥ 3.10
+- Python ≥ 3.11
 - SQLite via the standard library
 - Core: standard library + project modules
 - Optional built-in UI: PySide6
@@ -178,6 +319,66 @@ src/
 
 PySide6 is no longer a mandatory core dependency.  
 It is required only when using the built-in PySide6 UI plugin.
+
+---
+
+## 📦 Building & Packaging
+
+The project uses [hatchling](https://hatch.pypa.io/) and a `src/` layout, so
+`pyproject.toml` is the single source of truth for metadata and entry points.
+
+```bash
+python -m build           # wheel + sdist into dist/
+```
+
+### Resources
+
+Runtime assets live inside the package (`src/albuswall/resources/`):
+
+```text
+resources/
+├── config/     conf.ini, log_config.ini     # defaults copied to ~/.config
+├── i18n/       albuswall_<lang>.{ts,qm}     # translations
+├── icons/      albuswall.svg                # application / window icon
+├── sql/        media_library_schema.sql
+└── themes/     default/main_window.qss + icons/
+```
+
+They are **not** separate data files: hatchling collects every non-`.py` file
+under the package, so `pip install` / the AUR package ship them in
+`site-packages/albuswall/resources/` and `albuswall.resources.get()` resolves
+them there. Nothing is written back into the package at runtime — user copies
+(theme, config, thumbnails) go to `~/.config/albuswall` / `~/.cache/albuswall`.
+
+### Arch Linux / AUR
+
+| File | Purpose |
+|---|---|
+| `packaging/aur/PKGBUILD` | AUR recipe (`pkgname=albuswall`) |
+| `packaging/aur/.SRCINFO` | pre-generated metadata for the AUR web UI |
+| `packaging/albuswall.desktop` | desktop entry |
+| `scripts/aur_release.py` | fills the source checksum + regenerates `.SRCINFO` |
+
+`PKGBUILD` installs the wheel with `python -m installer`, then adds the desktop
+entry, the hicolor icon and the MIT license.
+
+The checksum can only be computed after the release tag exists, so the release
+order is:
+
+```bash
+# 1. bump version, commit, tag, push
+git tag -a v1.0.0 -m "AlbusWall 1.0.0" && git push origin v1.0.0
+
+# 2. compute the tag tarball hash and regenerate .SRCINFO
+python scripts/aur_release.py            # --tarball <file> to use a local archive
+
+# 3. copy PKGBUILD + .SRCINFO into the AUR repo and push
+```
+
+```bash
+# verify the recipe locally before publishing
+cd packaging/aur && makepkg --printsrcinfo > .SRCINFO   # regenerate only
+```
 
 ---
 
@@ -207,7 +408,8 @@ It is required only when using the built-in PySide6 UI plugin.
 - [ ] Single image detail view
 - [ ] Settings GUI
 - [ ] Logging system
-- [ ] Packaging and PyPI release
+- [x] Packaging: wheel / sdist + Arch Linux (AUR)
+- [ ] PyPI release
 
 The new architecture is intended to make these features faster to restore and easier to maintain.
 

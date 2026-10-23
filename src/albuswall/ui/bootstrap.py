@@ -2,13 +2,18 @@
 """"""
 
 from logging import getLogger
+from typing import cast
 
 import albuswall
 from albuswall.core import Application, Container
 from albuswall.configue import ConfigField
+from albuswall.configue.declaration import ConfigDeclaration
+from albuswall.configue.typed import load_typed
 from albuswall.plugin import PluginManager
+from albuswall.ui.schema import UIBootstrapConfig
 
 from .common import DEFAULT_THEME, DEFAULT_UI
+from .languages import DEFAULT_LANGUAGE
 from .protocol import get_ui
 
 logger = getLogger(f"{albuswall.__title__}.ui")
@@ -17,38 +22,49 @@ logger = getLogger(f"{albuswall.__title__}.ui")
 # noinspection bad-assignment
 class UIConfig:
     theme_path: str = ConfigField("path", "theme", default=None)
-    main = ConfigField("ui", default={})
+    main = ConfigField("ui", default={})  # 老声明，等价于「[ui] 是一节」，未暴露给 typed dict
+    # 界面语言：与主题同属「UI 引导配置」，放在 ``[ui]`` 节下。
+    # 取值统一走 ``ui_config()["language"]``（见 albuswall.ui.builtin.i18n）。
+    language: str = ConfigField("ui", "language", default=DEFAULT_LANGUAGE)
     theme: str = ConfigField("ui", "theme", default=DEFAULT_THEME)
     active: str = ConfigField("ui", "ui", default=DEFAULT_UI)
     no_builtin: bool = ConfigField("ui", "no_builtin", default=False)
+    # 与 albuswall.__main__.Conf.debug 指向同一个节点（__default__ 节），
+    # 这里只补类型、不注入默认值，避免重复声明把默认值再写一遍。
+    debug: bool = ConfigField("debug", default=False, inject_default=False)
+
+
+def ui_config() -> UIBootstrapConfig:
+    """UI 引导配置的 typed dict 快照（默认值来自 ``UIConfig`` 的静态声明）。"""
+    return cast(UIBootstrapConfig, load_typed(UIBootstrapConfig, ConfigDeclaration))
 
 
 def registry_ui(container: "Container"):
-    confs = UIConfig()
+    confs = ui_config()
     logger.debug("UI(active=%s, theme=%s) registry now.",
-                 confs.active, confs.theme)
+                 confs["active"], confs["theme"])
 
     # ① 触发 UI 导入阶段
     try:
-        PluginManager.activate_ui(container, confs.active.lower())
+        PluginManager.activate_ui(container, confs["active"].lower())
     except KeyError:
         logger.warning("UI loader(name=%s) not declared, "
-                       "can't registry UI.", confs.active)
+                       "can't registry UI.", confs["active"])
         return None
 
     # ② 从 _REGISTRY 取类
     try:
-        ui_cls = get_ui(confs.active.lower())
+        ui_cls = get_ui(confs["active"].lower())
     except RuntimeError:
         logger.warning(
             "Ui(name=%s) not registered; "
             "may be disabled by plugin 'enabled' filter, "
             "or its @ui_loader didn't import the implementation.",
-            confs.active,
+            confs["active"],
         )
         return None
 
-    if container.get("config").static.debug:
+    if confs["debug"]:
         # noinspection PyStringConversionWithoutDunderMethod
         logger.debug(str(ui_cls))
 

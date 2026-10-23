@@ -38,6 +38,30 @@ _UUIDLike = UUID | str
 # 「可见资产」条件（含 source 可见性）；标签统计 / 标签内列表共用。
 _ACTIVE_ASSET_WHERE_A = active_asset_where("a")
 
+# scope → assets（别名 a）条件；标签内列表 / 标签搜索共用。
+_TAG_SCOPE_WHERE_A = {
+    "active": _ACTIVE_ASSET_WHERE_A,
+    "deleted": "a.is_deleted = 1",
+}
+
+
+def _scope_where(scope: str) -> str:
+    """把 scope 翻译成 ``assets AS a`` 的条件片段。"""
+    try:
+        return _TAG_SCOPE_WHERE_A[scope]
+    except KeyError:
+        raise ValueError(f"unsupported scope: {scope!r}") from None
+
+
+def _escape_like(text: str) -> str:
+    """转义 LIKE 通配符；调用方需配 ``ESCAPE '\\'``。"""
+    return (
+        text.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
+
 _TAG_COLUMNS = """
            t.uuid,
            p.uuid AS parent_uuid,
@@ -128,6 +152,86 @@ class TagRepository(BaseRepository):
                 order="t.sort_order ASC, t.id ASC",
             ),
         )
+
+    def search_tags(
+            self,
+            keyword: str,
+            *,
+            album_uuid: Optional[_UUIDLike] = None,
+            scope: str = "active",
+            limit: int = 20,
+    ) -> list[tuple[Tag, int]]:
+        """按名称模糊搜索标签，并统计「当前作用域内」的资产数量。
+
+        作用域二选一：
+
+        * ``album_uuid`` 非空：只在物理相册成员里统计（忽略 ``scope``）；
+        * ``album_uuid`` 为空：按虚拟相册 scope（``active`` / ``deleted``）统计。
+
+        返回 ``[(Tag, 资产数), ...]``，只含在该作用域内至少有一张资产的标签；
+        按资产数降序、标签排序权重升序排列。匹配同时看 ``norm_name`` 与
+        完整路径（如输入 ``旅行`` 能命中 ``旅行/日本``），大小写 / 全半角
+        差异由 ``normalize_tag_name`` 抹平。
+
+        ``limit`` 会被夹到 ``1..100``，避免调用方把整棵树拉进 UI。
+        """
+        keyword = keyword.strip()
+        if not keyword:
+            return []
+
+        limit = max(1, min(int(limit), 100))
+        norm_like = f"%{_escape_like(normalize_tag_name(keyword))}%"
+
+        if album_uuid is not None:
+            joins = """
+              JOIN asset_tags   AS at ON at.tag_uuid = t.uuid
+              JOIN assets       AS a  ON a.id = at.asset_id
+              JOIN album_assets AS aa ON aa.asset_id = a.id
+              JOIN albums       AS al ON al.id = aa.album_id"""
+            where = (
+                f"t.is_deleted = 0 AND al.uuid = ?"
+                f" AND al.is_deleted = 0 AND {_ACTIVE_ASSET_WHERE_A}"
+            )
+            params: list = [as_uuid_str(album_uuid)]
+        else:
+            joins = """
+              JOIN asset_tags AS at ON at.tag_uuid = t.uuid
+              JOIN assets     AS a  ON a.id = at.asset_id"""
+            where = f"t.is_deleted = 0 AND {_scope_where(scope)}"
+            params = []
+
+        rows = self._fetchall(
+            f"""
+            WITH RECURSIVE tag_path(id, path, depth) AS (
+                SELECT id, COALESCE(display_name, name), 0
+                  FROM tags
+                 WHERE parent_id IS NULL
+                   AND is_deleted = 0
+                UNION ALL
+                SELECT t.id,
+                       tag_path.path || '/' || COALESCE(t.display_name, t.name),
+                       tag_path.depth + 1
+                  FROM tags AS t
+                  JOIN tag_path ON t.parent_id = tag_path.id
+                 WHERE t.is_deleted = 0
+                   AND tag_path.depth < 64
+            )
+            SELECT {_TAG_COLUMNS},
+                   COUNT(DISTINCT a.id) AS cnt
+              FROM tags AS t
+              JOIN tag_path ON tag_path.id = t.id
+              LEFT JOIN tags AS p ON p.id = t.parent_id
+            {joins}
+             WHERE {where}
+               AND (t.norm_name LIKE ? ESCAPE '\\'
+                    OR LOWER(tag_path.path) LIKE ? ESCAPE '\\')
+             GROUP BY t.id
+             ORDER BY cnt DESC, t.sort_order ASC, t.id ASC
+             LIMIT ?
+            """,
+            tuple([*params, norm_like, norm_like, limit]),
+        )
+        return [(Tag.from_row(row), int(row["cnt"])) for row in rows]
 
     # ==================================================================
     # 资产 <-> 标签
@@ -257,9 +361,18 @@ class TagRepository(BaseRepository):
             (as_uuid_str(tag_uuid), limit, offset),
         )
 
-    def list_asset_uuids_by_tag(self, tag_uuid: _UUIDLike) -> list[UUID]:
-        """标签内所有可见 asset 的 uuid（同 JOIN / ORDER BY 契约）。"""
-        order = order_by("active", prefix="a.")
+    def list_asset_uuids_by_tag(
+            self,
+            tag_uuid: _UUIDLike,
+            *,
+            scope: str = "active",
+    ) -> list[UUID]:
+        """标签内所有可见 asset 的 uuid（同 JOIN / ORDER BY 契约）。
+
+        ``scope="deleted"`` 时返回回收站中仍保留该标签绑定的资产，
+        供「当前相册（回收站）按标签过滤」使用。
+        """
+        order = order_by(scope, prefix="a.")
         rows = self._fetchall(
             f"""
             SELECT a.uuid
@@ -268,12 +381,53 @@ class TagRepository(BaseRepository):
               JOIN assets AS a ON a.id   = at.asset_id
              WHERE t.uuid = ?
                AND t.is_deleted = 0
-               AND {_ACTIVE_ASSET_WHERE_A}
+               AND {_scope_where(scope)}
              ORDER BY {order}
             """,
             (as_uuid_str(tag_uuid),),
         )
         return [to_uuid(row["uuid"]) for row in rows]
+
+    def list_asset_uuids_by_tags(
+            self,
+            tag_uuids: Sequence[_UUIDLike],
+            *,
+            scope: str = "active",
+    ) -> list[UUID]:
+        """多个标签（通常是一棵子树）内资产的并集。
+
+        过滤父标签时 service 先展开子树，再调用本方法一次拿全集，
+        避免逐标签查询造成 N+1。跨分块结果的排序只在单块内有效，
+        调用方若需要全局顺序请按相册顺序再做一次求交。
+        """
+        uuids = list(dict.fromkeys(as_uuid_str(u) for u in tag_uuids))
+        if not uuids:
+            return []
+
+        order = order_by(scope, prefix="a.")
+        seen: set[str] = set()
+        result: list[UUID] = []
+        for chunk in chunked(uuids):
+            rows = self._fetchall(
+                f"""
+                SELECT DISTINCT a.uuid AS uuid
+                  FROM asset_tags AS at
+                  JOIN tags   AS t ON t.uuid = at.tag_uuid
+                  JOIN assets AS a ON a.id   = at.asset_id
+                 WHERE t.uuid IN ({placeholders(len(chunk))})
+                   AND t.is_deleted = 0
+                   AND {_scope_where(scope)}
+                 ORDER BY {order}
+                """,
+                chunk,
+            )
+            for row in rows:
+                value = row["uuid"]
+                if value in seen:
+                    continue
+                seen.add(value)
+                result.append(to_uuid(value))
+        return result
 
     # ==================================================================
     # 写：创建 / 更新

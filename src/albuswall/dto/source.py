@@ -238,11 +238,17 @@ class IngestSource:
     # ------------------------------------------------------------------ 展示
     @property
     def display_name(self) -> str:
-        """卡片标题兜底：``title`` 为空时退化到目录名。"""
+        """卡片标题兜底：``title`` 为空时退化到目录名。
+
+        ``title`` 与 ``source_path`` 都为空时返回空串 —— DTO 只承载数据，
+        本地化的「未命名」兜底由 UI 层提供（见
+        ``IngestSourcePresenter._dto_to_card_item``），这样切换语言时
+        卡片标题才能跟着变。
+        """
         if self.title:
             return self.title
         if not self.source_path:
-            return "(未命名)"
+            return ""
         return (
             self.source_path.rstrip("/\\")
             .rsplit("/", 1)[-1]

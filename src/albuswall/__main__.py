@@ -82,6 +82,7 @@ def _boot(app: Application) -> None:
     gc.freeze()
 
     # phase4 state and cache
+    # 不传 modules：import 全部由 register_dynamic_module 在导入期登记的状态模块
     setup_dynamic_config(container)
 
     # phase5 infrastructure

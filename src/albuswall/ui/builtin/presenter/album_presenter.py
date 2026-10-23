@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 from uuid import UUID
 
 from PySide6.QtCore import (
@@ -32,17 +32,27 @@ from albuswall.dto.album import Album
 from albuswall.log import Logger, getLogger
 from albuswall.ui.vo.album import TitleBarVO
 
-from ..config import PreferenceConfig
+from ..config import (
+    AlbumConfig,
+    WindowConfig,
+    album_config,
+    resolve_icon_file,
+    window_config,
+)
 from ..delegate.album_cover_delegate import AlbumCOverDelegate
 from ..model.album_model import AlbumModel, AlbumRole
 from ..widgets.square_grid import SquareGridView
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from albuswall.services.view import ViewService
 
     from ..window.titlebar import TitleBar
 
-__all__ = ["AlbumPresenter", "PreferenceConfig"]
+__all__ = ["AlbumPresenter"]
+
+_IconKind = Literal["album_icon", "extra_icon", "search_icon"]
 
 _DEFAULT_TITLE = albuswall.__title__
 
@@ -84,7 +94,7 @@ class _CoverJob(QRunnable):
         try:
             self._fn()
         except Exception:
-            _logger.exception("封面加载任务异常")
+            _logger.exception("Cover-loading task raised an exception")
 
 
 class AlbumPresenter(QObject):
@@ -126,7 +136,9 @@ class AlbumPresenter(QObject):
         self._title_bar = title_bar
         self._view = album_view
         self._view_service = view_service
-        self._config = PreferenceConfig()
+        # 配置一律是 typed dict 快照（默认值来自静态配置声明）
+        self._config: AlbumConfig = album_config()
+        self._window_config: WindowConfig = window_config()
         self._current_album: Album | None = None
         self._pool = QThreadPool.globalInstance()
 
@@ -152,8 +164,14 @@ class AlbumPresenter(QObject):
 
     # ---------------- 生命周期 ----------------
 
+    def _reload_config(self) -> None:
+        """重新取一份 typed dict 快照（配置运行期可改，刷新时重读一次）。"""
+        self._config = album_config()
+        self._window_config = window_config()
+
     def setup(self, _=None) -> None:
         """首刷：列表（含封面）、默认专辑、标题栏，最后广播一次当前专辑。"""
+        self._reload_config()
         self._populate_list()
         self._load_default_album()
         self._apply_window_settings()
@@ -171,10 +189,15 @@ class AlbumPresenter(QObject):
 
     def refresh(self) -> None:
         """重绘 TitleBar + 重新同步网格选中 + 重新解析封面。"""
+        self._reload_config()
         self._apply_window_settings()
         self._title_bar.set_vo(self._build_vo(self._current_album))
         self._sync_selection(self._current_album)
         self.reload_covers()
+
+    def retranslate(self) -> None:
+        """语言切换后重刷标题栏（按钮兜底文案 / 搜索栏提示都来自视图）。"""
+        self.refresh()
 
     def set_album(self, album: Album) -> None:
         """切换当前专辑：状态、TitleBar、网格高亮一起变。"""
@@ -194,10 +217,10 @@ class AlbumPresenter(QObject):
         try:
             uuids = self._view_service.list_album_uuids()
         except Exception:
-            _logger.exception("拉取活动专辑列表失败")
+            _logger.exception("Failed to fetch the active album list")
             return
 
-        _logger.trace("活动专辑: %r", uuids)
+        _logger.trace("Active albums: %r", uuids)
         for u in uuids:
             self._model.append(str(u))
         self.reload_covers()
@@ -254,7 +277,9 @@ class AlbumPresenter(QObject):
         try:
             raw = self._view_service.get_cover_full_path(album_uuid)
         except Exception:
-            _logger.exception("解析相册封面失败 album=%s", album_uuid)
+            _logger.exception(
+                "Failed to resolve the album cover album=%s", album_uuid
+            )
             return False, None
         path = str(raw) if raw else None
         _logger.trace("cover path for album=%s -> %r", album_uuid, path)
@@ -319,7 +344,7 @@ class AlbumPresenter(QObject):
             return
         album = self._view_service.get_album(uuid_val)
         if album is None:
-            _logger.debug("点击的专辑 %s 查询为空", uuid_val)
+            _logger.debug("Clicked album %s resolved to nothing", uuid_val)
             return
         self.set_album(album)
 
@@ -343,7 +368,7 @@ class AlbumPresenter(QObject):
             2. 缺失时取 ``ViewService.list_album_uuids()`` 的第一个；
             3. 都没有则保持 ``None``。
         """
-        album_uuid: UUID | str | None = self._config.default_album_uuid
+        album_uuid: UUID | str | None = self._config["default_album_uuid"]
 
         if not album_uuid:
             active = self._view_service.list_album_uuids()
@@ -352,17 +377,19 @@ class AlbumPresenter(QObject):
 
         if album_uuid is None:
             self._current_album = None
-            _logger.trace("未解析到默认专辑，标题栏将以空专辑渲染")
+            _logger.trace(
+                "No default album resolved; the title bar renders an empty album"
+            )
             return
 
         self._current_album = self._view_service.get_album(album_uuid)
         if self._current_album is None:
-            _logger.debug("默认专辑 %s 查询为空", album_uuid)
+            _logger.debug("Default album %s resolved to nothing", album_uuid)
 
     # ---------------- TitleBar VO ----------------
 
     def _window_title(self) -> str:
-        return self._config.window_title or _DEFAULT_TITLE
+        return self._config["window_title"] or _DEFAULT_TITLE
 
     def _apply_window_settings(self) -> None:
         self._title_bar.window().setWindowTitle(self._window_title())
@@ -374,6 +401,10 @@ class AlbumPresenter(QObject):
         s = str(value)
         return s if s != "" else None
 
+    def _icon_path(self, kind: "_IconKind") -> "Optional[Path]":
+        return resolve_icon_file(
+            self._config, self._window_config, self._config[kind])
+
     def _build_vo(self, album: Album | None) -> TitleBarVO:
         return TitleBarVO(
             window_title=self._window_title(),
@@ -382,13 +413,13 @@ class AlbumPresenter(QObject):
             description=(
                 self._text_or_none(album.description) if album is not None else None
             ),
-            album_icon=self._config.album_icon_path(),
-            extra_icon=self._config.extra_icon_path(),
-            search_icon=self._config.search_icon_path(),
-            album_text=self._text_or_none(self._config.album_text),
-            extra_text=self._text_or_none(self._config.extra_text),
-            search_text=self._text_or_none(self._config.search_placeholder),
-            search_expanded=self._config.search_expanded,
+            album_icon=self._icon_path("album_icon"),
+            extra_icon=self._icon_path("extra_icon"),
+            search_icon=self._icon_path("search_icon"),
+            album_text=self._text_or_none(self._config["album_text"]),
+            extra_text=self._text_or_none(self._config["extra_text"]),
+            search_text=self._text_or_none(self._config["search_placeholder"]),
+            search_expanded=self._config["search_expanded"],
         )
 
     def __str__(self) -> str:

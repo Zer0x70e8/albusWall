@@ -5,26 +5,33 @@
 地方。对外只暴露**参数工具**（``load_*``）与一个**生命周期工具**
 （``install_source_trash_lifecycle``）；服务本身的构造由调用方
 （``service/__init__.py`` 的 ``_ARG_MAP``）决定。
+
+取值分两步：``source_trash_config()`` 先拿到一份 typed dict 快照
+（默认值 / 类型来自 ``_Config`` 的 ``ConfigField`` 声明），再由
+``load_*`` 把它和环境信息一起折叠成 frozen dataclass。
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional, cast
 
 from albuswall.configue import ConfigField
-from albuswall.core import Container, Application
+from albuswall.configue.typed import load_typed
+from albuswall.core import Application, Container
 from albuswall.log import getLogger
-
+from albuswall.services.schema import SourceTrashServiceConfig
 from albuswall.utils.platform_paths import platform_cache_root
 from albuswall.utils.session_marker import SessionMarker
 from albuswall.utils.xdg_thumbnail import xdg_thumbnails_root
 
-from .config import SourceTrashConfig, ThumbnailCleanerConfig, SessionConfig
-from ..thumbnail.config import config as thumb_config, resolve_thumb_root
+from ..thumbnail.config import resolve_thumb_root, thumbnail_config
+from .config import SessionConfig, SourceTrashConfig, ThumbnailCleanerConfig
 
 _logger = getLogger(__package__)
 
 
+# noinspection bad-assignment
 class _Config:
     reconciler_name: str = ConfigField(
         "source_trash", "reconciler_name", default="source_trash",
@@ -53,22 +60,37 @@ class _Config:
     )
 
 
-_cfg = _Config()
+def source_trash_config() -> SourceTrashServiceConfig:
+    """source_trash 配置的 typed dict 快照。
+
+    默认值 / 类型全部来自 ``_Config`` 的 ``ConfigField`` 声明；只绑定这
+    一个 owner，不会串到别的服务的同名字段。
+    """
+    return cast(
+        SourceTrashServiceConfig,
+        load_typed(SourceTrashServiceConfig, _Config),
+    )
 
 
 # =====================================================================
 # 参数工具：环境 → 值对象
 # =====================================================================
-def load_source_trash_config() -> SourceTrashConfig:
+def load_source_trash_config(
+        conf: Optional[SourceTrashServiceConfig] = None,
+) -> SourceTrashConfig:
     """SourceTrashService 的运行时配置。"""
+    if conf is None:
+        conf = source_trash_config()
     return SourceTrashConfig(
-        reconciler_name=_cfg.reconciler_name,
-        priority=_cfg.priority,
-        debounce=_cfg.debounce,
+        reconciler_name=conf["reconciler_name"],
+        priority=conf["priority"],
+        debounce=conf["debounce"],
     )
 
 
-def load_thumbnail_cleaner_config() -> ThumbnailCleanerConfig:
+def load_thumbnail_cleaner_config(
+        conf: Optional[SourceTrashServiceConfig] = None,
+) -> ThumbnailCleanerConfig:
     """ThumbnailCleaner 的运行时配置。
 
     根目录在此处**一次性**算好并注入：cleaner 只认 root，不 import
@@ -78,30 +100,39 @@ def load_thumbnail_cleaner_config() -> ThumbnailCleanerConfig:
     平台判断（macOS / Windows 也走同一套布局）已不再需要：协议语义
     全平台一致，只有根目录按平台惯例变化（见 xdg_thumbnail）。
     """
-    enabled = _cfg.xdg_compat is not False  # 用户显式关闭 → 整条链路 no-op
+    if conf is None:
+        conf = source_trash_config()
+
+    enabled = conf["xdg_compat"] is not False  # 用户显式关闭 → 整条链路 no-op
     if not enabled:
         return ThumbnailCleanerConfig(enabled=False, root=None)
 
+    thumb = thumbnail_config()
     root = (
-        xdg_thumbnails_root() if thumb_config.xdg_enabled
-        else resolve_thumb_root()
+        xdg_thumbnails_root() if thumb["xdg_enabled"]
+        else resolve_thumb_root(thumb)
     )
     return ThumbnailCleanerConfig(
         enabled=True,
         root=root,
-        min_age_seconds=_cfg.orphan_min_age_seconds,
+        min_age_seconds=conf["orphan_min_age_seconds"],
     )
 
 
-def load_session_config() -> SessionConfig:
+def load_session_config(
+        conf: Optional[SourceTrashServiceConfig] = None,
+) -> SessionConfig:
     """会话标记配置。"""
-    if _cfg.session_marker_path:
-        path = Path(_cfg.session_marker_path)
+    if conf is None:
+        conf = source_trash_config()
+    marker_path = conf["session_marker_path"]
+    if marker_path:
+        path = Path(marker_path)
     else:
         path = platform_cache_root() / "albuswall" / ".session"
     return SessionConfig(
         marker_path=path,
-        auto_cleanup_on_dirty=_cfg.auto_cleanup_on_dirty,
+        auto_cleanup_on_dirty=conf["auto_cleanup_on_dirty"],
     )
 
 

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>AlbusWall</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3b4149"/>
+      <stop offset="1" stop-color="#1d2025"/>
+    </linearGradient>
+    <clipPath id="front">
+      <rect x="56" y="78" width="122" height="140" rx="14"/>
+    </clipPath>
+  </defs>
+
+  <!-- 圆角底板 -->
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#bg)"/>
+
+  <!-- 后层照片 -->
+  <rect x="82" y="52" width="122" height="140" rx="14"
+        fill="#e0e0e0" fill-opacity="0.28"/>
+
+  <!-- 前层照片 -->
+  <rect x="56" y="78" width="122" height="140" rx="14"
+        fill="#e6e8ea" fill-opacity="0.92"/>
+
+  <!-- 前层照片里的山景 -->
+  <g clip-path="url(#front)">
+    <path d="M56 200 L100 138 L126 172 L146 146 L178 200 Z" fill="#5b6470"/>
+    <circle cx="146" cy="110" r="12" fill="#5b6470"/>
+  </g>
+</svg>

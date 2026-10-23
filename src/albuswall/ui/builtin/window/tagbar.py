@@ -7,9 +7,10 @@ from typing import Any, Sequence, Callable, Optional
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout, QPushButton, QListView, QLineEdit,
-    QWidget, QTreeView, QVBoxLayout, QSizePolicy, QFrame
+    QWidget, QTreeView, QVBoxLayout, QSizePolicy, QFrame, QMenu
 )
 
+from ..i18n import Retranslatable
 from ..widgets.anchored_popup import AnchoredPopup
 from ..widgets import BlurLabel
 from ..widgets.tag_chip_view import TagChipView
@@ -36,13 +37,16 @@ class LayerTreePopup(AnchoredPopup):
         self.main_layout.addWidget(self.tree_view)
 
 
-class TagBar(QFrame):
+class TagBar(Retranslatable, QFrame):
     # signal
     apply_requested = Signal(str)  # 输入框文本
     chip_activated = Signal(str)  # uuid
     chip_remove_requested = Signal(str)  # uuid
     layer_tree_open_requested = Signal()  # 弹出/关闭切换前
     layer_tree_activated = Signal(str)  # uuid
+    tag_create_requested = Signal(str)  # 父标签 uuid；空串 = 根
+    tag_rename_requested = Signal(str)  # uuid
+    tag_delete_requested = Signal(str)  # uuid
 
     #
     main_layout: QHBoxLayout
@@ -69,6 +73,7 @@ class TagBar(QFrame):
         self.collapse_icon = "<"
 
         self._setup_ui()
+        self.retranslate_ui()
 
     def _setup_ui(self):
         self.content_widget = BlurLabel(self, draw_label_content=False)
@@ -103,21 +108,27 @@ class TagBar(QFrame):
         self.tag_apply_button = QPushButton(
             self.tag_add_container_widget)
 
-        self.tag_apply_button.setText(self.tr("apply"))
-
         self.tag_add_container_layout.addWidget(
             self.tag_line_edit)
         self.tag_add_container_layout.addWidget(
             self.tag_apply_button)
 
         # layer tree
-        self.layer_tree_button = QPushButton(
-            self.tr("layers"), self.content_widget)
+        self.layer_tree_button = QPushButton("", self.content_widget)
         self.layer_tree_button.clicked.connect(
             self._on_toggle_layer_tree_popup)
 
+        self.tag_create_button = QPushButton("", self.content_widget)
+        self.tag_create_button.clicked.connect(
+            lambda: self.tag_create_requested.emit(""))
+
         self.layer_tree_popup = LayerTreePopup(
             self.content_widget)
+
+        tree_view = self.layer_tree_popup.tree_view
+        tree_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        tree_view.customContextMenuRequested.connect(
+            self._on_tree_context_menu)
 
         # collapse toggle
         self.collapse_toggle_button = QPushButton(
@@ -126,6 +137,7 @@ class TagBar(QFrame):
 
         layout.addWidget(self.tags_view, 1)
         layout.addWidget(self.tag_add_container_widget)
+        layout.addWidget(self.tag_create_button)
         layout.addWidget(self.layer_tree_button)
 
         self.main_layout.addWidget(self.content_widget, 1)
@@ -152,6 +164,18 @@ class TagBar(QFrame):
 
         self.setFixedHeight(64)
 
+    def retranslate_ui(self) -> None:
+        """重新应用标签栏的输入提示 / 按钮 / tooltip 文案。"""
+        self.tag_line_edit.setPlaceholderText(self.tr("标签名，可用 / 分层"))
+        self.tag_apply_button.setText(self.tr("apply"))
+        self.tag_apply_button.setToolTip(self.tr("添加到当前图片"))
+        self.layer_tree_button.setText(self.tr("layers"))
+        self.tag_create_button.setText(self.tr("new"))
+        self.tag_create_button.setToolTip(self.tr("新建标签"))
+        self.collapse_toggle_button.setText(
+            self.expand_icon if self._is_collapse else self.collapse_icon
+        )
+
     def _on_toggle_layer_tree_popup(self) -> None:
         popup = self.layer_tree_popup
         if popup.isVisible():
@@ -171,8 +195,40 @@ class TagBar(QFrame):
     def _on_tree_clicked(self, index) -> None:
         uuid = index.data(Qt.ItemDataRole.UserRole + 1)
         if uuid:
-            self.layer_tree_activated.emit(uuid.uuid)
+            self.layer_tree_activated.emit(str(uuid.uuid))
             self.layer_tree_popup.hide()
+
+    def _on_tree_context_menu(self, pos) -> None:
+        """标签树右键菜单：新建子标签 / 重命名 / 删除。
+
+        菜单只声明用户意图，具体的权限 / 冲突 / 级联询问都交给
+        TagEditorPresenter 和 TagService。
+        """
+        tree = self.layer_tree_popup.tree_view
+        index = tree.indexAt(pos)
+        tag = index.data(Qt.ItemDataRole.UserRole + 1) if index.isValid() else None
+        tag_uuid = str(tag.uuid) if tag else ""
+
+        menu = QMenu(tree)
+        create_action = menu.addAction(
+            self.tr("新建子标签") if tag else self.tr("新建根标签")
+        )
+        create_action.triggered.connect(
+            lambda: self.tag_create_requested.emit(tag_uuid)
+        )
+
+        if tag:
+            menu.addSeparator()
+            rename_action = menu.addAction(self.tr("重命名标签"))
+            rename_action.triggered.connect(
+                lambda: self.tag_rename_requested.emit(tag_uuid)
+            )
+            delete_action = menu.addAction(self.tr("删除标签"))
+            delete_action.triggered.connect(
+                lambda: self.tag_delete_requested.emit(tag_uuid)
+            )
+
+        menu.exec(tree.viewport().mapToGlobal(pos))
 
     # interface
     # noinspection none-function-assignment

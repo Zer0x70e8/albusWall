@@ -119,6 +119,23 @@ class RestoreResult:
     parent_visible: bool  # False = 已恢复但父仍软删，当前是孤儿
 
 
+@dataclass(frozen=True, slots=True)
+class TagMatch:
+    """标签搜索结果：标签本体 + 作用域内资产数 + 完整路径。"""
+
+    tag: Tag
+    asset_count: int
+    path: str  # 从根到自身的展示路径，如 "旅行/日本/京都"
+
+    @property
+    def uuid(self) -> UUID:
+        return self.tag.uuid
+
+    @property
+    def label(self) -> str:
+        return self.path or self.tag.display_name or self.tag.name
+
+
 # ============================== Service ==============================
 
 
@@ -261,9 +278,129 @@ class TagService:
         """祖先 + 自身，方便 UI 直接渲染面包屑。"""
         return self.ancestors(tag_uuid) + [self.get(tag_uuid)]
 
+    def path_label(self, tag_uuid: _UUIDLike) -> str:
+        """标签的完整展示路径（``旅行/日本/京都``）；脏环安全。"""
+        by_uuid = {t.uuid: t for t in self._repo.list_tags()}
+        return self._path_string(to_uuid(tag_uuid), by_uuid)
+
+    def search(
+            self,
+            keyword: str,
+            *,
+            album_uuid: Optional[_UUIDLike] = None,
+            scope: str = "active",
+            limit: int = 20,
+    ) -> list[TagMatch]:
+        """按名称模糊搜索标签，并带上作用域内的资产数与完整路径。
+
+        ``album_uuid`` 非空时只统计该物理相册内的资产；为空时按虚拟相册
+        ``scope``（``active`` / ``deleted``）统计。搜索结果只含作用域内
+        至少有一张资产的标签 —— 这样 UI 直接拿来做「当前相册标签过滤」
+        不会出现「点了却筛出空相册」的选项。
+        """
+        keyword = keyword.strip()
+        if not keyword:
+            return []
+
+        rows = self._repo.search_tags(
+            keyword,
+            album_uuid=album_uuid,
+            scope=scope,
+            limit=limit,
+        )
+        if not rows:
+            return []
+
+        by_uuid = {t.uuid: t for t in self._repo.list_tags()}
+        return [
+            TagMatch(
+                tag=tag,
+                asset_count=count,
+                path=self._path_string(tag.uuid, by_uuid),
+            )
+            for tag, count in rows
+        ]
+
+    def asset_uuids(
+            self,
+            tag_uuid: _UUIDLike,
+            *,
+            scope: str = "active",
+            include_descendants: bool = True,
+    ) -> list[UUID]:
+        """标签内资产 uuid（按相册同源排序规则）。
+
+        ``include_descendants=True``（默认）时把整棵子树并进来：
+        父标签可能没有直接绑定资产，但点父标签过滤时用户期望看到
+        整条分支的图，而不是空相册。
+        """
+        root = to_uuid(tag_uuid)
+        if not include_descendants:
+            return self._repo.list_asset_uuids_by_tag(root, scope=scope)
+
+        children_map: dict[UUID, list[UUID]] = defaultdict(list)
+        for tag in self._repo.list_tags():
+            if tag.parent_uuid is not None:
+                children_map[tag.parent_uuid].append(tag.uuid)
+
+        subtree: list[UUID] = [root]
+        seen: set[UUID] = {root}
+        stack: list[UUID] = [root]
+        while stack:
+            cur = stack.pop()
+            for child in children_map.get(cur, ()):
+                if child in seen:
+                    continue
+                seen.add(child)
+                subtree.append(child)
+                stack.append(child)
+
+        return self._repo.list_asset_uuids_by_tags(subtree, scope=scope)
+
+    @staticmethod
+    def _path_string(
+            tag_uuid: UUID,
+            by_uuid: dict[UUID, Tag],
+    ) -> str:
+        parts: list[str] = []
+        seen: set[UUID] = set()
+        cur: Optional[Tag] = by_uuid.get(tag_uuid)
+        while cur is not None and cur.uuid not in seen:
+            seen.add(cur.uuid)
+            parts.append(cur.display_name or cur.name)
+            parent = cur.parent_uuid
+            cur = by_uuid.get(parent) if parent is not None else None
+        return "/".join(reversed(parts))
+
     # ---------------------------------------------------------------- #
     # 写
     # ---------------------------------------------------------------- #
+
+    def ensure_path(self, path: str) -> UUID:
+        """按 ``parent/child`` 路径创建（或复用）标签链，返回最深标签 uuid。
+
+        每一段先按「同层同名」查已有标签：命中就复用，未命中才创建。
+        这样用户在打标框里输入 ``旅行/日本`` 时，重复输入不会报重名，
+        也不会产生重复子树。空路径抛 :class:`TagError`。
+        """
+        parts = [
+            part.strip()
+            for part in path.replace("\\", "/").split("/")
+            if part.strip()
+        ]
+        if not parts:
+            raise TagError("tag name is empty")
+
+        parent: Optional[UUID] = None
+        for part in parts:
+            existing = self._repo.find_by_name(parent, part)
+            parent = (
+                existing if existing is not None
+                else self.create(part, parent)
+            )
+        if parent is None:  # pragma: no cover - parts 非空保证不可达
+            raise TagError("tag name is empty")
+        return parent
 
     def create(
             self,
@@ -370,24 +507,41 @@ class TagService:
     def delete(self, tag_uuid: _UUIDLike, *, cascade: bool = False) -> None:
         """软删单个标签。
 
-        cascade=False（默认）：有直接子标签时抛 TagHasChildren；
-        cascade=True：先软删所有直接子标签（扁平 list_tags 一次搞定），
-                      再软删自身。
+        cascade=False（默认）：有子标签时抛 TagHasChildren；
+        cascade=True：先递归软删所有子孙标签，再软删自身。
+        递归是必要的：仓储层的 ``soft_delete`` 不做级联，
+        只删直接子节点会把孙节点留成「挂在软删父下」的孤儿。
         """
         tag = self._repo.get_tag(tag_uuid)
         if tag is None:
             raise TagNotFound(str(tag_uuid))
 
-        children = [
-            t for t in self._repo.list_tags() if t.parent_uuid == tag.uuid
-        ]
-        if children and not cascade:
+        tags = self._repo.list_tags()
+        children_map: dict[UUID, list[Tag]] = defaultdict(list)
+        for t in tags:
+            if t.parent_uuid is not None:
+                children_map[t.parent_uuid].append(t)
+
+        direct_children = children_map.get(tag.uuid, [])
+        if direct_children and not cascade:
             raise TagHasChildren(
-                str(tag.uuid), [str(c.uuid) for c in children]
+                str(tag.uuid), [str(c.uuid) for c in direct_children]
             )
 
-        for c in children:
-            self._repo.soft_delete(c.uuid)
+        descendants: list[Tag] = []
+        seen: set[UUID] = {tag.uuid}
+        stack: list[UUID] = [tag.uuid]
+        while stack:
+            cur = stack.pop()
+            for child in children_map.get(cur, ()):
+                if child.uuid in seen:
+                    continue
+                seen.add(child.uuid)
+                descendants.append(child)
+                stack.append(child.uuid)
+
+        for child in reversed(descendants):
+            self._repo.soft_delete(child.uuid)
         self._repo.soft_delete(tag.uuid)
 
     def restore(self, tag_uuid: _UUIDLike) -> RestoreResult:

@@ -5,15 +5,14 @@
 --------
 用 ``ConfigField`` 描述符声明字段 —— 只需 ``from albuswall.configue import ConfigField``，
 字段会自动注册到 resolver（未配置的项 fallback 到 default）。
+**声明是默认值与类型的唯一来源**。
 
-模块级实例化一个 ``config`` 单例，其它模块直接::
+两种取法：
 
-    from .config import config
-    size = config.batch_size
-
-不使用 ConfigField 的延迟绑定缓存问题：descriptor 自己有 ``_cached_value``，
-第一次读命中 resolver 后即缓存；``resolver.set`` / 重新 load 需要走
-``ConfigField.__set__`` 或重建实例才会刷新，一般不影响本服务的只读语义。
+1. ``thumbnail_config()`` → ``ThumbnailServiceConfig``（typed dict 快照），
+   服务内部统一走它：一次取值、之后只读 dict，语义比逐个读描述符清晰；
+2. ``config.xxx`` → 旧描述符 API（保留兼容，第三方插件可能还在用），
+   每次访问都回落到 resolver，没有快照语义。
 
 字段与 assets 表的关系
 ----------------------
@@ -24,9 +23,12 @@
 """
 
 from pathlib import Path
+from typing import Optional, cast
 
-from albuswall.configue import ConfigField
 from albuswall.common.enums import ThumbSpec
+from albuswall.configue import ConfigField
+from albuswall.configue.typed import load_typed
+from albuswall.services.schema import ThumbnailServiceConfig
 
 _DEFAULT_SPECS: dict[str, int] = {
     ThumbSpec.SMALL.value: 128,
@@ -35,6 +37,15 @@ _DEFAULT_SPECS: dict[str, int] = {
 }
 
 __version__ = "0.0.1.dev"
+
+#: 资产映射的版本号（``_inflight`` 去重键的一部分）
+VERSION = __version__
+
+_DEFAULT_SPEC_MAP: dict[ThumbSpec, str] = {
+    ThumbSpec.SMALL: "normal",
+    ThumbSpec.MEDIUM: "x-large",
+    ThumbSpec.LARGE: "xx-large",
+}
 
 
 class ThumbnailConfig:
@@ -78,18 +89,40 @@ class ThumbnailConfig:
     )
 
 
+#: 兼容入口：旧代码直接 ``config.xxx`` 读描述符。
+#: 新代码请用 ``thumbnail_config()``（typed dict 快照）。
 config = ThumbnailConfig()
 
 
-def resolve_thumb_root() -> Path:
+def thumbnail_config() -> ThumbnailServiceConfig:
+    """缩略图配置的 typed dict 快照。
+
+    默认值 / 类型全部来自 ``ThumbnailConfig`` 的 ``ConfigField`` 声明；
+    只绑定这一个 owner，避免 ``batch_size`` 之类同名字段串到别的服务。
+    """
+    return cast(
+        ThumbnailServiceConfig,
+        load_typed(ThumbnailServiceConfig, ThumbnailConfig),
+    )
+
+
+def resolve_thumb_root(
+        conf: Optional[ThumbnailServiceConfig] = None,
+) -> Path:
     """thumb_root 展开 + 绝对化。"""
-    return Path(config.thumb_root).expanduser().resolve()
+    if conf is None:
+        conf = thumbnail_config()
+    return Path(conf["thumb_root"]).expanduser().resolve()
 
 
-def resolve_specs() -> dict[ThumbSpec, int]:
+def resolve_specs(
+        conf: Optional[ThumbnailServiceConfig] = None,
+) -> dict[ThumbSpec, int]:
     """specs 的 key 归一化为 ThumbSpec，值归一化为 int。"""
+    if conf is None:
+        conf = thumbnail_config()
     result: dict[ThumbSpec, int] = {}
-    for k, v in (config.specs or {}).items():
+    for k, v in (conf["specs"] or {}).items():
         spec = k if isinstance(k, ThumbSpec) else ThumbSpec(k)
         result[spec] = int(v)
     return result or {
@@ -97,20 +130,23 @@ def resolve_specs() -> dict[ThumbSpec, int]:
     }
 
 
-def resolve_image_format() -> str:
-    return str(config.image_format).upper()
+def resolve_image_format(
+        conf: Optional[ThumbnailServiceConfig] = None,
+) -> str:
+    if conf is None:
+        conf = thumbnail_config()
+    return str(conf["image_format"]).upper()
 
 
-def resolve_xdg_spec_map() -> dict[ThumbSpec, str]:
+def resolve_xdg_spec_map(
+        conf: Optional[ThumbnailServiceConfig] = None,
+) -> dict[ThumbSpec, str]:
     """ThumbSpec → 协议 spec 目录名（两种模式通用）。"""
-    default: dict[ThumbSpec, str] = {
-        ThumbSpec.SMALL: "normal",
-        ThumbSpec.MEDIUM: "x-large",
-        ThumbSpec.LARGE: "xx-large",
-    }
-    raw = config.xdg_spec_map
+    if conf is None:
+        conf = thumbnail_config()
+    raw = conf["xdg_spec_map"]
     if not raw:
-        return default
+        return dict(_DEFAULT_SPEC_MAP)
     result: dict[ThumbSpec, str] = {}
     for k, v in raw.items():
         spec = k if isinstance(k, ThumbSpec) else ThumbSpec(k)

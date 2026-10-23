@@ -47,11 +47,15 @@ def ui_loader(name: str) -> _Decorator:
 
         @declare(PLUGIN_ID)
         def setup(container):
-            from ._config import WindowPresenterConfs  # noqa: F401
+            # import UI 配置声明，让 ConfigField 注册先于静态配置加载
+            from albuswall.ui.builtin.config import WindowPresenterConfs  # noqa: F401
 
         @ui_loader("builtin")
         def load(container):
-            if container.get("_config").static.ui.no_builtin:
+            # 配置一律按 typed dict 读（默认值来自静态配置声明）
+            from albuswall.ui.bootstrap import ui_config
+
+            if ui_config()["no_builtin"]:
                 return None
             from .application import Application
             return Application

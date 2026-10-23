@@ -8,10 +8,11 @@ from PySide6.QtWidgets import (
 )
 
 from .detail_widget import IngestSourceDetailWidget
+from ...i18n import Retranslatable
 from ...widgets import BlurLabel, ColumnListView
 
 
-class IngestSource(BlurLabel):
+class IngestSource(Retranslatable, BlurLabel):
     # 卡片右键，抛出 (index, 全局坐标)
     context_menu_requested = Signal(QModelIndex, QPoint)
     # 点击卡片后向外抛出 QModelIndex
@@ -56,6 +57,7 @@ class IngestSource(BlurLabel):
         self.setObjectName("IngestSource")
 
         self._setup_ui()
+        self.retranslate_ui()
 
     # ------------------------------------------------------------------ UI
     def _setup_ui(self):
@@ -64,8 +66,8 @@ class IngestSource(BlurLabel):
 
         # ---------- 按钮 ----------
         self.close_button = QPushButton("\u2715")
-        self.apply_button = QPushButton(self.tr("apply"))
-        self.add_button = QPushButton(self.tr("add"))
+        self.apply_button = QPushButton("")
+        self.add_button = QPushButton("")
 
         # ---------- content ----------
         self.content_layout = QHBoxLayout()
@@ -154,6 +156,11 @@ class IngestSource(BlurLabel):
         self.main_layout.addLayout(self.add_button_layout)
         self.main_layout.addLayout(self.content_layout, 1)
         # 让 splitter 区域吸收伸缩
+
+    def retranslate_ui(self) -> None:
+        """重新应用按钮文案（语言切换时由 TranslationManager 调用）。"""
+        self.apply_button.setText(self.tr("apply"))
+        self.add_button.setText(self.tr("add"))
 
     # -------------------------------------------------------------- 数据接口
     def set_model(self, model, delegate):

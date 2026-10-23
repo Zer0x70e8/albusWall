@@ -10,6 +10,7 @@ from albuswall.configue.utils.ini_parser import _needs_default_section
 from albuswall.log import TRACE, Logger
 
 from .registory import PreferenceDeclaration
+from .typed import preference_source_config
 
 if TYPE_CHECKING:
     from albuswall.configue import Configue
@@ -22,17 +23,23 @@ _logger.trace = lambda msg, *args: \
     _logger.log(TRACE, msg, *args)
 
 
-def _resolve_preference_file(config: "Configue") -> Path:
-    """与静态配置同构：显式配置优先，否则回落到 data/preference/<name>.ini。"""
-    if config.static.ui.preference_file is not None:
-        return Path(config.static.ui.preference_file)
+def _resolve_preference_file() -> Path:
+    """与静态配置同构：显式配置优先，否则回落到 data/preference/<name>.ini。
+
+    取值走 typed dict（``preference_source_config()``），默认值仍来自
+    ``WindowPresenterConfs`` 的静态声明。
+    """
+    source = preference_source_config()
+    explicit = source["preference_file"]
+    if explicit is not None:
+        return Path(explicit)
     return (
-        config.static.path.data / "preference" /
-        (config.static.files.preference + "." + FILE_TYPE)
+        source["data"] / "preference" /
+        (source["preference_file_name"] + "." + FILE_TYPE)
     )
 
 
-def setup(config: "Configue"):
+def setup(config: "Configue | None" = None):
     """加载动态 preference：把 preference.ini 解析成 dict，落到 dynamic.preference。
 
     与 bootstrap.setup_config 对 static 的做法完全同构：
@@ -40,6 +47,8 @@ def setup(config: "Configue"):
         _build_type_map_and_defaults  →  复用（类型 + 默认值）
         TypedConfigParser / DictInterpolation  →  复用
         dynamic.preference  →  等价于 _config.static
+
+    ``config`` 参数只为兼容旧调用保留（取值已改走 typed dict）。
     """
     # 延迟导入，避免与 bootstrap 循环依赖
     from albuswall.configue.declaration import (
@@ -51,7 +60,7 @@ def setup(config: "Configue"):
         TypedConfigParser, DictInterpolation,
     )
 
-    preference_file = _resolve_preference_file(config)
+    preference_file = _resolve_preference_file()
     _logger.debug("Preference file: %s", str(preference_file))
 
     # 1) 实例化 Declaration：__init__ 会调用 load()，

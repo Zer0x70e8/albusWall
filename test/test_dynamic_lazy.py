@@ -8,7 +8,7 @@
   3. 并发：两个线程首次访问同一 name → 返回同一个对象、不抛异常
   4. 未知 name → AttributeError
   5. mount_lazy 语义不变（显式工厂优先）
-  6. setup_dynamic_config 只 import 模块 + preload
+  6. setup_dynamic_config：显式 modules 列表只 import 那些，preload 立即加载
 
 不依赖 pytest：直接 ``python test/test_dynamic_lazy.py`` 运行，
 装了 pytest 的话 ``pytest test/test_dynamic_lazy.py`` 也能跑。

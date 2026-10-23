@@ -169,6 +169,11 @@ class IngestSourcePresenter(QObject):
         self._current_source_id = None
         self._row_source_ids = []
 
+    # ------------------------------------------------------------ 语言
+    def retranslate(self) -> None:
+        """语言切换后重刷卡片列表（默认标题需要重新取译文）。"""
+        self.reload()
+
     # ------------------------------------------------------------ 服务绑定
     def _bind_service(self, service: Optional["SourceService"]) -> None:
         """订阅源码扫描完成（列表无需刷新，仅用于观测）。"""
@@ -178,7 +183,10 @@ class IngestSourcePresenter(QObject):
             service.scan_finished.connect(self._on_scan_finished_backend)
             self._scan_bound = True
         except Exception:
-            _logger.debug("service.scan_finished 订阅失败（忽略）", exc_info=True)
+            _logger.debug(
+                "Failed to subscribe service.scan_finished (ignored)",
+                exc_info=True,
+            )
 
     def _unbind_service(self, service: Optional["SourceService"]) -> None:
         if service is None or not self._scan_bound:
@@ -186,7 +194,10 @@ class IngestSourcePresenter(QObject):
         try:
             service.scan_finished.disconnect(self._on_scan_finished_backend)
         except Exception:
-            _logger.debug("service.scan_finished 退订失败（忽略）", exc_info=True)
+            _logger.debug(
+                "Failed to unsubscribe service.scan_finished (ignored)",
+                exc_info=True,
+            )
         self._scan_bound = False
 
     def _bind_trash(self, trash_service: Optional["SourceTrashService"]) -> None:
@@ -197,7 +208,10 @@ class IngestSourcePresenter(QObject):
             trash_service.sources_changed.connect(self._on_sources_changed_backend)
             self._trash_bound = True
         except Exception:
-            _logger.debug("service.sources_changed 订阅失败（忽略）", exc_info=True)
+            _logger.debug(
+                "Failed to subscribe service.sources_changed (ignored)",
+                exc_info=True,
+            )
 
     def _unbind_trash(self, trash_service: Optional["SourceTrashService"]) -> None:
         if trash_service is None or not self._trash_bound:
@@ -207,7 +221,10 @@ class IngestSourcePresenter(QObject):
                 self._on_sources_changed_backend,
             )
         except Exception:
-            _logger.debug("service.sources_changed 退订失败（忽略）", exc_info=True)
+            _logger.debug(
+                "Failed to unsubscribe service.sources_changed (ignored)",
+                exc_info=True,
+            )
         self._trash_bound = False
 
     # ------------------------------------------------------------ 数据加载
@@ -225,7 +242,7 @@ class IngestSourcePresenter(QObject):
             try:
                 dtos = self._service.list_sources()
             except Exception:
-                _logger.exception("加载导入源列表失败")
+                _logger.exception("Failed to load the import source list")
                 dtos = []
             for dto in dtos:
                 items.append(self._dto_to_card_item(dto))
@@ -240,11 +257,18 @@ class IngestSourcePresenter(QObject):
             self._clear_detail()
 
     # ------------------------------------------------------------ 映射
-    @staticmethod
-    def _dto_to_card_item(dto: IngestSource) -> CardItem:
-        """IngestSource -> CardItem 的纯函数映射。"""
+    def _default_source_title(self) -> str:
+        """新建 / 未命名导入源的默认标题（随语言变化）。
+
+        DTO 的 ``display_name`` 不再内置中文兜底（见 ``dto/source.py``），
+        展示层的本地化兜底统一走这里。
+        """
+        return self.tr("未命名导入源")
+
+    def _dto_to_card_item(self, dto: IngestSource) -> CardItem:
+        """IngestSource -> CardItem 的映射（含本地化的标题兜底）。"""
         return CardItem(
-            title=dto.display_name,  # DTO 自带 display_name 兜底
+            title=dto.display_name or self._default_source_title(),
             description=dto.description or "",
             path=dto.source_path or "",
             tags=list(dto.tags or []),
@@ -256,7 +280,7 @@ class IngestSourcePresenter(QObject):
         try:
             return self._service.get_source(source_id)
         except Exception:
-            _logger.exception("查询导入源失败 (id=%s)", source_id)
+            _logger.exception("Failed to query import source (id=%s)", source_id)
             return None
 
     # ------------------------------------------------------------ 信号连线
@@ -302,12 +326,12 @@ class IngestSourcePresenter(QObject):
     def create_source(self, payload: IngestSourceCreate) -> Optional[int]:
         """新增导入源，返回新建 id；失败 / 服务未就绪返回 None。"""
         if self._service is None:
-            _logger.warning("未注入 SourceService，忽略 create_source")
+            _logger.warning("SourceService not injected; ignoring create_source")
             return None
         try:
             new_id = self._service.create_source(payload)
         except Exception:
-            _logger.exception("创建导入源失败")
+            _logger.exception("Failed to create import source")
             return None
         # service 在关闭状态下返回 None；契约已是 Optional[int]
         if new_id is None:
@@ -323,7 +347,7 @@ class IngestSourcePresenter(QObject):
         try:
             ok = self._service.update_source_config(source_id, patch)
         except Exception:
-            _logger.exception("更新导入源失败 (id=%s)", source_id)
+            _logger.exception("Failed to update import source (id=%s)", source_id)
             return False
         if ok:
             self.reload()
@@ -333,7 +357,7 @@ class IngestSourcePresenter(QObject):
     def delete_source(self, source_id: int) -> bool:
         """删除导入源（虚拟根会被服务层拒绝）。"""
         if source_id == MANUAL_SOURCE_ID:
-            _logger.warning("拒绝删除虚拟根 source(id=0)")
+            _logger.warning("Refusing to delete the virtual root source(id=0)")
             return False
 
         if self._trash is not None:
@@ -341,16 +365,20 @@ class IngestSourcePresenter(QObject):
                 ok = self._trash.delete_source(source_id)
             except ValueError:
                 # MANUAL_SOURCE_ID 已在上面挡掉，走到这里说明状态不一致
-                _logger.warning("trash 拒绝删除 source(id=%s)", source_id)
+                _logger.warning("trash refused to delete source(id=%s)", source_id)
                 return False
             except Exception:
-                _logger.exception("回收站删除失败 (id=%s)", source_id)
+                _logger.exception(
+                    "Recycle-bin delete failed (id=%s)", source_id
+                )
                 return False
         elif self._service is not None:
             try:
                 ok = self._service.delete_source(source_id)
             except Exception:
-                _logger.exception("删除导入源失败 (id=%s)", source_id)
+                _logger.exception(
+                    "Failed to delete import source (id=%s)", source_id
+                )
                 return False
         else:
             return False
@@ -377,7 +405,8 @@ class IngestSourcePresenter(QObject):
                 ok = self._service.enable_source(source_id)
         except Exception:
             _logger.exception(
-                "切换导入源禁用状态失败 (id=%s, disabled=%s)",
+                "Failed to toggle import source disabled state "
+                "(id=%s, disabled=%s)",
                 source_id, disabled,
             )
             return False
@@ -454,7 +483,7 @@ class IngestSourcePresenter(QObject):
 
         self._draft_dto = IngestSource(
             id=DRAFT_SOURCE_ID,
-            title=self.tr("未命名导入源"),
+            title=self._default_source_title(),
             description=None,
             source_path="",
             target_path=None,
@@ -509,11 +538,13 @@ class IngestSourcePresenter(QObject):
 
     def _create_from_draft(self, form: IngestSourceFormData) -> None:
         """把草稿表单提交为一条新记录，成功后定位到新卡片。"""
-        payload = self._form_to_create_payload(form, self.tr("未命名导入源"))
+        payload = self._form_to_create_payload(
+            form, self._default_source_title()
+        )
         try:
             new_id = self._service.create_source(payload)
         except Exception:
-            _logger.exception("创建导入源失败")
+            _logger.exception("Failed to create import source")
             return
         if new_id is None:
             return
@@ -539,13 +570,13 @@ class IngestSourcePresenter(QObject):
         """在主线程里消费扫描完成事件（当前只观测，不刷新列表）。"""
         if getattr(event, "skipped", False):
             _logger.debug(
-                "source(id=%s) 已删除/失效，扫描跳过: seq=%s",
+                "source(id=%s) deleted/invalid; scan skipped: seq=%s",
                 getattr(event, "source_id", None),
                 getattr(event, "task_seq", None),
             )
             return
         _logger.debug(
-            "source(id=%s) 扫描完成: scanned=%s new=%s has_new=%s",
+            "source(id=%s) scan finished: scanned=%s new=%s has_new=%s",
             getattr(event, "source_id", None),
             getattr(event, "scanned_file_count", None),
             getattr(event, "new_file_count", None),
@@ -625,7 +656,10 @@ class IngestSourcePresenter(QObject):
         """
         dto = self._dto_for_id(source_id)
         if dto is None:
-            _logger.debug("切换禁用状态时源已不存在 (id=%s)", source_id)
+            _logger.debug(
+                "Source no longer exists while toggling disabled state (id=%s)",
+                source_id,
+            )
             return
         self.set_source_disabled(source_id, not dto.disabled)
 

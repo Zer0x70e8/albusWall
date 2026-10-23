@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=AlbusWall
+GenericName=Image Gallery
+Comment=A modular, plugin-driven image gallery for Hyprland ricing screenshots
+Exec=albuswall
+TryExec=albuswall
+Icon=albuswall
+Terminal=false
+Categories=Graphics;Viewer;Photography;
+Keywords=gallery;image;images;photo;photos;thumbnail;thumbnails;wallpaper;ricing;hyprland;
+StartupNotify=true
+StartupWMClass=albuswall

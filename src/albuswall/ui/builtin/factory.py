@@ -21,7 +21,11 @@ def load(container):
     `from .application import Application` 会触发 `@register_ui("builtin")`，
     把 UI 类登记到 `albuswall.ui.protocol._REGISTRY`。
     """
-    if container.get("config").static.ui.no_builtin:
+    # 延迟 import：本模块在插件激活阶段就会被 import，
+    # 那时 ui.bootstrap 可能还没装完。
+    from ..bootstrap import ui_config
+
+    if ui_config()["no_builtin"]:
         return None
 
     from .application import Application

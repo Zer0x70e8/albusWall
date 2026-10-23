@@ -244,6 +244,10 @@ class Configue(_Configue):
         失败语义：读文件 / 序列化 / 写盘异常都包装成 ``ConfigError``；
         失败节点保持 dirty，下次 flush 会重试。整个读-改-写过程持有
         ``resolver.lock``，``set`` 不会插进中间。
+
+        参数错误语义：``only`` 里出现 Resolver 中不存在的 node 时直接抛
+        ``ConfigError(source=FILE)``（不是静默跳过），避免拼错 key 时
+        「以为写了其实没写」。``only=None``（dirty 集合）不做这项校验。
         """
         resolver = self.resolver
         written: list[Path] = []
@@ -255,6 +259,15 @@ class Configue(_Configue):
             ]
             if not nodes:
                 return written
+
+            if only is not None:
+                missing = [node for node in nodes if node not in resolver]
+                if missing:
+                    raise ConfigError(
+                        f"flush: unknown nodes {missing}",
+                        source=ConfigueErrorSource.FILE,
+                        key=",".join(f"[{s}]{k}" for s, k in missing),
+                    )
 
             plans: dict[Path, dict[str, dict[str, str]]] = {}
             plan_nodes: dict[Path, list[tuple[str, str]]] = {}
@@ -314,6 +327,19 @@ class Configue(_Configue):
         return written
 
     # ── 回写内部 ───────────────────────────────────────
+    def target_file_of(self, section: str, key: str) -> Optional[Path]:
+        """公开视图：节点最终会写回哪个文件（``None`` 表示无处可写）。
+
+        与 ``flush`` 使用同一套规则（origin 可写 → origin；origin 只读 →
+        最高优先级可写备选；否则 ``default_write_file``），供设置页 / dump
+        在真正写盘前展示归属文件。
+        """
+        return self._target_file_for((section, key))
+
+    def is_readonly_source(self, path: Path) -> bool:
+        """公开视图：来源文件是否只读（显式 ``include.ro`` 或文件系统权限）。"""
+        return self._is_readonly(Path(path))
+
     def _target_file_for(self, node: tuple[str, str]) -> Optional[Path]:
         """按 origin 规则推导节点的写回文件（只读 → 备选 → 默认落点）。"""
         resolver = self.resolver
@@ -338,7 +364,11 @@ class Configue(_Configue):
         return None
 
     def _is_readonly(self, path: Path) -> bool:
-        """只读判定：显式标记（include.ro）优先，其次看文件系统写权限。"""
+        """只读判定：显式标记（include.ro）优先，其次看文件系统写权限。
+
+        注意：``os.access(path, os.W_OK)`` 在 root 下恒为真，文件系统权限
+        判定会整体失效。以 root 运行时必须用 ``include.ro`` 显式标记只读来源。
+        """
         if self.resolver.is_readonly_file(path):
             return True
         return path.exists() and not os.access(path, os.W_OK)
@@ -347,6 +377,9 @@ class Configue(_Configue):
         """读-改-写单个文件：保留注释 / 格式 / 换行符，原子落盘。"""
         # 延迟 import：infrastructure 包的 __init__ 反向依赖 albuswall.configue
         from albuswall.infrastructure.fs import atomic_write
+
+        # 新文件的父目录可能不存在（default_write_file 指向新目录）→ 先建
+        file.parent.mkdir(parents=True, exist_ok=True)
 
         # newline="" 关闭换行符翻译，才能原样探测并保留 \r\n / \n
         if file.exists():
@@ -541,7 +574,11 @@ class DynamicConfig(Namespace):
          才真正调用 factory；
       2. 未 mount 但已通过 `@dynamic_state` 登记的挂载名，`__getattr__`
          直接 fallback 到 ``DYNAMIC_REGISTRY``（因此 setup_dynamic_config
-         只需要 import 模块即可）。
+         只需要 import 模块即可；模块由 ``register_dynamic_module`` 在导入期
+         登记，配置期统一 import）。
+
+    登记本身是导入期安全的：``@dynamic_state`` 只写登记表，``base_key`` /
+    ``filename`` 到这里的首次访问才解析成真实路径。
 
     从没访问过的子树既不会读盘，也不会在 to_dict() / items() 里出现。
     """
@@ -611,7 +648,11 @@ class DynamicConfig(Namespace):
         # 只有在 __dict__ / 类属性里都找不到时才会走到这里
         lazy = self.__dict__.get("_lazy")
         if lazy and name in lazy:
-            node = lazy.pop(name)()
+            # 先取 → 再调用 → 成功后才 pop：工厂抛错时 name 仍留在 _lazy，
+            # 下次访问可以重试，而不是退化成 _load_registered / AttributeError
+            factory = lazy[name]
+            node = factory()
+            lazy.pop(name, None)
             self.__dict__[name] = node  # 缓存到 __dict__，后续直接命中
             return node
 
@@ -642,8 +683,10 @@ class DynamicConfig(Namespace):
             return None
 
         from .declaration import get_config
+        # cls 可以是类 / "pkg.mod:Class" / 工厂：统一在访问期解析
+        cls = spec.resolve_cls()
         path = spec.resolve_path(get_config().static)
-        node = spec.cls.load(path, autosave=spec.autosave, **spec.overrides)
+        node = cls.load(path, autosave=spec.autosave, **spec.overrides)
 
         with lock:
             existing = self.__dict__.get(name)

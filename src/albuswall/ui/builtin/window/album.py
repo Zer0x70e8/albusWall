@@ -6,13 +6,14 @@ from PySide6.QtWidgets import (
     QWidget, QPushButton, QVBoxLayout, QSizePolicy, QFrame,
     QHBoxLayout, QListView, QScrollArea)
 
+from ..i18n import Retranslatable
 from ..widgets.blur_overlay_label import BlurLabel
 from ..widgets.square_grid import SquareGridView
 
 from .utils import install_close_button
 
 
-class Album(BlurLabel):
+class Album(Retranslatable, BlurLabel):
     main_layout: QVBoxLayout
     root: QWidget
     root_layout: QVBoxLayout
@@ -86,7 +87,7 @@ class Album(BlurLabel):
 
         self.option_layout = QHBoxLayout()
 
-        self.edit_button = QPushButton(self.tr("edit"), self.hover)
+        self.edit_button = QPushButton("", self.hover)
         self.add_button = QPushButton("+", self.hover)
 
         self.option_layout.addStretch()
@@ -106,6 +107,12 @@ class Album(BlurLabel):
 
         layout.addWidget(self.close_button)
         layout.addWidget(self.root)
+
+        self.retranslate_ui()
+
+    def retranslate_ui(self) -> None:
+        """重新应用文案（语言切换时由 TranslationManager 调用）。"""
+        self.edit_button.setText(self.tr("edit"))
 
         # from PySide6.QtCore import QTimer
         # QTimer.singleShot(

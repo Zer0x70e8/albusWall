@@ -8,9 +8,18 @@ from typing import Any, Callable, Mapping, Optional
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt
 
+from ..i18n import tr
 from ..roles.metadata_roles import KEY_ROLE, RAW_VALUE_ROLE, VALUE_ROLE
 
 Formatter = Callable[[Any], str]
+
+#: 翻译上下文（model 不是 QObject，用模块级 ``tr``）
+_TR_CONTEXT = "MetadataModel"
+
+
+def _tr(text: str) -> str:
+    """本模块的翻译入口（字段名 / 是 / 否）。"""
+    return tr(_TR_CONTEXT, text)
 
 
 # --------------------------------------------------------------------------- #
@@ -38,7 +47,7 @@ def _fmt_size(value: Any) -> str:
 
 
 def _fmt_bool(value: Any) -> str:
-    return "是" if bool(value) else "否"
+    return _tr("是") if bool(value) else _tr("否")
 
 
 # --------------------------------------------------------------------------- #
@@ -82,6 +91,8 @@ class MetadataModel(QAbstractListModel):
         super().__init__(parent)
         # (label, display_value, raw_value)
         self._items: list[tuple[str, str, Any]] = []
+        #: 最近一次的数据快照：语言切换时据此重建（标签需要重新翻译）
+        self._metadata: Optional[Mapping[str, Any]] = None
 
     # ------------------------------------------------------------------ #
     # QAbstractListModel
@@ -116,17 +127,25 @@ class MetadataModel(QAbstractListModel):
     # 数据入口
     # ------------------------------------------------------------------ #
     def set_metadata(self, metadata: Optional[Mapping[str, Any]]) -> None:
-        items = self._build_items(metadata)
+        self._metadata = metadata
+        self._reset_items(self._build_items(metadata))
+
+    def retranslate(self) -> None:
+        """语言切换后重建字段标签（数据不变，只重取文案）。"""
+        if self._metadata is None:
+            return
+        self._reset_items(self._build_items(self._metadata))
+
+    def _reset_items(self, items: list[tuple[str, str, Any]]) -> None:
         self.beginResetModel()
         self._items = items
         self.endResetModel()
 
     def clear(self) -> None:
+        self._metadata = None
         if not self._items:
             return
-        self.beginResetModel()
-        self._items.clear()
-        self.endResetModel()
+        self._reset_items([])
 
     # ------------------------------------------------------------------ #
     # 内部
@@ -154,7 +173,7 @@ class MetadataModel(QAbstractListModel):
                 value = str(raw)
             if value == "":
                 continue
-            items.append((spec.label, value, raw))
+            items.append((_tr(spec.label), value, raw))
 
         # spec 之外的额外字段：按插入顺序兜底追加
         for key, raw in metadata.items():

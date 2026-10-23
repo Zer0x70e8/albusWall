@@ -221,6 +221,10 @@ class ThumbnailGridPresenter(QObject):
         self._view.clear_cache()
         self._view.refresh_visible_range()
 
+    def retranslate(self) -> None:
+        """语言切换后重绘网格（信息条上的倒计时文案在 paint 时取译文）。"""
+        self._view.update()
+
     def set_favorite_icon(
             self,
             icon: QIcon | QPixmap | str | None,
@@ -236,7 +240,9 @@ class ThumbnailGridPresenter(QObject):
         """
         d = self._view.delegate
         if not isinstance(d, InfoCellDelegate):
-            _logger.warning("delegate 不是 InfoCellDelegate，图标设置被忽略")
+            _logger.warning(
+                "Delegate is not an InfoCellDelegate; icon setup ignored"
+            )
             return
         d.set_icon(_coerce_icon(icon), checked=checked)
         self._view.update()

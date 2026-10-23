@@ -145,8 +145,9 @@ def _check_slot_signature(signal_name: str, slot: Callable[..., Any]) -> None:
             return
 
     warnings.warn(
-        f"[Signal {signal_name!r}] slot {slot!r} 不接受任何位置参数；"
-        f"权威契约是 cb(sender, **kwargs)，emit 时将抛 TypeError",
+        f"[Signal {signal_name!r}] slot {slot!r} accepts no positional "
+        f"arguments; the authoritative contract is cb(sender, **kwargs), "
+        f"so emit() will raise TypeError",
         UserWarning,
         stacklevel=3,
     )
@@ -243,9 +244,9 @@ class Signal:
         """
         if sender is not None and not kwargs:
             _logger.debug(
-                "[Signal %r] emit 只传了位置参数、无 kwargs；"
-                "若意图是传 payload，请写成 emit(sender, payload=...)。"
-                "权威契约: cb(sender, **kwargs)",
+                "[Signal %r] emit() got positional arguments only, no kwargs; "
+                "if a payload was intended, write emit(sender, payload=...). "
+                "Authoritative contract: cb(sender, **kwargs)",
                 self.name,
             )
 
@@ -256,13 +257,13 @@ class Signal:
                 slot(sender, **kwargs)
             except Exception:
                 _logger.exception(
-                    "[Signal %s] slot %r 执行失败", self.name, slot,
+                    "[Signal %s] slot %r raised", self.name, slot,
                 )
 
     def send(self, *args: Any, **kwargs: Any) -> None:
         """已废弃——请改用 :meth:`emit`。"""
         warnings.warn(
-            f"[Signal {self.name!r}] send() 已废弃，请改用 emit()",
+            f"[Signal {self.name!r}] send() is deprecated; use emit() instead",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -387,7 +388,7 @@ def _dispatch_loop() -> None:
         except (EOFError, OSError):
             break
         except Exception:
-            _logger.exception("[ProcessSignal] 拉取消息失败")
+            _logger.exception("[ProcessSignal] failed to receive messages")
             continue
 
         if msg is None:
@@ -396,7 +397,7 @@ def _dispatch_loop() -> None:
         try:
             topic, sender_id, kwargs = msg
         except (ValueError, TypeError):
-            _logger.warning("[ProcessSignal] 未知消息: %r", msg)
+            _logger.warning("[ProcessSignal] unknown message: %r", msg)
             continue
 
         with _handlers_lock:
@@ -407,7 +408,7 @@ def _dispatch_loop() -> None:
                 slot(sender_id, **kwargs)
             except Exception:
                 _logger.exception(
-                    "[ProcessSignal %s] slot %r 执行失败", topic, slot,
+                    "[ProcessSignal %s] slot %r raised", topic, slot,
                 )
 
 
@@ -505,8 +506,9 @@ class ProcessSignal:
         """
         if not kwargs:
             _logger.debug(
-                "[ProcessSignal %r] emit 未携带 payload kwargs；"
-                "若这是有意的通知，请忽略本提示。契约: cb(sender_id, **kwargs)",
+                "[ProcessSignal %r] emit() carried no payload kwargs; "
+                "ignore this notice if the signal is a plain notification. "
+                "Contract: cb(sender_id, **kwargs)",
                 self.name,
             )
 
@@ -518,7 +520,7 @@ class ProcessSignal:
                 slot(sender_id, **kwargs)
             except Exception:
                 _logger.exception(
-                    "[ProcessSignal %s] slot %r 执行失败", self.name, slot,
+                    "[ProcessSignal %s] slot %r raised", self.name, slot,
                 )
 
         # 2) 广播
@@ -530,7 +532,8 @@ class ProcessSignal:
             pickle.dumps((sender_id, kwargs))
         except Exception:
             _logger.exception(
-                "[ProcessSignal %s] 参数不可 pickle，跳过跨进程广播",
+                "[ProcessSignal %s] arguments are not picklable; "
+                "skipping cross-process broadcast",
                 self.name,
             )
             return
@@ -544,13 +547,15 @@ class ProcessSignal:
                 q.put(msg)
             except Exception:
                 _logger.debug(
-                    "[ProcessSignal %s] 广播到 %s 失败", self.name, key,
+                    "[ProcessSignal %s] broadcast to %s failed",
+                    self.name,
+                    key,
                 )
 
     def send(self, *args: Any, **kwargs: Any) -> None:
         """已废弃——请改用 :meth:`emit`。"""
         warnings.warn(
-            f"[ProcessSignal {self.name!r}] send() 已废弃，请改用 emit()",
+            f"[ProcessSignal {self.name!r}] send() is deprecated; use emit() instead",
             DeprecationWarning,
             stacklevel=2,
         )

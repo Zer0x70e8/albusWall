@@ -10,12 +10,14 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEvent, QObject, QTimer
 
-from albuswall.configue import Configue, StateField, StatefulNamespace
-from albuswall.configue.dynamic_declaration import dynamic_state
-from albuswall.core import Application
+from albuswall.configue import StateField, StatefulNamespace
 from albuswall.log import Logger, getLogger
 
-from ..config import WindowPresenterConfs
+from ..config import (
+    WindowConfig,
+    ensure_theme_files_completed,
+    window_config,
+)
 from ..platform import is_tiling
 from ..platform.window_resizer import WindowResizer
 from ..widgets import blur_overlay_label
@@ -29,19 +31,13 @@ __all__ = ["WindowPresenter", "WindowState"]
 
 _logger: Logger = getLogger(__name__)  # type: ignore
 
-WINDOW_STATE_FILENAME = Application.instance().configure.static.files.window_state
 
-
-@dynamic_state(
-    "window",
-    ("path", "cache"),
-    WINDOW_STATE_FILENAME,
-    # 关闭逐字段自动落盘：位置变更由 WindowPresenter 做 debounce 后一次性
-    # save()（见 _persist_window_state），避免拖动窗口时每个字段写一次盘。
-    autosave=False,
-)
 class WindowState(StatefulNamespace):
-    """窗口几何在 ``dynamic.window`` 下的字段声明。"""
+    """窗口几何在 ``dynamic.window`` 下的字段声明。
+
+    登记点在 ``ui.builtin.config.static``（那里能在静态配置加载前被 import），
+    本模块只提供类本身；``files.window_state`` 文件名也由那边的声明指定。
+    """
 
     x = StateField(int, default=None)
     y = StateField(int, default=None)
@@ -50,9 +46,8 @@ class WindowState(StatefulNamespace):
     maximized = StateField(bool, default=False)
 
 
-# 说明：这里不再自调用 setup_dynamic_config。
-# 模块被 import 时 @dynamic_state 已登记进 DYNAMIC_REGISTRY，
-# `config.dynamic.window` 会经 DynamicConfig.__getattr__ 懒加载。
+# 说明：这里不登记、也不调用 setup_dynamic_config——本模块的 import 时机
+# 晚于配置加载，登记必须在更早的 ui.builtin.config.static 里完成。
 
 
 class WindowPresenter(QObject):
@@ -76,7 +71,8 @@ class WindowPresenter(QObject):
     def __init__(self, target: "Window", parent=None) -> None:
         super().__init__(parent)
         self._target = target
-        self.confs = WindowPresenterConfs()
+        # 窗口级配置用 typed dict 快照（默认值来自 WindowPresenterConfs 声明）
+        self.confs: WindowConfig = window_config()
         self.window_resizer = WindowResizer(target, target)
 
         # 平铺式窗口管理器自己管几何，我们不恢复也不落盘
@@ -93,10 +89,9 @@ class WindowPresenter(QObject):
 
     # ---------------- lifecycle ----------------
     def setup(self, container: "Container") -> None:
-        # config 是 bootstrap 必备项；缺失就让它抛，不要吞
-        config: "Configue" = container.require("config")
-
-        self.confs.ensure_theme_files_completed(config)
+        # 重取一份配置快照：主题补全 / 样式表都按此刻的值走
+        self.confs = window_config()
+        ensure_theme_files_completed(self.confs)
         self._target.resize(800, 600)
         self._apply_style_sheet()
 
@@ -208,7 +203,7 @@ class WindowPresenter(QObject):
 
     def _apply_style_sheet(self) -> None:
         """把 QSS 装到窗口上（路径由 ``ui.style_sheet`` 解析好）。"""
-        qss_path = self.confs.qss
+        qss_path = self.confs["qss"]
         if not qss_path:
             _logger.info(
                 "No QSS path resolved (ui.style_sheet unset and "

@@ -561,7 +561,7 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
 
     path = Path(args.module_file).resolve()
     if not path.is_file():
-        print(f"[error] 文件不存在: {path}", file=sys.stderr)
+        print(f"[error] File does not exist: {path}", file=sys.stderr)
         return 2
 
     # 需要 QApplication 才能实例化 QWidget
@@ -572,7 +572,7 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
     try:
         module = _load_module_from_path(path)
     except Exception as exc:  # noqa: BLE001
-        print(f"[error] 加载模块失败: {exc}", file=sys.stderr)
+        print(f"[error] Failed to load module: {exc}", file=sys.stderr)
         return 1
 
     # 选择目标控件
@@ -583,22 +583,37 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
                 n for n, o in vars(module).items()
                 if isinstance(o, type) and issubclass(o, QWidget) and o is not QWidget
             ]
-            print(f"[error] 模块中找不到 QWidget 子类: {args.class_name}", file=sys.stderr)
+            print(
+                f"[error] No QWidget subclass found in module: {args.class_name}",
+                file=sys.stderr,
+            )
             if found:
-                print("[hint] 该模块中可用的 QWidget 子类:", file=sys.stderr)
+                print(
+                    "[hint] Available QWidget subclasses in this module:",
+                    file=sys.stderr,
+                )
                 for n in found:
                     print(f"    - {n}", file=sys.stderr)
             else:
-                print("[hint] 该模块中没有 QWidget 子类。", file=sys.stderr)
+                print(
+                    "[hint] This module has no QWidget subclasses.",
+                    file=sys.stderr,
+                )
                 visible = [n for n in vars(module) if not n.startswith("_")]
-                print(f"[hint] 模块可见名字: {', '.join(visible[:30])}", file=sys.stderr)
+                print(
+                    f"[hint] Names visible in module: {', '.join(visible[:30])}",
+                    file=sys.stderr,
+                )
             return 1
         try:
             # noinspection calling-non-callable
             target = cls()
             target_label = args.class_name
         except Exception as exc:  # noqa: BLE001
-            print(f"[error] 实例化 {args.class_name} 失败: {exc}", file=sys.stderr)
+            print(
+                f"[error] Failed to instantiate {args.class_name}: {exc}",
+                file=sys.stderr,
+            )
             return 1
     else:
         instances, classes = _find_widget_targets(module)
@@ -610,7 +625,7 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
             name, inst = _try_instantiate(classes)
             if inst is None:
                 print(
-                    "[error] 模块中找不到可用的 QWidget 实例或子类",
+                    "[error] No usable QWidget instance or subclass found in module",
                     file=sys.stderr,
                 )
                 return 1
@@ -618,7 +633,7 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
             target_label = name or ""
 
     if target is None:
-        print("[error] 未能确定目标控件", file=sys.stderr)
+        print("[error] Could not determine the target widget", file=sys.stderr)
         return 1
 
     # 运行命名

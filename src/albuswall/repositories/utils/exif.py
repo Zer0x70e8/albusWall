@@ -290,8 +290,8 @@ if __name__ == "__main__":
     use_flat = "--flat" in sys.argv[1:]
 
     if not args:
-        print("用法: python exif.py [--flat] <文件路径>")
-        print("  --flat  输出 ImportService 扁平契约（仅图片）")
+        print("Usage: python exif.py [--flat] <file path>")
+        print("  --flat  emit the flattened ImportService contract (images only)")
         sys.exit(1)
 
     target = args[0]

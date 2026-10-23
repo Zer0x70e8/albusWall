@@ -17,10 +17,12 @@ Both share `_convert`, which is the only truly self-contained piece here
 and is imported by the resolver.
 """
 
+import io
+import json
+import logging
 import re
 import warnings
-import logging
-import io
+from collections.abc import Mapping
 from pathlib import Path
 from pprint import pformat
 from typing import Optional, Dict, Callable, Any, Union, get_origin, get_args
@@ -298,6 +300,46 @@ class TypedConfigParser(ConfigParser):
 
 
 # noinspection PyNoneFunctionAssignment
+def _json_object(raw: str) -> dict:
+    """dict 型配置值的 INI 表示：一个 JSON 对象（空串 = 空 dict）。
+
+    与 ``_deconvert`` 里的 ``json.dumps`` 对称，保证「写出去的能读回来」。
+    """
+    text = raw.strip()
+    if not text:
+        return {}
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"expected a JSON object for a dict value, got {raw!r}"
+        ) from exc
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"expected a JSON object for a dict value, got "
+            f"{type(value).__name__}: {raw!r}"
+        )
+    return value
+
+
+def _convert_dict_item(
+        value: Any,
+        typ: Any,
+        custom_converters: Optional[Dict[Any, Callable[[str], Any]]],
+) -> Any:
+    """把 JSON 解析出的标量按声明的 key / value 类型收敛。"""
+    if typ is Any or typ is None:
+        return value
+    if isinstance(value, str):
+        return _convert(value, typ, custom_converters)
+    if typ is bool:
+        return bool(value)
+    if typ in (int, float, str):
+        return _convert(str(value), typ, custom_converters)
+    return value
+
+
+# noinspection PyNoneFunctionAssignment
 def _convert(
         raw: str,
         converter: Any,
@@ -352,6 +394,19 @@ def _convert(
                         continue
                 logger.trace("[_convert] All Union members failed, returning None")
                 return None
+        if origin is dict:
+            parsed = _json_object(raw)
+            if len(args) != 2:
+                result = {str(k): v for k, v in parsed.items()}
+            else:
+                key_type, value_type = args
+                result = {
+                    _convert_dict_item(k, key_type, custom_converters):
+                        _convert_dict_item(v, value_type, custom_converters)
+                    for k, v in parsed.items()
+                }
+            logger.trace(f"[_convert] Dict result: {result!r}")
+            return result
         if origin is list:
             if not args:
                 return raw
@@ -417,6 +472,10 @@ def _convert(
         result = Path(raw)
         logger.trace(f"[_convert] Path result: {result}")
         return result
+    if converter is dict:
+        result = {str(k): v for k, v in _json_object(raw).items()}
+        logger.trace(f"[_convert] bare dict result: {result!r}")
+        return result
     if callable(converter) and not isinstance(converter, type):
         result = converter(raw)
         # noinspection PyStringConversionWithoutDunderMethod
@@ -450,6 +509,65 @@ def _join_items(items, item_types, custom_converters) -> str:
     return ", ".join(parts)
 
 
+def _dump_dict(
+        value: Any,
+        key_type: Any = None,
+        value_type: Any = None,
+        custom_converters: Optional[Dict[Any, Callable[[str], Any]]] = None,
+) -> str:
+    """dict 值的 INI 表示：按 key 排序的 JSON 对象，与 ``_json_object`` 对称。
+
+    与其它分支不同，这里**会**抛 ``ValueError``：写出去却读不回来的值
+    比写失败更糟（下次启动会在类型检查时炸）。调用方（``flush``）会把
+    异常包成 ``ConfigError`` 并保留 dirty。
+    """
+    if not isinstance(value, Mapping):
+        raise ValueError(
+            f"expected a mapping for a dict value, got "
+            f"{type(value).__name__}: {value!r}"
+        )
+
+    dumped: dict[str, Any] = {}
+    for raw_key, raw_value in value.items():
+        key = (
+            _deconvert(raw_key, key_type, custom_converters)
+            if key_type is not None else str(raw_key)
+        )
+        item = (
+            _deconvert(raw_value, value_type, custom_converters)
+            if value_type is not None else raw_value
+        )
+        # dict[str, int] 这类：_deconvert 得到的是字符串，JSON 里要还原成数字
+        item = _jsonify_scalar(item, value_type)
+        dumped[key] = item
+
+    try:
+        return json.dumps(dumped, ensure_ascii=False, sort_keys=True)
+    except TypeError as exc:
+        raise ValueError(
+            f"dict value is not JSON-serializable: {value!r}"
+        ) from exc
+
+
+def _jsonify_scalar(value: Any, value_type: Any) -> Any:
+    """``_deconvert`` 的字符串结果在不该是字符串时还原成 JSON 标量。"""
+    if value_type is None or not isinstance(value, str):
+        return value
+    if value_type is int:
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    if value_type is float:
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    if value_type is bool:
+        return value.strip().lower() in _TRUE_STRINGS
+    return value
+
+
 def _deconvert(
         value: Any,
         converter: Any,
@@ -462,11 +580,15 @@ def _deconvert(
       - bool -> "true" / "false"
       - Path -> str(value)
       - list / tuple -> ", ".join(...)（与 ``_convert`` 里 split(",") 对称）
+      - dict -> JSON 对象（与 ``_json_object`` 对称；键会排序）
       - int / float / str -> str(value)
       - Optional / Union：None -> ""，其余按匹配的内部类型处理
       - 未知类型 -> str(value)
 
-    注意：注册了自定义转换器的 converter 无法反解，直接 ``str(value)``。
+    注意：
+      - 注册了自定义转换器的 converter 无法反解，直接 ``str(value)``；
+      - dict 分支是唯一会抛 ``ValueError`` 的分支（写不出可读回的值时
+        宁可失败，也不写一个下次启动会炸的配置）。
     """
     logger.trace(f"[_deconvert] Input: value={value!r}, converter={converter}")
 
@@ -490,6 +612,12 @@ def _deconvert(
                 if _matches_type(value, t):
                     return _deconvert(value, t, custom_converters)
             return str(value)
+        if origin is dict:
+            if len(args) != 2:
+                return _dump_dict(value, None, None, custom_converters)
+            return _dump_dict(
+                value, args[0], args[1], custom_converters,
+            )
         if origin is list:
             if not isinstance(value, (list, tuple)):
                 return str(value)
@@ -509,6 +637,8 @@ def _deconvert(
 
     if converter is bool:
         return "true" if value else "false"
+    if converter is dict:
+        return _dump_dict(value, None, None, custom_converters)
 
     return str(value)
 

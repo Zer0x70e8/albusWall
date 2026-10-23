@@ -6,17 +6,23 @@ from __future__ import annotations
 import sys
 import traceback
 from logging import getLogger
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QTimer,
+    Signal,
+    qInstallMessageHandler,
+)
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QTimer, QEvent, qInstallMessageHandler
 
 from albuswall.core import MainLoop
 from albuswall.log import TRACE, Logger
 
 from ..protocol import register_ui
-from .window import Window
 from .presenter import PresenterManager
+from .window import Window
 
 if TYPE_CHECKING:
     from albuswall.core import Container
@@ -83,39 +89,114 @@ _logger: Logger = getLogger(__name__)  # type: ignore
 _logger.trace = lambda msg, *args: _logger.log(TRACE, msg, *args)
 
 
+class _MainThreadBridge(QObject):
+    """跨线程回调桥。
+
+    Qt 的排队连接只需要一个「接收者拥有主线程亲和性」的 QObject：本对象
+    在 ``Application.__init__`` 里创建（必然在主线程），因此从任意工作线程
+    ``emit`` 都会走 ``Qt.AutoConnection`` → ``Qt.QueuedConnection``，
+    ``_dispatch`` 在主线程事件循环里被调用。
+
+    ``object`` 载荷用来搬运任意可调用对象；Qt 对 Python 对象做的是引用传递，
+    不涉及 QVariant 转换。
+    """
+
+    _request = Signal(object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._request.connect(self._dispatch)
+
+    def _dispatch(self, fn) -> None:
+        try:
+            fn()
+        except Exception:  # noinspection PyBroadException
+            traceback.print_exc()
+
+    def call_soon(self, fn) -> None:
+        self._request.emit(fn)
+
+
 # noinspection SpellCheckingInspection
 @register_ui("builtin")
 class Application(QApplication):
     # 显式声明（可选，仅为了类型提示友好）；实例属性在 __init__ 里赋初值
-    window: Optional["Window"]
-    presenters: Optional["PresenterManager"]
+    window: Window | None
+    presenters: PresenterManager | None
 
     class MainLoop(MainLoop):
-        def __init__(self, parent: "Application"):
+        def __init__(self, parent: Application):
             self.parent = parent
+            # 必须在主线程构造：桥的亲和性就是「主循环线程」的定义
+            self._bridge = _MainThreadBridge()
 
         def run(self) -> int:
             return self.parent.exec()
 
         def quit(self, code=None) -> None:
-            self.parent.quit()
+            # 旧实现丢弃 code，导致 exec() 的返回值永远是 Qt 自己的退出码；
+            # CLI 想让 GUI「以指定码退出」时会静默失效。
+            if isinstance(code, str):
+                code = 0 if code in ("0", "") else 1
+            elif code is None:
+                code = 0
+            elif not isinstance(code, int):
+                code = 1
+            self.parent.exit(code)
+
+        def call_soon(self, fn) -> None:
+            self._bridge.call_soon(fn)
 
     def __init__(self):
         super().__init__(sys.argv)
         # 关键：提前把生命周期字段初始化为 None，
         # 这样即使 setup() 半路崩溃，teardown()/__str__/__repr__ 也安全
-        self.window: Optional[Window] = None
-        self.presenters: Optional[PresenterManager] = None
+        self.window: Window | None = None
+        self.presenters: PresenterManager | None = None
 
         self._signal_timer = QTimer()
         self._debug = False
         self.main_loop = Application.MainLoop(self)
 
-    # noinspection unused-parameter
-    def setup(self, container: "Container") -> None:
-        config = container.get("config")  # ← key 从 _config 改成 config
+        # 桌面集成：窗口图标 + .desktop 归属，装到系统后菜单里才有正确图标
+        self._apply_desktop_identity()
 
-        if config.static.debug:
+    def _apply_desktop_identity(self) -> None:
+        """设置窗口图标 / .desktop 文件名（AUR 等发行包依赖它）。
+
+        两者都只是「锦上添花」：资源缺失时只记日志，绝不阻断启动。
+        """
+        try:
+            # 让窗口管理器把窗口关联到 /usr/share/applications/albuswall.desktop
+            self.setDesktopFileName("albuswall")
+        except Exception as exc:
+            _logger.debug("desktop file name not set: %s", exc)
+
+        try:
+            from PySide6.QtGui import QIcon
+
+            from albuswall.resources import get
+
+            icon = QIcon(str(get("app_icon")))
+            if icon.isNull():
+                _logger.debug("app icon could not be loaded, keep the default icon")
+                return
+            self.setWindowIcon(icon)
+        except Exception as exc:
+            _logger.debug("app icon setup skipped: %s", exc)
+
+    # noinspection unused-parameter
+    def setup(self, container: Container) -> None:
+        # 配置统一走 typed dict（默认值来自 UI 静态声明）
+        from ..bootstrap import ui_config
+
+        confs = ui_config()
+
+        # 0. 语言 / 翻译必须最先装好：后面所有控件的首次文案都直接取译文
+        #    （没有 .qm 时退回源码原文，不影响运行）。
+        self._install_translations()
+
+        if confs["debug"]:
             self._debug = True
 
             # noinspection unused-parameter
@@ -139,10 +220,10 @@ class Application(QApplication):
             _logger.exception("PresenterManager build failed: %s", exc)
             self.presenters = None
 
-        # 3. 配置文件里的 UI 相关 setup（key 同样修正）
+        # 3. 配置文件里的 UI 相关 setup（preference.ini → dynamic.preference）
         try:
             from .config.setup import setup as setup_ui_config  # lazy load
-            setup_ui_config(config)
+            setup_ui_config()
         except Exception as exc:
             _logger.exception("UI config setup failed: %s", exc)
 
@@ -158,6 +239,22 @@ class Application(QApplication):
                 _logger.exception("PresenterManager teardown failed: %s", exc)
             finally:
                 self.presenters = None
+
+    # ------------------------------------------------------------------ #
+    # 语言 / 翻译
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _install_translations() -> None:
+        """按配置装载翻译器（没有 .qm 时静默退化为源码原文）。
+
+        失败只记日志：翻译属于「锦上添花」，不能挡住窗口启动。
+        """
+        try:
+            from .i18n import translation_manager
+
+            translation_manager().install()
+        except Exception as exc:
+            _logger.exception("translation install failed: %s", exc)
 
     # noinspection method-overriding
     def exec(self) -> int:

@@ -4,7 +4,8 @@
 结构：
 - 配置层（ImportConfig）：
   把 ImportService 的可调参数集中声明，走 ConfigDeclaration / ConfigField 机制。
-  模块级单例 _cfg，业务侧直接 `_cfg.xxx` 读取。
+  ``ImportConfig`` 是默认值与类型的唯一来源，业务侧通过 ``import_config()``
+  拿 typed dict 快照再读键（``conf["batch_size"]``），不再读取描述符。
 - 纯函数层（process_candidate / _compute_file_hash / _extract_image_metadata /
   detect_magic / _resolve_candidate_path）：
   在子进程执行，无状态、无 DB 连接、可 pickle。``process_candidate`` 是
@@ -27,15 +28,17 @@ from concurrent.futures import (
 )
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Dict, Literal, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Literal, Optional, cast
 from urllib.parse import unquote, urlparse
 
 from albuswall.common.enums import CandidateStatus, FileTypeCheckMode
 from albuswall.configue import ConfigField
+from albuswall.configue.typed import load_typed
 from albuswall.dto.import_ import AssetCandidateCacheDTO, AssetCreateDTO
 from albuswall.dto.source import MANUAL_SOURCE_ID, IngestSource
 from albuswall.dto.utils import coerce_enum
 from albuswall.log import getLogger
+from albuswall.services.schema import ImportServiceConfig
 from albuswall.utils.signals import SignalDescriptor
 
 try:
@@ -105,7 +108,17 @@ class ImportConfig:
 避免以后有人以为超时后资源已经释放了。
 """
 
-_cfg = ImportConfig()
+
+def import_config() -> ImportServiceConfig:
+    """ImportService 配置的 typed dict 快照。
+
+    默认值 / 类型全部来自 ``ImportConfig`` 的 ``ConfigField`` 声明；只绑定
+    这一个 owner，避免与 ``ThumbnailConfig`` 同名的 ``batch_size`` 串味。
+    """
+    return cast(
+        ImportServiceConfig,
+        load_typed(ImportServiceConfig, ImportConfig),
+    )
 
 # ============================================================
 # 纯函数层：在子进程中执行，无状态、无 DB 连接、可 pickle
@@ -179,7 +192,7 @@ def detect_magic(path: Path) -> Optional[str]:
         with open(path, "rb") as f:
             head = f.read(_MAGIC_HEADER_SIZE)
     except OSError as e:
-        _logger.warning("读取文件头失败 %s: %s", path, e)
+        _logger.warning("Failed to read file header %s: %s", path, e)
         return None
 
     if not head:
@@ -341,19 +354,25 @@ def process_candidate(
         if ".." in PurePosixPath(
                 (candidate.path or "").replace("\\", "/"),
         ).parts:
-            _logger.error("候选路径包含 '..'，拒绝处理: %s", candidate.path)
+            _logger.error(
+                "Candidate path contains '..'; refusing to process: %s",
+                candidate.path,
+            )
             return ProcessResult("skip", reason="path_invalid")
 
         abs_path = _resolve_candidate_path(candidate, source_path)
         if abs_path is None:
             _logger.error(
-                "候选路径非法（空 / 越界 / 无法解析）: %r (source_id=%s, source=%r)",
+                "Invalid candidate path (empty / out of bounds / "
+                "unresolvable): %r (source_id=%s, source=%r)",
                 candidate.path, candidate.source_id, source_path,
             )
             return ProcessResult("skip", reason="path_invalid")
 
         if not abs_path.exists() or not abs_path.is_file():
-            _logger.error("文件不存在或不是普通文件: %s", abs_path)
+            _logger.error(
+                "File does not exist or is not a regular file: %s", abs_path
+            )
             return ProcessResult("fail", reason="missing")
 
         stat = abs_path.stat()
@@ -372,7 +391,9 @@ def process_candidate(
             if magic is None:
                 if check is FileTypeCheckMode.MAGIC:
                     _logger.info(
-                        "魔数识别失败，跳过候选 %s (%s)", candidate.uuid, abs_path,
+                        "Magic-number detection failed; skipping candidate %s (%s)",
+                        candidate.uuid,
+                        abs_path,
                     )
                     return ProcessResult("skip", reason="magic_unknown")
                 mime_type = "application/octet-stream"
@@ -410,7 +431,7 @@ def process_candidate(
             is_deleted=False,
         ))
     except Exception as e:
-        _logger.exception("处理候选 %s 失败: %s", candidate.uuid, e)
+        _logger.exception("Failed to process candidate %s: %s", candidate.uuid, e)
         return ProcessResult("fail", reason="exception")
 
 
@@ -436,7 +457,7 @@ def _extract_image_metadata(path: Path):
     try:
         meta = _shared_extract_image_metadata(path) or {}
     except Exception as e:
-        _logger.warning("读取图像元数据失败 %s: %s", path, e)
+        _logger.warning("Failed to read image metadata %s: %s", path, e)
         return 0, 0, None, None
 
     def _to_int(v) -> int:
@@ -458,7 +479,8 @@ def _extract_image_metadata(path: Path):
     if exif_json is not None and not isinstance(exif_json, str):
         # 契约要求 JSON 字符串；脏数据一律丢弃，不要塞进 DB。
         _logger.warning(
-            "exif_json 类型异常 %s (%s)，已丢弃", type(exif_json).__name__, path
+            "exif_json has unexpected type %s (%s); dropped",
+            type(exif_json).__name__, path,
         )
         exif_json = None
 
@@ -538,9 +560,10 @@ class ImportService:
 
     def _worker_loop(self) -> None:
         # 退避参数在进入循环时读一次；若运行期需要热更新，
-        # 改成每轮读 _cfg.initial_backoff / _cfg.max_backoff 即可。
-        initial_backoff = _cfg.initial_backoff
-        max_backoff = _cfg.max_backoff
+        # 改成每轮读 import_config()["initial_backoff"] / ["max_backoff"] 即可。
+        conf = import_config()
+        initial_backoff = conf["initial_backoff"]
+        max_backoff = conf["max_backoff"]
         backoff = initial_backoff
 
         while not self._stop.is_set():
@@ -554,7 +577,7 @@ class ImportService:
                 # 持续性故障（DB 锁、磁盘满、source_paths 反序列化异常等）下，
                 # 立即自唤会空转刷屏；改为指数退避，退避等待可被 stop 打断。
                 _logger.exception(
-                    "导入 worker 处理异常，%.1fs 后重试", backoff,
+                    "Import worker raised an exception; retrying in %.1fs", backoff,
                 )
                 # _stop.wait 返回 True 表示 stop_worker 被调用，直接退出。
                 if self._stop.wait(backoff):
@@ -572,7 +595,10 @@ class ImportService:
     def process_pending(self) -> None:
         """执行一轮 pending 处理。带重入保护：已在执行则立即返回。"""
         if not self._run_lock.acquire(blocking=False):
-            _logger.debug("已有导入任务在执行，跳过本轮 process_pending")
+            _logger.debug(
+                "An import task is already running; skipping this "
+                "process_pending round"
+            )
             return
         try:
             self._run_once()
@@ -591,7 +617,7 @@ class ImportService:
         # 避免子进程查 DB，也不给候选表加 type_check 冗余列。
         source_map = self._load_source_map()
 
-        batch_size = _cfg.batch_size
+        batch_size = import_config()["batch_size"]
 
         totals = {"ok": 0, "failed": 0, "skipped": 0, "retry": 0, "timeout": 0}
 
@@ -650,14 +676,14 @@ class ImportService:
                 )
                 futures[fut] = cand
             except Exception:
-                _logger.exception("提交候选 %s 失败", cand.uuid)
+                _logger.exception("Failed to submit candidate %s", cand.uuid)
                 self._safe_mark_failed(cand.id, "submit_failed")
                 totals["failed"] += 1
 
         if not futures:
             return
 
-        timeout = _cfg.process_timeout
+        timeout = import_config()["process_timeout"]
         now = time.monotonic()
         # 每个 future 独立的 deadline；从提交完成时刻开始计时。
         deadlines = {fut: now + timeout for fut in futures}
@@ -675,7 +701,10 @@ class ImportService:
                     return_when=FIRST_COMPLETED,
                 )
             except Exception:
-                _logger.exception("等待 future 完成时异常，取消剩余任务")
+                _logger.exception(
+                    "Exception while waiting for futures to complete; "
+                    "cancelling the remaining tasks"
+                )
                 for fut in pending:
                     fut.cancel()
                 break
@@ -690,7 +719,7 @@ class ImportService:
             for fut in expired:
                 pending.discard(fut)
                 cand = futures[fut]
-                _logger.error("候选 %s 处理超时（>%.0fs）", cand.uuid, timeout)
+                _logger.error("Candidate %s timed out (>%.0fs)", cand.uuid, timeout)
                 fut.cancel()  # 尽力而为；进程池任务未必能真正中断
                 self._safe_mark_failed(cand.id, "timeout")
                 totals["timeout"] += 1
@@ -710,13 +739,15 @@ class ImportService:
             result = fut.result()  # 已经 done 或 cancelled，不会阻塞
         except FutureTimeoutError:
             # 保留兜底：wait 循环之外的路径（例如未来有别的调用方）也会走这里。
-            _logger.error("候选 %s 处理超时", cand.uuid)
+            _logger.error("Candidate %s timed out", cand.uuid)
             fut.cancel()
             self._safe_mark_failed(cand.id, "timeout")
             totals["timeout"] += 1
             return
         except Exception:
-            _logger.exception("候选 %s 执行异常 (worker_exception)", cand.uuid)
+            _logger.exception(
+                "Candidate %s raised an exception (worker_exception)", cand.uuid
+            )
             self._safe_mark_failed(cand.id, "worker_exception")
             totals["failed"] += 1
             return
@@ -724,7 +755,11 @@ class ImportService:
         if not isinstance(result, ProcessResult):
             # 旧契约（Optional[AssetCreateDTO]）兜底：不应发生，但语义上
             # None 现在明确属于失败而不是"跳过"。
-            _logger.error("候选 %s 返回了非 ProcessResult 结果: %r", cand.uuid, result)
+            _logger.error(
+                "Candidate %s returned a non-ProcessResult value: %r",
+                cand.uuid,
+                result,
+            )
             self._safe_mark_failed(cand.id, "bad_result")
             totals["failed"] += 1
             return
@@ -742,7 +777,7 @@ class ImportService:
         # status == "ok"
         if result.dto is None:
             # 契约要求 ok 必带 dto；防御性降级为失败，避免 finalize 里抛 TypeError。
-            _logger.error("候选 %s 返回 ok 但缺少 dto", cand.uuid)
+            _logger.error("Candidate %s returned ok but without a dto", cand.uuid)
             self._safe_mark_failed(cand.id, "no_payload")
             totals["failed"] += 1
             return
@@ -756,14 +791,16 @@ class ImportService:
             # 临时 DB 错误：不动候选状态，下一轮重新取到后重试。
             # 若反复失败，可由 repo 侧根据 retry 计数做退避/上限。
             _logger.exception(
-                "落库候选 %s 时 DB 异常，保持 pending 待重试", cand.uuid,
+                "DB error while persisting candidate %s; keeping it pending "
+                "for retry",
+                cand.uuid,
             )
             totals["retry"] += 1
             return
 
         if asset_uuid:
             totals["ok"] += 1
-            _logger.debug("候选 %s → asset_uuid=%s", cand.uuid, asset_uuid)
+            _logger.debug("Candidate %s -> asset_uuid=%s", cand.uuid, asset_uuid)
             return
 
         # repo 判定为永久失败（唯一约束冲突 → skipped，其余 → failed）。
@@ -772,10 +809,12 @@ class ImportService:
         status = self._repo.get_candidate_status(cand.id)
         if status is CandidateStatus.SKIPPED:
             totals["skipped"] += 1
-            _logger.info("候选 %s 判定为重复资产，已跳过", cand.uuid)
+            _logger.info("Candidate %s is a duplicate asset; skipped", cand.uuid)
         else:
             totals["failed"] += 1
-            _logger.error("插入资产失败: 候选 %s status=%s", cand.uuid, status)
+            _logger.error(
+                "Failed to insert asset: candidate %s status=%s", cand.uuid, status
+            )
 
     def _safe_mark_failed(self, candidate_id, reason: str) -> None:
         """把候选置为 FAILED；失败只记日志，不再向上抛。
@@ -795,8 +834,9 @@ class ImportService:
             )
         except Exception:
             _logger.exception(
-                "mark failed 也失败，候选停在原状态 "
-                "(recover_stale_candidates 会在超时后回收) cand=%s reason=%s",
+                "mark failed failed as well; candidate left in its current "
+                "state (recover_stale_candidates reclaims it after the "
+                "timeout) cand=%s reason=%s",
                 candidate_id, reason,
             )
 
@@ -817,11 +857,16 @@ class ImportService:
                 candidate_id, reason,
             )
         except Exception:
-            _logger.exception("标记候选 %s 为跳过失败，降级为失败", candidate_id)
+            _logger.exception(
+                "Failed to mark candidate %s as skipped; falling back to failed",
+                candidate_id,
+            )
             try:
                 self._repo.mark_candidate_failed(candidate_id)
             except Exception:
-                _logger.exception("降级 mark failed 也失败 cand=%s", candidate_id)
+                _logger.exception(
+                    "Fallback mark failed failed too cand=%s", candidate_id
+                )
 
     def _load_source_map(self) -> Dict[int, IngestSource]:
         """构建 ``{source_id: IngestSource}`` 内存快照（每轮一次）。
@@ -839,6 +884,7 @@ class ImportService:
             return {s.id: s for s in self._source_repo.get_source_candidates()}
         except Exception:
             _logger.exception(
-                "加载 source 快照失败，本轮 type_check 全部降级为 suffix",
+                "Failed to load the source snapshot; all type_check "
+                "results fall back to suffix for this round",
             )
             return {}

@@ -27,6 +27,21 @@
 每个生效值都记录 origin（``Resolver.origin_of``），供回写使用。
 ``[configue] include`` 系不会进入 ``StaticConfig``。
 
+多文件约定的几条硬约束（踩过的坑）：
+
+- include 路径中逗号是分隔符，路径里不能含逗号（``a,b.ini`` 会被拆成
+  ``["a", "b.ini"]``）；含逗号的文件名请用 glob 匹配。
+- ``_is_readonly`` 依赖 ``os.access(path, os.W_OK)``，在 root 下恒为真、
+  判定失效；以 root 运行时必须用 ``include.ro`` 显式标记只读来源。
+- ``_default_write_file`` 是「运行期新 key」与「只读来源且无可写备选」的
+  唯一落点：``setup_static_config`` 会把它设成主 INI 路径；若主文件本身
+  只读，需要显式 ``configure_persistence(default_write_file=...)`` 指到一个
+  可写目录，否则 ``flush`` 白跑（错误记在 ``last_flush_error``）。
+- ``flush`` 不检测外部修改（不做 mtime / 三方合并），单进程写回是约定；
+  多进程同时改同一份 INI 会互相覆盖。
+- ``[configue] disable_type_check = false``（默认）时 ``check_all`` 会对所有
+  节点做类型转换，任一节点转换失败会让启动直接抛出（不是警告）。
+
 回写
 ====
 ``config.set(section, key, value)`` 改内存并标脏，按持久化策略决定何时落盘：
@@ -44,8 +59,73 @@
 
 动态配置
 ========
-``@dynamic_state`` 登记子树后，``config.dynamic.<name>`` 首次访问时从
-``DYNAMIC_REGISTRY`` 懒加载；``setup_dynamic_config`` 只负责 import 模块。
+``config.dynamic.<name>`` 首次访问时从 ``DYNAMIC_REGISTRY`` 懒加载；
+``setup_dynamic_config`` 只负责 import 模块。登记有两条路，都是**导入期安全**
+的（只写登记表，类 / ``base_key`` / ``filename`` 到访问期才解析）：
+
+**① 装饰器**——状态类所在的模块本身能在导入期被 import 时用：
+
+.. code-block:: python
+
+    from albuswall.configue import dynamic_state, StateField, StatefulNamespace
+
+    @dynamic_state("user", ("path", "cache"), "user.json")
+    class UserState(StatefulNamespace):
+        user_id = StateField(str, default="anon")
+
+**② 手动指定**——声明点比状态类更早被 import 时用（典型：UI 配置声明在插件
+阶段就 import，UI 实现要等配置就绪）。``cls`` 可以写 ``"pkg.mod:Class"``，
+访问期才 import：
+
+.. code-block:: python
+
+    from albuswall.configue import register_dynamic_state
+
+    register_dynamic_state(
+        "window",
+        "albuswall.ui.builtin.presenter.window_presenter:WindowState",
+        ("path", "cache"),
+        WindowPresenterConfs.window_state_file_name,  # ConfigField → 取 .path
+        autosave=False,
+    )
+
+``filename`` 三种写法（只有 str 是字面值，其余访问期解析）：
+
+- ``"user.json"``：字面文件名；
+- ``("files", "window_state")``：静态配置路径（1 或 2 段），访问期取值；
+- ``WindowPresenterConfs.window_state_file_name``：直接传 ``ConfigField``，
+  用它的 ``.path``。
+
+配置 phase 统一导入（让 ``@dynamic_state`` 装饰器先跑过）：
+``register_dynamic_module("pkg.mod")`` 在导入期登记，
+``setup_dynamic_config(container)``（不传 ``modules``）会把登记过的模块全部
+import；显式传 ``modules=[...]`` 时以显式为准。注意这跟 ② 的 ``cls`` 字符串是
+两件事——后者只是延迟取类。
+
+配置结构登记（软件级）
+=====================
+``setting_schema`` 把「分组 → 叶子 → ``(section, key)``」的层级结构登记到
+``SETTING_SCHEMA``，不绑定任何前端；设置页、CLI、文档生成器都可以消费同一份
+结构。登记是导入期安全的，dump / 回写时才解析当前值与归属文件：
+
+.. code-block:: python
+
+    from albuswall.configue import (
+        SettingGroup, SettingItem, register_setting_group,
+        format_setting_schema_dump, save_setting_group,
+    )
+
+    register_setting_group(
+        SettingGroup("general", "常规").add(
+            SettingItem("language", "general", "language", label="语言"),
+        )
+    )
+    print(format_setting_schema_dump())
+    save_setting_group("general", {"language": "en_US"})
+
+``dump_setting_schema()`` 返回嵌套 dict（含 ``by_file`` 归属分组），
+``dump_setting_schema_by_file()`` 只看文件维度；``save_*`` 会把编辑值按
+``Item.file`` → ``Group.file`` → ``target_file_of`` 推出的归属文件回写。
 """
 
 from pathlib import Path
@@ -63,6 +143,10 @@ T = TypeVar("T")
 if TYPE_CHECKING:
     from .bootstrap import setup_dynamic_config, setup_static_config
     from .declaration import ConfigDeclaration, ConfigMeta, get_config
+    from .dynamic_declaration import (
+        DynamicMountSpec, dynamic_state, register_dynamic_module,
+    )
+    from .typed import load_typed
 
     # state.py 里全是运行期实现，直接 import 供类型检查器用即可；
     # StateField 是泛型描述符，IDE 对 __get__ 的返回类型解析得动，
@@ -101,6 +185,8 @@ __all__ = [
     "Configue", "Namespace", "FrozenNamespace",
     "ConfigDeclaration", "ConfigField", "ConfigMeta", "get_config",
     "PathField",
+    # typed dict 视图
+    "load_typed",
     # utils
     "get_user_config_dir", "get_user_data_dir",
     "setup_static_config", "setup_dynamic_config", "load_config_tree",
@@ -108,6 +194,19 @@ __all__ = [
     # state
     "ObservableNamespace", "StatefulNamespace", "StateField",
     "ObservableContext", "StateContext",
+    # dynamic（导入期登记，和 ConfigField 同一层）
+    "dynamic_state", "register_dynamic_state", "DynamicMountSpec",
+    "register_dynamic_module",
+    # 配置结构登记 / dump / 回写（软件级，前端无关）
+    "SETTING_SCHEMA",
+    "SettingGroup", "SettingItem", "SettingSchemaRegistry",
+    "SettingWidget", "SettingWriteResult",
+    "setting_group", "setting_item",
+    "register_setting_group", "register_setting_item", "get_setting_group",
+    "dump_setting_schema", "dump_setting_schema_by_file",
+    "format_setting_schema_dump",
+    "dump_registered_groups", "format_registered_groups",
+    "save_setting_group", "save_setting_schema",
 ]
 
 
@@ -144,6 +243,11 @@ def __getattr__(name):
         from .declaration import get_config
         return get_config
 
+    # ── typed dict 视图 ───────────────────────────
+    if name == "load_typed":
+        from .typed import load_typed
+        return load_typed
+
     # ── state ─────────────────────────────────────
     if name in (
             "ObservableNamespace", "StatefulNamespace", "StateField",
@@ -151,5 +255,30 @@ def __getattr__(name):
     ):
         from . import state
         return getattr(state, name)
+
+    # ── dynamic（导入期登记，和 ConfigField 同一层）────
+    if name in (
+            "dynamic_state", "register_dynamic_state", "DynamicMountSpec",
+            "register_dynamic_module",
+            "DYNAMIC_REGISTRY", "DYNAMIC_MODULES", "reset_registry",
+    ):
+        from . import dynamic_declaration
+        return getattr(dynamic_declaration, name)
+
+    # ── 配置结构登记（软件级，前端无关）─────────────
+    if name in (
+            "SETTING_SCHEMA",
+            "SettingGroup", "SettingItem", "SettingSchemaRegistry",
+            "SettingWidget", "SettingWriteResult",
+            "setting_group", "setting_item",
+            "register_setting_group", "register_setting_item",
+            "get_setting_group",
+            "dump_setting_schema", "dump_setting_schema_by_file",
+            "format_setting_schema_dump",
+            "dump_registered_groups", "format_registered_groups",
+            "save_setting_group", "save_setting_schema",
+    ):
+        from . import setting_schema
+        return getattr(setting_schema, name)
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

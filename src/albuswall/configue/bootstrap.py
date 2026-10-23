@@ -5,6 +5,25 @@
   - setup_static_config: 主 INI（可含 include 子树）→ Resolver → StaticConfig（只读）
   - setup_dynamic_config: import 状态模块 → DynamicConfig（运行时可变、可持久化）
 
+动态子树的导入期登记
+====================
+
+``@dynamic_state`` 与 ``ConfigField`` 一样只在**导入期写登记表**（不读配置、
+不读盘），``base_key`` / ``filename`` 到 ``config.dynamic.<name>`` 首次访问时
+才解析。所以插件可以在配置 phase 之前就声明状态子树：
+
+.. code-block:: python
+
+    from albuswall.configue import dynamic_state, StateField, StatefulNamespace
+
+    @dynamic_state("window", ("path", "cache"), ("files", "window_state"))
+    class WindowState(StatefulNamespace):
+        width = StateField(int, default=800)
+
+真正的 import 时机交给配置 phase：``setup_dynamic_config(container)`` 不传
+``modules`` 时，会 import 所有 ``register_dynamic_module("pkg.mod")`` 登记过的
+模块（显式传 ``modules=[...]`` 则以显式列表为准），再按 ``preload`` 预热。
+
 多文件加载
 ==========
 
@@ -145,28 +164,63 @@ def setup_dynamic_config(
 
     参数：
       modules: 需要 import 的状态模块列表，保证 ``@dynamic_state`` 装饰器先跑过。
-               例如 ["app.state", "app.ui"]。
+               例如 ["app.state", "app.ui"]。传 ``None``（默认）时改为 import
+               **全部** ``register_dynamic_module`` 登记过的模块（配置期统一导入）；
+               显式传列表（含空列表）时以显式列表为准。
       preload: 需要立刻触发加载的挂载名（默认保持懒加载）。
+
+    导入失败只记日志、不中断启动（与 ``plugin.discovery`` 的宽松策略一致）；
+    真正访问不到子树的错误会由 ``DynamicConfig.__getattr__`` 抛出。
     """
     from albuswall.core import Application
-    from .dynamic_declaration import DYNAMIC_REGISTRY
+    from .dynamic_declaration import DYNAMIC_MODULES, DYNAMIC_REGISTRY
 
-    for mod in (modules or ()):
-        importlib.import_module(mod)
+    targets = list(DYNAMIC_MODULES) if modules is None else list(modules)
+    for mod in targets:
+        try:
+            importlib.import_module(mod)
+        except Exception:  # noqa: BLE001  导入期模块不该炸掉整个启动
+            _logger.exception(
+                "failed to import dynamic state module %r, skipped", mod,
+            )
 
     config: Configue = Application.instance().configure
     for name in (preload or ()):
         getattr(config.dynamic, name)  # 强制触发加载（DYNAMIC_REGISTRY fallback）
 
-    _logger.info("Dynamic _config mounts registered: %s", list(DYNAMIC_REGISTRY))
+    _logger.info(
+        "Dynamic _config mounts registered: %s (modules=%s)",
+        list(DYNAMIC_REGISTRY), targets,
+    )
+
+
+def _walk_static(static, path_key, *, what: str = "base_key"):
+    """从 StaticConfig 按元组逐段取值，缺失时抛带完整 key 的 ``ConfigError``。
+
+    ``@dynamic_state`` 的 ``base_key`` / ``filename`` 都走这里：打错名字时
+    消息里带完整路径与已走到的前缀，而不是裸 ``AttributeError``。
+    """
+    node = static
+    walked: list[str] = []
+    for part in path_key:
+        walked.append(part)
+        try:
+            node = getattr(node, part)
+        except AttributeError as exc:
+            raise ConfigError(
+                f"dynamic_state {what} {'/'.join(walked)} "
+                f"not found in StaticConfig",
+                source=ConfigueErrorSource.FILE,
+                key=".".join(path_key),
+                value=f"{what}={'/'.join(path_key)}",
+                cause=exc,
+            ) from exc
+    return node
 
 
 def _resolve_path(static, path_key) -> Path:
     """从 StaticConfig 按元组取路径。例如 ('path','cache','user.json')。"""
-    node = static
-    for part in path_key:
-        node = getattr(node, part)
-    return Path(node)
+    return Path(_walk_static(static, path_key, what="base_key"))
 
 
 # ── 文件读取 ────────────────────────────────────────
@@ -190,7 +244,12 @@ def load_ini_(file: Path) -> dict[tuple[str, str], str]:
 
 # ── 多文件加载 ──────────────────────────────────────
 def _split_include_list(value: Any) -> list[str]:
-    """把 include 字段拆成路径列表（逗号分隔，忽略空项）。"""
+    """把 include 字段拆成路径列表（空格忽略、空项丢弃）。
+
+    逗号是硬分隔符，路径里不能含逗号（``./a,b.ini`` 会被拆成
+    ``["./a", "b.ini"]``，与 ``_convert`` 的 list 语义一致）。
+    含逗号的文件名请改用 glob 匹配。
+    """
     if value is None:
         return []
     return [part.strip() for part in str(value).split(",") if part.strip()]
@@ -200,7 +259,8 @@ def _expand_include_spec(spec: str, base_dir: Path, *, key: str) -> list[Path]:
     """展开单个 include 条目为具体文件列表。
 
     - ``pkg://`` 前缀：未实现，抛 ConfigError（TODO: importlib.resources）
-    - 含 glob 元字符：``glob.glob`` 展开后按字典序（无匹配视为空）
+    - 含 glob 元字符：``glob.glob`` 展开后按字典序（无匹配视为空）；
+      匹配到的目录被过滤掉（只合并文件），每个被跳过的目录记一条 debug
     - 其余：视为单个文件路径（不存在由调用方报错）
     """
     if spec.startswith("pkg://"):
@@ -220,7 +280,14 @@ def _expand_include_spec(spec: str, base_dir: Path, *, key: str) -> list[Path]:
         matches = sorted(glob.glob(str(candidate)))
         if not matches:
             _logger.debug("Include glob matched nothing: %s", candidate)
-        return [Path(m) for m in matches]
+        files: list[Path] = []
+        for m in matches:
+            path = Path(m)
+            if path.is_file():
+                files.append(path)
+            else:
+                _logger.debug("Include glob skipped non-file: %s", path)
+        return files
     return [candidate]
 
 
@@ -286,6 +353,20 @@ def load_config_tree_ex(
                 key=_INCLUDE_KEY,
                 value=str(path),
             )
+
+    # ── 去重：``a.ini`` 与 ``./a.ini``（或 glob + 显式重复）指向同一文件时，
+    # 只保留首次出现（forced_ro 也取首次值），避免 definitions_of /
+    # readonly_files 出现重复项。必须在循环检测之后——自包含检测要看到
+    # 所有显式列出的项。
+    seen: set[Path] = set()
+    deduped: list[tuple[Path, bool]] = []
+    for path, forced_ro in ordered:
+        key = path.resolve()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((path, forced_ro))
+    ordered = deduped
 
     merged: dict[tuple[str, str], tuple[str, Path]] = {}
     readonly_files: list[Path] = []

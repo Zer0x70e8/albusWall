@@ -7,8 +7,12 @@
 - bool -> "true" / "false"
 - Path -> str(value)
 - list / tuple -> ", ".join(...)
+- dict -> JSON 对象（键排序；与 ``_json_object`` 对称）
 - int / float / str -> str(value)
 - 未知类型 -> str(value)（fail-safe，不抛）
+
+唯一会抛 ``ValueError`` 的分支是 dict：写出去却读不回来的值宁可失败，
+否则下次启动会在类型检查里炸。
 
 每个 case 都按 round-trip 断言：``_convert(_deconvert(x, t), t) == x``。
 
@@ -21,7 +25,7 @@ from __future__ import annotations
 import sys
 import traceback
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 try:  # 允许直接以文件路径运行
     import albuswall  # noqa: F401
@@ -134,13 +138,52 @@ def test_optional_list_roundtrip() -> None:
     assert _deconvert(None, Optional[List[int]]) == ""
 
 
+def test_dict_roundtrip() -> None:
+    """dict 用 JSON 表示，与 ``_convert`` 对称（键排序，输出稳定）。"""
+    assert _deconvert({"a": 1}, dict) == '{"a": 1}'
+    assert _deconvert({"b": 2, "a": 1}, dict) == '{"a": 1, "b": 2}'
+    _assert_roundtrip({"small": 128, "medium": 512}, dict)
+    _assert_roundtrip({}, dict)
+    _assert_roundtrip({"a": 1}, Dict[str, int])
+    _assert_roundtrip({"a": "b"}, Dict[str, str])
+    _assert_roundtrip({"a": Path("/x")}, Dict[str, Path])
+
+
+def test_optional_dict_roundtrip() -> None:
+    _assert_roundtrip({"a": 1}, Optional[dict])
+    _assert_roundtrip({"a": 1}, dict | None)
+    assert _deconvert(None, Optional[dict]) == ""
+
+
+def test_dict_reads_json_only() -> None:
+    """INI 里写 dict 只接受 JSON 对象；其它写法要报错而不是静默成 None。"""
+    assert _convert('{"small": 128}', dict) == {"small": 128}
+    assert _convert("", dict) == {}
+    assert _convert('{"small": "128"}', Dict[str, int]) == {"small": 128}
+    for raw in ("small:128", "[1, 2]", "128"):
+        try:
+            _convert(raw, dict)
+        except ValueError:
+            continue
+        raise AssertionError(f"应拒绝非 JSON 对象的 {raw!r}")
+
+
+def test_dict_that_cannot_roundtrip_raises() -> None:
+    """写出去却读不回来的 dict 宁可失败：否则下次启动会在类型检查里炸。"""
+    for bad in (123, [1, 2], {"a": object()}):
+        try:
+            _deconvert(bad, dict)
+        except ValueError:
+            continue
+        raise AssertionError(f"应拒绝 {bad!r}")
+
+
 # ══════════════════════════════════════════════════════════════
 # fail-safe / 自定义转换器
 # ══════════════════════════════════════════════════════════════
 def test_unknown_converter_falls_back_to_str() -> None:
-    assert _deconvert(123, dict) == "123"
+    assert _deconvert(123, object) == "123"
     assert _deconvert(object, type)  # 不抛即可
-    assert _deconvert([1, 2], dict) == "[1, 2]"
 
 
 def test_custom_converter_is_not_inverted() -> None:

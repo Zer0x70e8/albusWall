@@ -64,7 +64,7 @@ from albuswall.common.enums import ThumbSpec
 from albuswall.log import getLogger
 from albuswall.services.view import SCOPE_DELETED
 
-from ..config.static import ThumbnailGridPresenterConfs
+from ..config import thumbnail_grid_config
 from ..utils.signal_adapter import SignalAdapter
 
 if TYPE_CHECKING:
@@ -73,6 +73,7 @@ if TYPE_CHECKING:
     from ..window import Window
     from .album_presenter import AlbumPresenter
     from .image_presenter import ThumbnailGridPresenter
+    from .search_presenter import SearchPresenter
     from .source_presenter import IngestSourcePresenter
     from .tag_editor_presenter import TagEditorPresenter
     from .tagbar_presenter import TagBarPresenter
@@ -141,10 +142,14 @@ class PresenterManager(QObject):
         self.viewer_presenter: Optional["ViewerPresenter"] = None
         self.tagbar_presenter: Optional["TagBarPresenter"] = None
         self.tag_editor_presenter: Optional["TagEditorPresenter"] = None
+        self.search_presenter: Optional["SearchPresenter"] = None
 
         # 当前"标签作用于哪个资产"（详情打开 → 详情资产；否则 grid 选中）
         self._active_asset_uuid: str | None = None
         self._detail_visible: bool = False
+
+        # 网格的标签过滤条件（None = 不过滤）；随相册切换自动清除。
+        self._tag_filter_uuid: str | None = None
 
     # ------------------------------------------------------------------ #
     # build
@@ -164,6 +169,7 @@ class PresenterManager(QObject):
         self.viewer_presenter = self._build_viewer_presenter()
         self.tagbar_presenter = self._build_tagbar_presenter()
         self.tag_editor_presenter = self._build_tag_editor_presenter()
+        self.search_presenter = self._build_search_presenter()
 
     def _build_window_presenter(self) -> Optional["WindowPresenter"]:
         from .window_presenter import WindowPresenter
@@ -188,9 +194,9 @@ class PresenterManager(QObject):
         from .image_presenter import ThumbnailGridPresenter
 
         try:
-            confs = ThumbnailGridPresenterConfs()
+            confs = thumbnail_grid_config()
         except Exception:
-            _logger.exception("ThumbnailGridPresenterConfs unavailable")
+            _logger.exception("thumbnail grid config unavailable")
             confs = None
 
         p = self._try_presenter(
@@ -205,7 +211,7 @@ class PresenterManager(QObject):
             ),
         )
         if p is not None and confs is not None:
-            p.set_favorite_icon(confs.favorite_on_icon, checked=True)
+            p.set_favorite_icon(confs["favorite_on_icon"], checked=True)
         return p
 
     def _build_ingest_presenter(self) -> Optional["IngestSourcePresenter"]:
@@ -259,6 +265,25 @@ class PresenterManager(QObject):
             ),
         )
 
+    def _build_search_presenter(self) -> Optional["SearchPresenter"]:
+        from .search_presenter import SearchPresenter
+
+        view = getattr(self._window.title_bar, "floating_search_bar", None)
+        if view is None:
+            _logger.warning("SearchPresenter skipped: search bar unavailable")
+            return None
+
+        return self._try_presenter(
+            "SearchPresenter",
+            lambda: SearchPresenter(
+                view,
+                tag_service=self._require("tag_service"),
+                view_service=self._container.get("view_service", None),
+                current_album_provider=self._current_album,
+                parent=self,
+            ),
+        )
+
     def _require(self, name: str):
         """取 container 依赖；缺失时抛 :class:`_DependencyMissingError`。"""
         try:
@@ -294,10 +319,55 @@ class PresenterManager(QObject):
     # ------------------------------------------------------------------ #
     def _wire(self) -> None:
         """用 SignalAdapter 建立所有跨对象连接。"""
+        self._wire_language()
         self._wire_presenter_signals()
         self._wire_viewer_view_signals()
         self._wire_grid_refresh_signals()
         self._wire_tag_signals()
+        self._wire_search_signals()
+
+    def _wire_language(self) -> None:
+        """语言切换 → 逐个 presenter 的 ``retranslate()``。
+
+        presenter 是 ``QObject`` 但不是控件，收不到 Qt 的 ``LanguageChange``，
+        因此必须显式订阅 :class:`TranslationManager` 的广播；没实现
+        ``retranslate()`` 的 presenter 直接跳过。
+        """
+        try:
+            from ..i18n import translation_manager
+
+            translation_manager().language_changed.connect(
+                self._on_language_changed
+            )
+        except Exception:  # noqa: BLE001  翻译设施缺失不该影响装配
+            _logger.exception("language wiring failed; skip retranslation")
+
+    def _disconnect_language(self) -> None:
+        """解绑语言广播（manager 可能被重建，别让旧实例继续收信号）。"""
+        try:
+            from ..i18n import translation_manager
+
+            translation_manager().language_changed.disconnect(
+                self._on_language_changed
+            )
+        except (RuntimeError, TypeError):
+            # 没连过 / 已被断开 / 对象已销毁：都不算错误
+            pass
+        except Exception:  # noqa: BLE001
+            _logger.exception("language unwiring failed")
+
+    def _on_language_changed(self, _language: str) -> None:
+        """语言切换后让每个 presenter 自己重算文案。"""
+        for presenter in self._presenters:
+            callback = getattr(presenter, "retranslate", None)
+            if not callable(callback):
+                continue
+            try:
+                callback()
+            except Exception:  # noqa: BLE001  单个 presenter 失败不影响其它
+                _logger.exception(
+                    "%s.retranslate failed", type(presenter).__name__
+                )
 
     def _wire_tag_signals(self) -> None:
         """tagbar ↔ grid / viewer 的接线。
@@ -334,6 +404,22 @@ class PresenterManager(QObject):
                 self._on_tag_error,
             )
 
+        # tagbar 右键菜单 → TagEditorPresenter（对话框 / 业务规则都在那边）
+        if (self.tagbar_presenter is not None
+                and self.tag_editor_presenter is not None):
+            self._adapter.connect(
+                self.tagbar_presenter.tag_create_requested,
+                self._on_tag_create_requested,
+            )
+            self._adapter.connect(
+                self.tagbar_presenter.tag_rename_requested,
+                self._on_tag_rename_requested,
+            )
+            self._adapter.connect(
+                self.tagbar_presenter.tag_delete_requested,
+                self._on_tag_delete_requested,
+            )
+
         # grid 选中 → tagbar 刷新。当前 ThumbnailGridPresenter 只暴露
         # item_activated（点击进入详情），没有 selection_changed；
         # 将来 grid 补上该信号后这里会自动接上，不需要改其它代码。
@@ -341,6 +427,19 @@ class PresenterManager(QObject):
             selection = getattr(self.thumb_presenter, "selection_changed", None)
             if selection is not None:
                 self._adapter.connect(selection, self._on_selection_changed)
+
+    def _wire_search_signals(self) -> None:
+        """搜索栏 → 网格标签过滤。"""
+        if self.search_presenter is None:
+            return
+        self._adapter.connect(
+            self.search_presenter.filter_requested,
+            self._on_tag_filter_requested,
+        )
+        self._adapter.connect(
+            self.search_presenter.error_occurred,
+            self._on_tag_error,
+        )
 
     def _wire_presenter_signals(self) -> None:
         """presenter ↔ presenter 之间的信号（同线程直连）。"""
@@ -424,6 +523,8 @@ class PresenterManager(QObject):
     # slots
     # ------------------------------------------------------------------ #
     def _on_album_changed(self, album) -> None:
+        # 标签过滤是「当前相册」的派生条件：换相册必须重新开始。
+        self._clear_tag_filter_state()
         self._close_viewer()
         self._apply_album_to_grid(album)
 
@@ -448,9 +549,44 @@ class PresenterManager(QObject):
         if self.thumb_presenter is None:
             return
         asset_uuids, include_deleted = self._album_scope(album)
+        asset_uuids = self._apply_tag_filter(asset_uuids, include_deleted)
         self.thumb_presenter.set_assets(
             asset_uuids, include_deleted=include_deleted,
         )
+
+    def _apply_tag_filter(
+            self,
+            asset_uuids: list[str],
+            include_deleted: bool,
+    ) -> list[str]:
+        """把相册资产集合与当前标签过滤求交；保持相册原有顺序。"""
+        if not self._tag_filter_uuid or not asset_uuids:
+            return asset_uuids
+
+        tag_service = self._container.get("tag_service", None)
+        if tag_service is None:
+            return asset_uuids
+
+        try:
+            tagged = {
+                str(u) for u in tag_service.asset_uuids(
+                    self._tag_filter_uuid,
+                    scope="deleted" if include_deleted else "active",
+                )
+            }
+        except Exception:
+            _logger.exception(
+                "resolve tag filter failed: tag=%s", self._tag_filter_uuid,
+            )
+            return asset_uuids
+
+        return [uuid for uuid in asset_uuids if uuid in tagged]
+
+    def _clear_tag_filter_state(self) -> None:
+        """清掉标签过滤状态与搜索框回显（不触发刷新）。"""
+        self._tag_filter_uuid = None
+        if self.search_presenter is not None:
+            self.search_presenter.reset_view()
 
     def _refresh_tagbar(self) -> None:
         if self.tagbar_presenter is not None:
@@ -541,40 +677,82 @@ class PresenterManager(QObject):
 
     # ---------------- tag ----------------
 
+    def _on_tag_create_requested(self, parent_uuid: str) -> None:
+        """tagbar 树右键「新建子标签 / 新建根标签」。"""
+        if self.tag_editor_presenter is None:
+            return
+        self.tag_editor_presenter.create(parent_uuid or None)
+
+    def _on_tag_rename_requested(self, tag_uuid: str) -> None:
+        if self.tag_editor_presenter is not None:
+            self.tag_editor_presenter.rename(tag_uuid)
+
+    def _on_tag_delete_requested(self, tag_uuid: str) -> None:
+        if self.tag_editor_presenter is not None:
+            self.tag_editor_presenter.delete(tag_uuid)
+
     def _on_tags_changed(self) -> None:
         """资产上的标签绑定变更（新建 / 添加 / 移除）。
 
-        只需要刷 tagbar 自身；grid 的资产集合没变，不用刷 grid。
-        如果详情打开且看的是同一资产，详情侧栏的标签 chip 也应刷新——
-        那由 viewer_presenter 自己的 assets_changed 路径负责，manager 不重复。
+        过滤生效时资产集合也会变（例如把当前标签从图上移除），所以
+        grid 必须一起刷新；否则会出现「标签没了但图还在」的假象。
         """
         self._refresh_tagbar()
+        if self._tag_filter_uuid:
+            self._refresh_grid()
 
     def _on_tag_metadata_changed(self) -> None:
         """标签元数据变更（create / rename / delete / restore）。
 
-        影响两处：
+        影响三处：
             · tagbar 的 chip（display_name 变了要重绘）；
-            · tagbar 的 layer tree（结构可能变了）。
+            · tagbar 的 layer tree（结构可能变了）；
+            · 当前过滤标签被删除 / 改名 → 过滤条件需要重新校验。
         """
+        self._ensure_tag_filter_alive()
+        if self._tag_filter_uuid and self.search_presenter is not None:
+            # 改名后搜索框里的路径回显要跟着变
+            self.search_presenter.apply_filter(self._tag_filter_uuid)
         if self.tagbar_presenter is not None:
             self.tagbar_presenter.refresh()
             self.tagbar_presenter.refresh_tree()
+        if self._tag_filter_uuid:
+            self._refresh_grid()
+
+    def _ensure_tag_filter_alive(self) -> None:
+        """过滤标签被删除时清掉过滤，避免网格永远为空。"""
+        if not self._tag_filter_uuid:
+            return
+        tag_service = self._container.get("tag_service", None)
+        if tag_service is None:
+            return
+        try:
+            tag_service.get(self._tag_filter_uuid)
+        except Exception:
+            _logger.info(
+                "tag filter target missing, clearing: %s",
+                self._tag_filter_uuid,
+            )
+            self._clear_tag_filter_state()
 
     def _on_tag_activated(self, tag_uuid: str) -> None:
-        """用户点击 chip 或树节点 → 按标签筛选。
+        """用户点击 chip → 按标签过滤当前相册，并同步搜索栏回显。"""
+        if self.search_presenter is not None:
+            self.search_presenter.apply_filter(tag_uuid)
+        else:
+            self._on_tag_filter_requested(str(tag_uuid))
 
-        TODO(P2): 切到 "tag 虚拟相册"。
-            · 短期：只记录日志，等虚拟相册功能上线；
-            · 中期：如果 album_presenter 支持虚拟 album，调
-              ``self.album_presenter.select_virtual(f"tag:{tag_uuid}")``；
-            · 长期：虚拟相册与物理相簿统一为 ``Album`` DTO，
-              tag 只是 ``album_type == "tag"`` 的一种。
-        """
-        _logger.info(
-            "tag activated: %s (tag-virtual album not implemented yet)",
-            tag_uuid,
-        )
+    def _on_tag_filter_requested(self, tag_uuid) -> None:
+        """搜索栏 / tag chip 的过滤意图。``None`` = 清除过滤。"""
+        new_filter = str(tag_uuid) if tag_uuid else None
+        if new_filter == self._tag_filter_uuid:
+            return
+        self._tag_filter_uuid = new_filter
+        self._refresh_grid()
+
+    def _current_album(self):
+        """搜索 presenter 的当前相册来源。"""
+        return None if self.album_presenter is None else self.album_presenter.current
 
     def _on_tag_error(self, message: str) -> None:
         """tag 业务错误 → 弹提示。"""
@@ -644,6 +822,7 @@ class PresenterManager(QObject):
         """断开所有 adapter 连接并逆序 teardown presenter。"""
         # 一句清场：所有 adapter 建立的连接（含跨线程中继）一次性断开。
         self._adapter.disconnect_all()
+        self._disconnect_language()
 
         for p in reversed(self._presenters):
             try:

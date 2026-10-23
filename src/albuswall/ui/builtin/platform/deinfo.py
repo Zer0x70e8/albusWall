@@ -231,15 +231,15 @@ def should_hide_window_controls() -> bool:
 
 def _main() -> None:
     info = get_desktop_info()
-    btn_map = {True: "左对齐", False: "右对齐", None: "无法判断"}
+    btn_map = {True: "left", False: "right", None: "unknown"}
 
-    print(f"桌面环境 / WM : {info.name}")
-    print(f"原始 XDG 值   : {info.raw_desktop!r}")
-    print(f"会话类型      : {info.session_type}")
-    print(f"Hyprland      : {info.is_hyprland}")
-    print(f"平铺式        : {info.is_tiling}")
-    print(f"窗口按钮      : {btn_map[info.buttons_left]}")
-    print(f"应隐藏控制按钮: {info.should_hide_window_controls}")
+    print(f"Desktop / WM    : {info.name}")
+    print(f"Raw XDG value   : {info.raw_desktop!r}")
+    print(f"Session type    : {info.session_type}")
+    print(f"Hyprland        : {info.is_hyprland}")
+    print(f"Tiling          : {info.is_tiling}")
+    print(f"Window buttons  : {btn_map[info.buttons_left]}")
+    print(f"Hide controls   : {info.should_hide_window_controls}")
 
 
 if __name__ == "__main__":

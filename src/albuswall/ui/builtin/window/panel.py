@@ -16,10 +16,11 @@ from PySide6.QtWidgets import (
     QListView,
 )
 
+from ..i18n import Retranslatable
 from ..widgets import BlurLabel
 
 
-class InformationPanel(QWidget):
+class InformationPanel(Retranslatable, QWidget):
     """详情页全屏信息面板。
 
     契约（与 ``Detail`` / ``PresenterManager`` 一致）：
@@ -49,6 +50,7 @@ class InformationPanel(QWidget):
 
         self.setup_ui()
         self.setup_key()
+        self.retranslate_ui()
 
     def setup_ui(self) -> None:
         self.setObjectName("DetailInformationPanel")
@@ -79,7 +81,7 @@ class InformationPanel(QWidget):
         root.addStretch(1)
 
         # ② 关闭横条（整宽大按钮，尺寸由样式表决定）
-        self.close_button = QPushButton(self.tr("Close"), self.content)
+        self.close_button = QPushButton("", self.content)
         self.close_button.setObjectName("DetailInformationCloseButton")
         self.close_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.close_button.clicked.connect(self.close_requested.emit)
@@ -103,6 +105,10 @@ class InformationPanel(QWidget):
 
     def setup_key(self) -> None:
         pass
+
+    def retranslate_ui(self) -> None:
+        """重新应用标题栏外框的文案（当前只有关闭按钮）。"""
+        self.close_button.setText(self.tr("Close"))
 
     # ------------------------------------------------------------------ #
     # 弹出动画接口（预留，不实现具体动画）

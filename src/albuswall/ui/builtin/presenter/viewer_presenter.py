@@ -182,6 +182,11 @@ class ViewerPresenter:
         self.view.panel.view.setModel(self.metadata_model)
         self.view.panel.view.setItemDelegate(self.metadata_delegate)
 
+    def retranslate(self) -> None:
+        """语言切换后重建信息面板的字段标签。"""
+        self.metadata_model.retranslate()
+        self.view.panel.view.viewport().update()
+
     def teardown(self) -> None:
         self._cancel_current_load()
         self._disconnect_signals()

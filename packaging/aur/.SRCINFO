@@ -1,0 +1,20 @@
+pkgbase = albuswall
+	pkgdesc = A modular, plugin-driven image gallery for Hyprland ricing screenshots
+	pkgver = 1.0.0
+	pkgrel = 1
+	url = https://github.com/Zer0x70e8/albusWall
+	arch = any
+	license = MIT
+	makedepends = python-build
+	makedepends = python-hatchling
+	makedepends = python-installer
+	makedepends = python-wheel
+	depends = python
+	depends = python-psutil
+	depends = python-pillow
+	depends = python-apscheduler
+	depends = pyside6
+	source = albuswall-1.0.0.tar.gz::https://github.com/Zer0x70e8/albusWall/archive/refs/tags/v1.0.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = albuswall

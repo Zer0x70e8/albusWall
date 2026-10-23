@@ -26,7 +26,9 @@ import traceback
 from pathlib import Path
 from uuid import UUID, uuid4
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# 强制离屏：桌面会话里可能已有 QT_QPA_PLATFORM=wayland;xcb，
+# setdefault 会被它绕过 —— 测试就会真的弹窗口。
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 try:  # 允许直接以文件路径运行
     import albuswall  # noqa: F401

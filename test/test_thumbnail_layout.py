@@ -25,7 +25,6 @@ import tempfile
 import traceback
 from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Iterator, Optional
 from uuid import UUID, uuid4
 
@@ -170,23 +169,24 @@ def patched_service_env(
     """把 service 模块的"环境依赖"换成测试值。
 
     这样两种模式都能指向临时目录，且不需要 bootstrap 整个 config 系统。
+    配置侧只需给一份 typed dict 快照（``thumbnail_config()`` 的返回值形状），
+    ``resolve_*`` 则各自换成固定值 —— 服务只消费归一化后的结果。
     ``image_format`` 故意留 "JPEG"，用来验证它确实不再影响输出（强制 PNG）。
     """
-    fake_cfg = SimpleNamespace(
-        version="test-version",
-        xdg_enabled=xdg_enabled,
-        batch_size=4,
-        failure_cooldown_sec=0.0,
-        write_max_retries=0,
-        write_retry_backoff_sec=0.0,
-    )
+    fake_cfg = {
+        "xdg_enabled": xdg_enabled,
+        "batch_size": 4,
+        "failure_cooldown_sec": 0.0,
+        "write_max_retries": 0,
+        "write_retry_backoff_sec": 0.0,
+    }
     patches = {
-        "config": fake_cfg,
-        "resolve_thumb_root": lambda: private_root,
-        "xdg_thumbnails_root": lambda: xdg_root,
-        "resolve_specs": lambda: dict(_SPECS),
-        "resolve_image_format": lambda: "JPEG",
-        "resolve_xdg_spec_map": lambda: dict(_DEFAULT_SPEC_MAP),
+        "thumbnail_config": lambda: fake_cfg,
+        "resolve_thumb_root": lambda *_args: private_root,
+        "xdg_thumbnails_root": lambda *_args: xdg_root,
+        "resolve_specs": lambda *_args: dict(_SPECS),
+        "resolve_image_format": lambda *_args: "JPEG",
+        "resolve_xdg_spec_map": lambda *_args: dict(_DEFAULT_SPEC_MAP),
     }
     saved = {name: getattr(svc_mod, name) for name in patches}
     for name, value in patches.items():
@@ -481,7 +481,7 @@ def test_min_age_protects_fresh_orphans() -> None:
 
 
 # ─────────────────────────────────────────────────────────────
-# 6. bootstrap 注入：root 由 thumb_config.xdg_enabled 决定
+# 6. bootstrap 注入：root 由 thumbnail_config()["xdg_enabled"] 决定
 # ─────────────────────────────────────────────────────────────
 def test_bootstrap_injects_cleaner_root() -> None:
     import albuswall.services.source_trash.bootstrap as bs
@@ -489,19 +489,19 @@ def test_bootstrap_injects_cleaner_root() -> None:
     tmp = make_temp_dir()
     private_root, xdg_root = tmp / "private", tmp / "xdg"
     saved = {
-        "thumb_config": bs.thumb_config,
+        "thumbnail_config": bs.thumbnail_config,
         "resolve_thumb_root": bs.resolve_thumb_root,
         "xdg_thumbnails_root": bs.xdg_thumbnails_root,
     }
-    bs.resolve_thumb_root = lambda: private_root  # type: ignore[assignment]
-    bs.xdg_thumbnails_root = lambda: xdg_root  # type: ignore[assignment]
+    bs.resolve_thumb_root = lambda *_args: private_root  # type: ignore[assignment]
+    bs.xdg_thumbnails_root = lambda *_args: xdg_root  # type: ignore[assignment]
     try:
-        bs.thumb_config = SimpleNamespace(xdg_enabled=False)  # type: ignore[assignment]
+        bs.thumbnail_config = lambda: {"xdg_enabled": False}  # type: ignore[assignment]
         private_cfg = bs.load_thumbnail_cleaner_config()
         assert private_cfg.enabled is True
         assert private_cfg.root == private_root
 
-        bs.thumb_config = SimpleNamespace(xdg_enabled=True)  # type: ignore[assignment]
+        bs.thumbnail_config = lambda: {"xdg_enabled": True}  # type: ignore[assignment]
         xdg_cfg = bs.load_thumbnail_cleaner_config()
         assert xdg_cfg.enabled is True
         assert xdg_cfg.root == xdg_root
