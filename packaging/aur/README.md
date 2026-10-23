@@ -54,6 +54,9 @@ python scripts/aur_release.py --tarball /path/to/albusWall-1.0.0.tar.gz
 Then publish:
 
 ```bash
+# first submission only: create the package on the AUR web UI
+#   https://aur.archlinux.org/submit/  -> "Add Package" -> paste PKGBUILD
+# (the AUR git remote does not exist before that)
 git clone ssh://aur@aur.archlinux.org/albuswall.git
 cp packaging/aur/PKGBUILD packaging/aur/.SRCINFO albuswall/
 cd albuswall && git add -A && git commit -m "upgpkg: albuswall 1.0.0-1" && git push
@@ -69,7 +72,10 @@ makepkg -si                            # build and install
 
 Notes:
 
-- `sha256sums=('SKIP')` is only a placeholder for the not-yet-existing tag
-  archive. Always run `scripts/aur_release.py` before publishing.
+- `sha256sums` is filled in by `scripts/aur_release.py` once the release tag
+  exists; `SKIP` means "not filled yet, do not publish".
+- If the download from `codeload.github.com` dies with `RemoteDisconnected`,
+  fetch the archive by hand and pass it with `--tarball`; the script then works
+  fully offline.
 - `namcap albuswall-*.pkg.tar.zst` should stay clean; the recipe has no optdepends
   because every runtime dependency is a hard requirement of the built-in UI.
