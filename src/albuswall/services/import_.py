@@ -5,8 +5,12 @@
 - 配置层（ImportConfig）：
   把 ImportService 的可调参数集中声明，走 ConfigDeclaration / ConfigField 机制。
   模块级单例 _cfg，业务侧直接 `_cfg.xxx` 读取。
-- 纯函数层（process_candidate / _compute_file_hash / _extract_image_metadata）：
-  在子进程执行，无状态、无 DB 连接、可 pickle。
+- 纯函数层（process_candidate / _compute_file_hash / _extract_image_metadata /
+  detect_magic / _resolve_candidate_path）：
+  在子进程执行，无状态、无 DB 连接、可 pickle。``process_candidate`` 是
+  "两段式文件类型判断"的 Stage 2（Stage 1 的 glob 粗筛在
+  ``services/source.py::SourceExecutor`` 里），返回三态 ``ProcessResult``
+  （ok / skip / fail），取代旧的二态 ``Optional[AssetCreateDTO]``。
 - ImportService：
   常驻后台 worker + 单轮 process_pending；
   外部（SourceService.scan_finished、调度器）通过 trigger() 唤醒一轮。
@@ -16,19 +20,23 @@ import hashlib
 import mimetypes
 import threading
 import time
-from pathlib import Path, PurePosixPath
-from typing import Dict, Optional, TYPE_CHECKING
 from concurrent.futures import (
     FIRST_COMPLETED,
     wait,
     TimeoutError as FutureTimeoutError,
 )
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Dict, Literal, Optional, TYPE_CHECKING
+from urllib.parse import unquote, urlparse
 
-from albuswall.common.enums import CandidateStatus
+from albuswall.common.enums import CandidateStatus, FileTypeCheckMode
 from albuswall.configue import ConfigField
 from albuswall.dto.import_ import AssetCandidateCacheDTO, AssetCreateDTO
+from albuswall.dto.source import MANUAL_SOURCE_ID, IngestSource
+from albuswall.dto.utils import coerce_enum
 from albuswall.log import getLogger
-from albuswall.utils.signals import Signal
+from albuswall.utils.signals import SignalDescriptor
 
 try:
     # 统一 EXIF 解析入口；缺失时不影响导入主流程。
@@ -44,6 +52,7 @@ except ImportError:  # pragma: no cover - 环境缺依赖时的降级路径
 
 if TYPE_CHECKING:
     from albuswall.repositories.import_ import ImportRepository
+    from albuswall.repositories.source import IngestSourceRepository
     from albuswall.infrastructure.task import TaskService
 
 _logger = getLogger(__name__)
@@ -98,78 +107,292 @@ class ImportConfig:
 
 _cfg = ImportConfig()
 
-
 # ============================================================
 # 纯函数层：在子进程中执行，无状态、无 DB 连接、可 pickle
 # ============================================================
 
+# ---- 文件头（魔数）识别：内置表，不引第三方依赖 ----
+#
+# 取舍：内置表 vs ``filetype`` 库。选内置表——进程池里每个候选都要识别一次，
+# 依赖越少冷启动越快；本项目只需要"是不是图片 / 音视频 / PDF"这一档粗粒度
+# 判断，内置表够用，识别不出的边缘格式由 ``MAGIC_LAX`` 兜底成
+# ``application/octet-stream``。
+#
+# 覆盖面（v1）：image/jpeg png gif webp heic avif；
+#              video/mp4 quicktime x-matroska；
+#              audio/mpeg flac wav；application/pdf。
+#
+# 表项 = (偏移, 签名, mime)，按顺序匹配，先具体后笼统：
+# ``ftyp`` 品牌（HEIC / AVIF）必须排在通用 ``ftyp → video/mp4`` 之前。
+_MAGIC_TABLE: tuple[tuple[int, bytes, str], ...] = (
+    (0, b"\xff\xd8\xff", "image/jpeg"),
+    (0, b"\x89PNG\r\n\x1a\n", "image/png"),
+    (0, b"GIF87a", "image/gif"),
+    (0, b"GIF89a", "image/gif"),
+    (8, b"WEBP", "image/webp"),  # RIFF....WEBP
+    (8, b"WAVE", "audio/wav"),  # RIFF....WAVE
+    (4, b"ftypheic", "image/heic"),
+    (4, b"ftypheix", "image/heic"),
+    (4, b"ftyphevc", "image/heic"),
+    (4, b"ftypheim", "image/heic"),
+    (4, b"ftypheis", "image/heic"),
+    (4, b"ftypmif1", "image/heic"),
+    (4, b"ftypmsf1", "image/heic"),
+    (4, b"ftypavif", "image/avif"),
+    (4, b"ftypavis", "image/avif"),
+    (4, b"ftypqt  ", "video/quicktime"),
+    (4, b"ftyp", "video/mp4"),
+    (0, b"\x1a\x45\xdf\xa3", "video/x-matroska"),  # EBML（mkv / webm）
+    (0, b"ID3", "audio/mpeg"),
+    (0, b"\xff\xfb", "audio/mpeg"),
+    (0, b"\xff\xf3", "audio/mpeg"),
+    (0, b"\xff\xf2", "audio/mpeg"),
+    (0, b"fLaC", "audio/flac"),
+    (0, b"%PDF", "application/pdf"),
+)
+"""内置魔数表；新增格式直接加表项，注意保持"先具体后笼统"的顺序。"""
+
+# 读多少字节做识别：表内最大偏移 8，4096 留足余量给未来表项。
+_MAGIC_HEADER_SIZE = 4096
+
+HAS_MAGIC = True
+"""魔数识别能力开关。
+
+内置表恒可用，故恒为 True。保留该标志是为了让"缺失 → 降级为只信后缀"
+这条路径可被测试/未来裁剪显式打开（置 False 后 ``MAGIC*`` 行为与
+``SUFFIX`` 一致）。
+"""
+
+
+def detect_magic(path: Path) -> Optional[str]:
+    """读文件头返回 mime；读失败或识别不出返回 ``None``。
+
+    返回 ``None`` 覆盖两种语义（读失败 / 识别不出），由调用方策略区分：
+
+    * ``MAGIC`` 模式     → 跳过（严格，候选落 SKIPPED）；
+    * ``MAGIC_LAX`` 模式 → 接受但把 mime 降级为 ``application/octet-stream``。
+
+    进程边界：只读文件前 ``_MAGIC_HEADER_SIZE`` 字节，不访问 DB、无模块级
+    可变状态，可安全地在进程池里并发调用。
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(_MAGIC_HEADER_SIZE)
+    except OSError as e:
+        _logger.warning("读取文件头失败 %s: %s", path, e)
+        return None
+
+    if not head:
+        return None
+
+    for offset, signature, mime in _MAGIC_TABLE:
+        end = offset + len(signature)
+        if head[offset:end] == signature:
+            return mime
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessResult:
+    """``process_candidate`` 的三态返回。
+
+    取代旧契约 ``Optional[AssetCreateDTO]``：``None`` 同时表示"跳过"和
+    "失败"，调用方无法区分（一律 ``mark_candidate_failed``）。三态语义：
+
+    * ``"ok"``   —— 产出资产，``dto`` 必填，调用方走 ``finalize_candidate``；
+    * ``"skip"`` —— 主动跳过（路径非法 / 魔数不认识），``reason`` 说明原因，
+      候选落 ``SKIPPED``，**不算失败**；
+    * ``"fail"`` —— 真失败（文件消失 / 读取异常），候选落 ``FAILED``。
+
+    ``reason`` 只写日志与 ``ProcessResult``，**不落库**（候选表没有
+    skip_reason 列）；UI 侧统一用 ``status=SKIPPED`` 识别"跳过"，
+    "精判拒绝" vs "重复导入" 的细分靠日志里的 reason 区分。
+    """
+
+    status: Literal["ok", "skip", "fail"]
+    dto: Optional[AssetCreateDTO] = None
+    reason: Optional[str] = None
+
+    @property
+    def is_ok(self) -> bool:
+        return self.status == "ok"
+
+
+def _try_resolve(path: Path) -> Optional[Path]:
+    """``Path.resolve()`` 的容错包装。
+
+    :return: 绝对化后的 Path；``OSError``（权限 / 路径过长）或
+        ``RuntimeError``（符号链接环）时返回 ``None``，由调用方当路径非法处理。
+    """
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):
+        return None
+
+
+def _resolve_candidate_path(
+        candidate: AssetCandidateCacheDTO, source_path: str,
+) -> Optional[Path]:
+    """把 DB 里的 ``candidate.path`` 归一为可安全打开的绝对 Path。
+
+    契约
+    ----
+    * 返回 ``None`` 表示路径非法（空串 / 越界 / 无法解析），调用方应置
+      ``SKIPPED``（reason=path_invalid），不崩、不越权读；
+    * 本函数 **不做 IO**，只做纯字符串 / Path 归一与越界判断，
+      因此可以放心在进程池里调用；
+    * 返回值只用于"读文件"，**不**写回 ``AssetCreateDTO.file_path``
+      （后者始终沿用 ``candidate.path`` 原值）。Stage 1 自路径契约修复起
+      写入的就是相对路径，因此新数据的 ``file_path`` 天然合规；历史绝对
+      路径只在此处归一读取，不再回写。
+
+    支持的历史脏数据形态（全部只在此处归一，本函数不改 DB；存量绝对路径
+    不做迁移：项目仍处早期开发，老库删库重建）
+    ----------------------------------------------------
+    * POSIX 相对     ``a/b.jpg``
+    * Windows 相对   ``a\\b.jpg``      （反斜杠统一换 ``/``）
+    * 混合           ``a\\b/c.jpg``
+    * POSIX 绝对     ``/abs/a.jpg``
+    * Windows 绝对   ``C:/x.jpg`` / ``C:\\x.jpg``
+    * ``file://`` URI ``file:///abs/a.jpg``（unquote 后取 path 部分）
+    * 空串 / 纯空白  → ``None``
+
+    越界防御
+    --------
+    ``source_id != 0``：归一后的路径 ``resolve()`` 必须落在
+    ``source_path`` 之内，否则 ``None``。
+
+    ``source_id == 0``（手动导入 / 虚拟根）：没有 source 根，按"绝对路径
+    或 POSIX 根相对"处理，**不做**越界判断——与旧行为一致，否则手动导入
+    会被误判为越界。
+    """
+    raw = (candidate.path or "").strip()
+    if not raw:
+        return None
+
+    if raw.lower().startswith("file://"):
+        raw = unquote(urlparse(raw).path or "").strip()
+        if not raw:
+            return None
+
+    # 统一分隔符：DB 里可能残留 Windows 反斜杠。
+    raw = raw.replace("\\", "/")
+
+    if candidate.source_id == MANUAL_SOURCE_ID:
+        p = Path(raw)
+        if not p.is_absolute():
+            # 手动导入的 POSIX 形态是"相对 '/'"，补根。
+            p = Path("/") / raw.lstrip("/")
+        return _try_resolve(p)
+
+    if not source_path:
+        return None
+
+    root = _try_resolve(Path(source_path))
+    if root is None:
+        return None
+
+    p = Path(raw)
+    abs_path = _try_resolve(p if p.is_absolute() else root / raw)
+    if abs_path is None:
+        return None
+    try:
+        abs_path.relative_to(root)
+    except ValueError:
+        return None
+    return abs_path
+
+
 def process_candidate(
         candidate: AssetCandidateCacheDTO,
         source_path: str,
-) -> Optional[AssetCreateDTO]:
-    """处理单个候选文件，返回 AssetCreateDTO 或 None。
+        type_check: FileTypeCheckMode = FileTypeCheckMode.SUFFIX,
+) -> ProcessResult:
+    """精判单个候选文件，返回三态 :class:`ProcessResult`。
 
-    路径语义（与 media_library_schema.sql 保持一致）：
-    - candidate.path 始终为**相对形式**。
-    - source_id == 0：candidate.path 自带语义
-        · POSIX  ：相对 '/'，如 "home/user/a.jpg"
-        · Windows：带盘符，如 "C:/Users/a.jpg"
-    - source_id != 0：candidate.path 相对 ingest_source.source_path。
-    - 写入 assets.file_path 的仍然是 candidate.path（相对形式），
-      实际绝对路径由 source_id 决定。
+    两段式中的 Stage 2（Stage 1 的 glob 粗筛在 ``SourceExecutor`` 里完成）：
+    本函数只决定"要不要进一步验证、验证结果如何"，不重复做后缀筛选。
 
-    子进程契约：
-    - 输入 / 输出都可 pickle。
-    - 不访问 DB，不持有除 logger 之外的共享资源。
-    - 顶层函数，无闭包捕获。
+    ``type_check`` 策略
+    -------------------
+    * ``OFF``       —— 不校验，mime 用 ``mimetypes`` 猜；
+    * ``SUFFIX``    —— 只信后缀（Stage 1 已保证），mime 用 ``mimetypes`` 猜；
+    * ``MAGIC``     —— 读魔数，识别不出 → skip / magic_unknown；
+    * ``MAGIC_LAX`` —— 读魔数，识别不出 → 接受，mime 降级为
+      ``application/octet-stream``。
+
+    ``type_check`` 由调用方（``ImportService``）从内存快照取得后作为参数传入
+    —— 进程池里**不查 DB**，``AssetCandidateCacheDTO`` 也不为此加字段。
+
+    路径语义（与 media_library_schema.sql 保持一致）
+    ----------------------------------------------
+    * ``candidate.path`` 的存储契约是"相对 source_path"；Stage 1
+      （``SourceExecutor``）自本次修复起写入的就是相对路径。
+    * 历史脏数据（绝对路径）仍由 :func:`_resolve_candidate_path` 兼容读取，
+      但**不再回写绝对路径**：``assets.file_path`` 直接取 ``candidate.path``，
+      所以新数据的 file_path 也是相对路径。
+    * 项目仍处早期开发（``SCHEMA_VERSION = 0``），不提供数据迁移，老库
+      直接删库重建：兼容分支保留作读取侧兜底，重建后自然不再命中。
+
+    子进程契约：输入 / 输出均可 pickle，不访问 DB，无闭包捕获。
     """
     try:
-        # 基本防御：拒绝 '..'，避免越出 source_path。
-        if ".." in PurePosixPath(candidate.path).parts:
+        # 双保险 #1：纯字符串层拒绝 '..'（不依赖任何 IO / 平台语义）。
+        if ".." in PurePosixPath(
+                (candidate.path or "").replace("\\", "/"),
+        ).parts:
             _logger.error("候选路径包含 '..'，拒绝处理: %s", candidate.path)
-            return None
+            return ProcessResult("skip", reason="path_invalid")
 
-        if candidate.source_id == 0:
-            abs_path = Path(candidate.path)
-            if not abs_path.is_absolute():
-                # POSIX 相对 '/' 的存储形式，补根。
-                abs_path = Path("/") / candidate.path
-        else:
-            if not source_path:
-                _logger.error(
-                    "source_id=%s 的候选缺少 source_path，无法定位: %s",
-                    candidate.source_id, candidate.path,
-                )
-                return None
-            abs_path = Path(source_path) / candidate.path
-            # 越界防御：解析后必须仍在 source_path 之下。
-            try:
-                abs_path.resolve().relative_to(Path(source_path).resolve())
-            except ValueError:
-                _logger.error(
-                    "候选路径越过 source_path 边界: %s (source=%s)",
-                    candidate.path, source_path,
-                )
-                return None
+        abs_path = _resolve_candidate_path(candidate, source_path)
+        if abs_path is None:
+            _logger.error(
+                "候选路径非法（空 / 越界 / 无法解析）: %r (source_id=%s, source=%r)",
+                candidate.path, candidate.source_id, source_path,
+            )
+            return ProcessResult("skip", reason="path_invalid")
 
         if not abs_path.exists() or not abs_path.is_file():
             _logger.error("文件不存在或不是普通文件: %s", abs_path)
-            return None
+            return ProcessResult("fail", reason="missing")
 
         stat = abs_path.stat()
-        mime_type = candidate.mime_type or (
+        guessed = candidate.mime_type or (
                 mimetypes.guess_type(abs_path.name)[0] or "application/octet-stream"
         )
+
+        check = coerce_enum(
+            type_check, FileTypeCheckMode, FileTypeCheckMode.SUFFIX,
+        )
+        if check in (FileTypeCheckMode.OFF, FileTypeCheckMode.SUFFIX) or not HAS_MAGIC:
+            # OFF / SUFFIX 都不读文件头；HAS_MAGIC=False 时 MAGIC* 降级为只信后缀。
+            mime_type = guessed
+        else:
+            magic = detect_magic(abs_path)
+            if magic is None:
+                if check is FileTypeCheckMode.MAGIC:
+                    _logger.info(
+                        "魔数识别失败，跳过候选 %s (%s)", candidate.uuid, abs_path,
+                    )
+                    return ProcessResult("skip", reason="magic_unknown")
+                mime_type = "application/octet-stream"
+            else:
+                mime_type = magic
 
         width = height = 0
         taken_at = None
         exif_json = None
+        # EXIF 时机修正：按**精判后**的 mime 判断（旧实现看 candidate.mime_type，
+        # 后缀是 .jpg 实为 PNG 时会漏读 —— 现在 mime 已经是 image/png）。
         if mime_type.startswith("image/") and HAS_EXIF:
             width, height, taken_at, exif_json = _extract_image_metadata(abs_path)
 
-        return AssetCreateDTO(
+        return ProcessResult("ok", dto=AssetCreateDTO(
             uuid=candidate.uuid,
-            file_path=candidate.path,  # 相对形式，与 schema 注释一致
+            # 直接沿用候选表的相对路径（自本次修复起 candidate.path 即相对
+            # source_path 的 POSIX 路径）。历史绝对路径脏数据由
+            # _resolve_candidate_path 兼容读取，但不会回写到 assets。
+            file_path=candidate.path,
             original_name=abs_path.name,
             mime_type=mime_type,
             file_hash=_compute_file_hash(abs_path),
@@ -184,11 +407,11 @@ def process_candidate(
             taken_at=taken_at,
             exif_json=exif_json,
             is_favorite=0,
-            is_deleted=0,
-        )
+            is_deleted=False,
+        ))
     except Exception as e:
         _logger.exception("处理候选 %s 失败: %s", candidate.uuid, e)
-        return None
+        return ProcessResult("fail", reason="exception")
 
 
 def _compute_file_hash(path: Path) -> str:
@@ -258,11 +481,22 @@ class ImportService:
     同步调用：
     - process_pending()：直接执行一轮，幂等（_run_lock 防重入）。
     """
-    assets_imported: Signal = Signal(name="AssetsImported")
+    # 类属性 → 必须用 SignalDescriptor（lazy、实例间共享）。
+    # 契约：cb(sender: ImportService, *, ok, failed, skipped, retry, timeout)
+    assets_imported = SignalDescriptor("assets_imported")
 
-    def __init__(self, repo: "ImportRepository", task: "TaskService"):
+    def __init__(
+            self,
+            repo: "ImportRepository",
+            task: "TaskService",
+            source_repo: "Optional[IngestSourceRepository]" = None,
+    ):
         self._repo = repo
         self._task = task
+        # 可选注入：用于每轮构建 {source_id: IngestSource} 内存快照，
+        # 把 file_type_check 带给进程池里的 process_candidate。
+        # 未注入时全部降级为 SUFFIX（只信后缀），行为与改造前一致。
+        self._source_repo = source_repo
 
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -353,6 +587,9 @@ class ImportService:
 
         # 预取 source_id → source_path，供子进程解析绝对路径。
         source_paths: Dict[int, str] = self._repo.get_source_paths()
+        # 每轮一份内存快照：把 file_type_check 随候选一起交给进程池，
+        # 避免子进程查 DB，也不给候选表加 type_check 冗余列。
+        source_map = self._load_source_map()
 
         batch_size = _cfg.batch_size
 
@@ -364,7 +601,7 @@ class ImportService:
                 break
 
             _logger.info("Processing batch of %d pending candidates", len(candidates))
-            self._process_batch(candidates, source_paths, totals)
+            self._process_batch(candidates, source_paths, source_map, totals)
 
             # 不足一批说明已到底。
             if len(candidates) < batch_size:
@@ -377,6 +614,7 @@ class ImportService:
         )
         if totals["ok"] > 0:
             try:
+                # 契约：cb(sender, *, ok, failed, skipped, retry, timeout)
                 self.assets_imported.emit(self, **totals)
             except Exception:
                 _logger.exception("emit assets_imported failed")
@@ -387,23 +625,33 @@ class ImportService:
             self,
             candidates,
             source_paths,
+            source_map: Dict[int, IngestSource],
             totals
     ) -> None:
         futures = {}
         for cand in candidates:
             source_path = source_paths.get(cand.source_id, "")
+            # manual source（id=0）不在 get_source_candidates 里，
+            # 以及快照缺失时，一律降级为 SUFFIX（只信后缀）——与改造前一致。
+            source = source_map.get(cand.source_id)
+            type_check = (
+                source.file_type_check
+                if source is not None
+                else FileTypeCheckMode.SUFFIX
+            )
             try:
                 fut = self._task.submit(
                     process_candidate,
                     cand,
                     source_path,
+                    type_check,
                     executor="process",
                     priority=5,
                 )
                 futures[fut] = cand
             except Exception:
                 _logger.exception("提交候选 %s 失败", cand.uuid)
-                self._safe_mark_failed(cand.id, reason="submit_failed")
+                self._safe_mark_failed(cand.id, "submit_failed")
                 totals["failed"] += 1
 
         if not futures:
@@ -444,31 +692,62 @@ class ImportService:
                 cand = futures[fut]
                 _logger.error("候选 %s 处理超时（>%.0fs）", cand.uuid, timeout)
                 fut.cancel()  # 尽力而为；进程池任务未必能真正中断
-                self._safe_mark_failed(cand.id, reason="timeout")
+                self._safe_mark_failed(cand.id, "timeout")
                 totals["timeout"] += 1
 
     def _handle_result(self, cand, fut, totals) -> None:
+        """回收单个候选的三态结果。
+
+        分派规则（与 :class:`ProcessResult` 一一对应）：
+
+        * ``skip``   → ``SKIPPED``（不是失败，计数进 skipped，reason 只写日志）；
+        * ``fail``   → ``FAILED``（走 ``_safe_mark_failed``，依赖状态机放行
+          ``PENDING → FAILED``——当前链路不 claim，候选就是 PENDING）；
+        * ``ok``     → ``finalize_candidate``；返回 ``None`` 时再由候选终态区分
+          ``SKIPPED``（唯一约束冲突 / 重复导入）与 ``FAILED``（真失败）。
+        """
         try:
-            asset_dto = fut.result()  # 已经 done 或 cancelled，不会阻塞
+            result = fut.result()  # 已经 done 或 cancelled，不会阻塞
         except FutureTimeoutError:
             # 保留兜底：wait 循环之外的路径（例如未来有别的调用方）也会走这里。
             _logger.error("候选 %s 处理超时", cand.uuid)
             fut.cancel()
-            self._safe_mark_failed(cand.id, reason="timeout")
+            self._safe_mark_failed(cand.id, "timeout")
             totals["timeout"] += 1
             return
         except Exception:
-            _logger.exception("候选 %s 执行异常", cand.uuid)
-            self._safe_mark_failed(cand.id, reason="process_error")
+            _logger.exception("候选 %s 执行异常 (worker_exception)", cand.uuid)
+            self._safe_mark_failed(cand.id, "worker_exception")
             totals["failed"] += 1
             return
 
-        if asset_dto is None:
-            self._safe_mark_failed(cand.id, reason="no_payload")
+        if not isinstance(result, ProcessResult):
+            # 旧契约（Optional[AssetCreateDTO]）兜底：不应发生，但语义上
+            # None 现在明确属于失败而不是"跳过"。
+            _logger.error("候选 %s 返回了非 ProcessResult 结果: %r", cand.uuid, result)
+            self._safe_mark_failed(cand.id, "bad_result")
             totals["failed"] += 1
             return
 
-        self._finalize(cand, asset_dto, totals)
+        if result.status == "skip":
+            self._safe_mark_skipped(cand.id, result.reason or "unknown")
+            totals["skipped"] += 1
+            return
+
+        if result.status == "fail":
+            self._safe_mark_failed(cand.id, result.reason or "process_error")
+            totals["failed"] += 1
+            return
+
+        # status == "ok"
+        if result.dto is None:
+            # 契约要求 ok 必带 dto；防御性降级为失败，避免 finalize 里抛 TypeError。
+            _logger.error("候选 %s 返回 ok 但缺少 dto", cand.uuid)
+            self._safe_mark_failed(cand.id, "no_payload")
+            totals["failed"] += 1
+            return
+
+        self._finalize(cand, result.dto, totals)
 
     def _finalize(self, cand, asset_dto: AssetCreateDTO, totals: Dict[str, int]) -> None:
         try:
@@ -499,9 +778,67 @@ class ImportService:
             _logger.error("插入资产失败: 候选 %s status=%s", cand.uuid, status)
 
     def _safe_mark_failed(self, candidate_id, reason: str) -> None:
+        """把候选置为 FAILED；失败只记日志，不再向上抛。
+
+        与 :meth:`_safe_mark_skipped` 对称：走 repo 的 ``mark_candidate_failed``
+        （状态机已放行 ``PENDING → FAILED`` 与 ``PROCESSING → FAILED``；
+        当前链路不 claim，候选是 PENDING，改前缺少这条转移会让失败候选
+        永远停在 pending、被下一轮反复捞出重试）。
+
+        ``reason`` 只落日志——本任务不新增 DB 列。
+        """
         try:
             self._repo.mark_candidate_failed(candidate_id)
+            _logger.warning(
+                "candidate %s failed (status=failed, reason=%s)",
+                candidate_id, reason,
+            )
         except Exception:
             _logger.exception(
-                "标记候选 %s 失败状态出错 (reason=%s)", candidate_id, reason,
+                "mark failed 也失败，候选停在原状态 "
+                "(recover_stale_candidates 会在超时后回收) cand=%s reason=%s",
+                candidate_id, reason,
             )
+
+    def _safe_mark_skipped(self, candidate_id, reason: str) -> None:
+        """把候选置为 SKIPPED；失败时降级到 FAILED 并记日志。
+
+        走 repo 的 ``update_candidate_status``（状态机已放行
+        ``PENDING → SKIPPED`` 与 ``PROCESSING → SKIPPED``）。
+
+        ``skip_reason`` **只落日志**——候选表没有 skip_reason 列，本次也不加。
+        UI 侧统一用 ``status=SKIPPED`` 识别"跳过"，与"重复导入"
+        （finalize 内部置 SKIPPED）在日志层面用 reason 区分。
+        """
+        try:
+            self._repo.update_candidate_status(candidate_id, CandidateStatus.SKIPPED)
+            _logger.info(
+                "candidate %s skipped (status=skipped, reason=%s)",
+                candidate_id, reason,
+            )
+        except Exception:
+            _logger.exception("标记候选 %s 为跳过失败，降级为失败", candidate_id)
+            try:
+                self._repo.mark_candidate_failed(candidate_id)
+            except Exception:
+                _logger.exception("降级 mark failed 也失败 cand=%s", candidate_id)
+
+    def _load_source_map(self) -> Dict[int, IngestSource]:
+        """构建 ``{source_id: IngestSource}`` 内存快照（每轮一次）。
+
+        为什么不在候选表里冗余 type_check 列：``candidate.source_id`` 已能
+        反查到源配置，内存快照足够；进程池里不查 DB，所以 type_check 只能在
+        **提交任务时**从快照取出，作为参数传给 ``process_candidate``。
+
+        取不到（未注入 source_repo / DB 抖动）时返回空 dict，调用侧
+        fallback 到 ``SUFFIX``，不影响导入主流程。
+        """
+        if self._source_repo is None:
+            return {}
+        try:
+            return {s.id: s for s in self._source_repo.get_source_candidates()}
+        except Exception:
+            _logger.exception(
+                "加载 source 快照失败，本轮 type_check 全部降级为 suffix",
+            )
+            return {}

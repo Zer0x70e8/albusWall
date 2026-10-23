@@ -36,6 +36,36 @@
 - 枚举值域应与 schema 约束一致；不在 schema 值域内的成员（如 `FileTypeCheckMode.NONE`）只是
   Python 侧哨兵，不得靠它落库。
 
+### 值域变更与老库升级（`file_type_check` 先例）
+
+SQLite 的 `CHECK` 约束**无法 ALTER**，所以"加一个枚举值"必然同时动三处：枚举成员、
+`is_void()` 白名单口径、schema 白名单。以 `ingest_source.chk_file_type_check` 从
+`('suffix','magic')` 扩到 `('suffix','magic','off','magic_lax')` 为例：
+
+- **存储层变 / 不变**：只改 `chk_file_type_check` 白名单。`asset_candidate_cache` **不**加
+  `type_check` / `skip_reason` 列（`candidate.source_id` 已能反查源配置，`type_check` 由
+  `ImportService` 每轮内存快照带给进程池）；`assets` / `ingest_source` 其他列、索引、触发器、
+  FK 全不动；**不迁移任何数据**（历史 `file_types` 的 `"jpg"` / `".jpg"` / `"*.jpg"` 与脏路径
+  都只在读取路径归一）。
+- **老库红线**：新库直接生效；老库沿用 `suffix` / `magic` 完全兼容，但写入 `off` /
+  `magic_lax` 会被旧 `CHECK` 拒绝（`IntegrityError`）。升级前必须明确选择**删库重建**，或
+  **接受新值在该库不可用**。当前仓库没有迁移框架（`infrastructure/database/connector.py`
+  只有 `SCHEMA_VERSION` 注释提到 `_run_migrations`，函数并不存在），因此不提供 migration
+  文件；真要做时按 SQLite 12-step 重建表并同步版本判断。
+- **哨兵不放行**：`FileTypeCheckMode.NONE` 仍只是 Python 侧哨兵；`is_void()` 用"排除哨兵"
+  （`is NONE`）而不是白名单，保证新增成员默认放行（见 5.1）。
+
+### 候选缓存批量插入的返回值口径
+
+`ImportRepository.create_candidate_cache_batch` 返回的是**提交尝试数**（源存活过滤后的
+`kept`），不是 `COUNT(*)` 增量：SQL 是 `INSERT OR IGNORE`，撞 `(source_id, path)` 唯一索引的
+重复行、以及违约列约束的行（典型：`mime_type=None` 撞 `mime_type TEXT NOT NULL`）都会被
+**静默丢弃**。
+
+- "调用了但表里没多出行"要先查 `OR IGNORE` 吞行，**不要**误判为事务未提交——
+  `BaseRepository._transaction` 是标准 `@contextmanager`，块内 `return` 会走正常路径 commit。
+- `AssetCandidateCacheDTO.mime_type` 声明为 `str`，传 `None` 属调用方违约（会被静默吞掉）。
+
 ## 二、异常
 
 ### 位置
@@ -81,26 +111,33 @@
 
 ### 5.1 `FileTypeCheckMode.NONE` 与 `IngestSource.is_void()`
 
-- 已拍板 **B：显式白名单**。`is_void()` 改为 `file_type_check not in (SUFFIX, MAGIC)` → void。
+- 现状（**v0.1.3 改判**）：`is_void()` 改为 **排除哨兵** `if self.file_type_check is FileTypeCheckMode.NONE: return True`。
+- 早期方案 B（显式白名单 `not in (SUFFIX, MAGIC)`）在新增 `OFF` / `MAGIC_LAX` 时会把合法配置判成 void，
+  因此改为排除哨兵：新增成员默认放行，只有 `NONE` 视为"配置不完整"。
 - 理由：删 `_missing_` 后读路径（`coerce_enum` 默认 `SUFFIX`）拿不到 `NONE`，schema 的
-  `CHECK (file_type_check IN ('suffix','magic'))` 也不允许 `NONE` 落库；白名单与 `is NONE` 行为等价，
-  但自解释，且对未来新增成员默认收紧。
-- 仍未决：若将来 `NONE` 代表「关闭文件类型检查」（合法意图），再决定是否让它进入 schema 值域，
-  并同步调整 `is_void()` 语义与读降级口径。
+  `CHECK (file_type_check IN ('suffix','magic','off','magic_lax'))` 也不允许 `NONE` 落库。
+- 已落地：`OFF = "off"`（不校验，mime 用 guess，表达"归档目录全都要"）与
+  `MAGIC_LAX = "magic_lax"`（读魔数识别不出 → 接受并降级 `application/octet-stream`）。
+- 仍未决：`OFF` 与 `SUFFIX` 当前行为一致，将来给 `SUFFIX` 加更严格校验时再区分二者。
 
-### 5.2 `trigger_config.update_mode` 的 `str` / `list[str]` 形态
+### 5.2 `trigger_config.update_mode` 的形态
 
-- 状态：**本阶段不改形态，只留 TODO**。
-- 现状（两形态分工，非两套写入路径）：
-    - **存储形态**：`IngestSourceFormData.to_trigger_config()` 恒写**单值 `str`**，是唯一存储出口；
-    - **运行时形态**：`TriggerConfig.update_mode: list[UpdateMode]`，`from_dict` 把 `str` 包成单元素
-      列表，`SchedulerService.active_modes()` 再归一成 frozenset，兼容历史多值 JSON。
-- 遗留隐患：`TriggerConfig.__post_init__` 未归一化 `str`，`to_dict()` 对 `str` 用 `list()` 会拆成字符；
-  统一形态时一并处理。
-- 未决选项：A 统一 `str` / B 统一 `list[str]` / C 维持两形态并文档化。
-- 决定时机：等「文件类型检查」设计落地、确认是否需要表达「多模式并存」后再定。
-- 代码锚点：`dto/source.py` `IngestSourceFormData.to_trigger_config`、`dto/trigger.py`
-  `TriggerConfig.update_mode`（均已留 TODO）。
+- 状态：**已拍板（原「待定」撤销）——统一为单值枚举 `UpdateMode`**。
+- 存储形态：`trigger_config` JSON 里的 `update_mode` 恒为**单值字符串**（`"manual"` / `"scheduled_time"` /
+  `"interval_time"` / `"device_trigger"`），与 schema 注释一致；唯一写出口仍是
+  `IngestSourceFormData.to_trigger_config()`。
+- 运行时形态：`TriggerConfig.update_mode: UpdateMode`（单值），与存储一一对应，不再有 `list[UpdateMode]`。
+  `from_dict` / `__post_init__` 经 `coerce_enum` 归一（`str` → 枚举，未知 / NULL → `MANUAL`）。
+- 已删除的旧形态（不留过渡码）：`list[UpdateMode]` 字段、`SchedulerService.active_modes()` /
+  `_active_modes()` 归一函数、`from_dict` 把 `str` 包成列表、`_apply_trigger_config_to_form` 对
+  `list` / `tuple` 的兼容分支。历史多值 JSON 不再被理解，值域外的值一律由 `coerce_enum` 降级为 `MANUAL`。
+- 判断口径：调度 / 设备触发一律对单值直接判断 —— `config.update_mode in SCHEDULED_MODES`
+  （`SCHEDULED_MODES = {SCHEDULED_TIME, INTERVAL_TIME}`，定义在 `infrastructure/trigger/scheduler.py`）、
+  `config.update_mode is UpdateMode.DEVICE_TRIGGER`。语义上「多模式并存」不再支持，唯一触发方式由
+  `IngestSourceFormData.to_trigger_config()` 的优先级规则（device_trigger 优先）决定。
+- 代码锚点：`dto/trigger.py` `TriggerConfig`、`dto/source.py` `IngestSourceFormData.to_trigger_config` /
+  `_apply_trigger_config_to_form`、`infrastructure/trigger/scheduler.py` `SCHEDULED_MODES`、
+  `infrastructure/trigger/trigger.py` 的两个 `_filter_*_configs`。
 
 ## 六、文档维护
 

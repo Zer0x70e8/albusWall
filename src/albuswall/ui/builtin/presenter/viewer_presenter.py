@@ -1,31 +1,42 @@
 #
-""""""
+"""详情页 presenter（异步加载、uuid-only）。
+
+职责仅限于**会话编排**：会话管理 → 定位 → 取数 → 推视图 → 拉图。
+写操作（收藏 / 软删 / 恢复）走 repo，完成后 ``refresh()`` 从库里追平 UI，
+再广播 ``assets_changed`` 让外层刷新。
+
+线程：大图由 ``ImageLoader`` 在后台线程解码，回调用 token 对齐，
+过期 token 直接丢弃。
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from logging import getLogger
-from typing import TYPE_CHECKING, Any, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID, uuid4
 
 from albuswall.common.enums import ThumbSpec
+from albuswall.log import getLogger
 from albuswall.services.view import SCOPE_DELETED
 
-from ..model.metadata_model import MetadataModel
 from ..delegate.metadata_delegate import MetadataDelegate
+from ..model.metadata_model import MetadataModel
+from ..utils.signal_adapter import SignalAdapter
 from ..widgets.image_loader import (
-    ImageLoader, PixmapCache, get_loader, get_cache,
+    ImageLoader,
+    PixmapCache,
+    get_cache,
+    get_loader,
 )
 
 if TYPE_CHECKING:
-    from PySide6.QtCore import SignalInstance
-    from PySide6.QtGui import QPixmap
-
     from albuswall.dto.album import AssetDTO
-    from albuswall.services import ViewService, ThumbnailService
     from albuswall.repositories import AssetRepository
+    from albuswall.services import ThumbnailService, ViewService
 
     from ..window.detail import Detail
+
+__all__ = ["ViewerContext", "ViewerPresenter"]
 
 _logger = getLogger(__name__)
 
@@ -61,15 +72,15 @@ class ViewerPresenter:
             self,
             view: "Detail",
             view_service: "ViewService",
-            thumb_service: "ThumbnailService",
-            asset_service: "AssetRepository",
+            thumb_service: Optional["ThumbnailService"],
+            asset_service: Optional["AssetRepository"],
             loader: "ImageLoader | None" = None,
             cache: "PixmapCache | None" = None,
     ) -> None:
         self.view: "Detail" = view
-        self.view_service: "ViewService" = view_service
-        self.thumbnail_service: "ThumbnailService" = thumb_service
-        self.asset_service: "AssetRepository" = asset_service
+        self._view_service: "ViewService" = view_service
+        self._thumbnail_service: Optional["ThumbnailService"] = thumb_service
+        self._asset_service: Optional["AssetRepository"] = asset_service
 
         self.metadata_model = MetadataModel()
         self.metadata_delegate = MetadataDelegate()
@@ -82,6 +93,8 @@ class ViewerPresenter:
         self._next_uuid: Optional[str] = None
         self._load_token: Optional[str] = None
 
+        #: 视图 + 加载器共用一个 adapter，teardown 一句清场。
+        self._adapter = SignalAdapter()
         self._connected: bool = False
         self._loader_connected: bool = False
 
@@ -102,7 +115,9 @@ class ViewerPresenter:
         asset_uuid = str(ctx.current_asset_uuid)
 
         # 1) 定位邻居（顺带缓存翻页上下文）
-        prev_uuid, next_uuid = self._resolve_neighbours(ctx.album_uuid, asset_uuid)
+        prev_uuid, next_uuid = self._resolve_neighbours(
+            ctx.album_uuid, asset_uuid,
+        )
 
         # 2) 取数（DTO + 磁盘路径）
         dto, full_path = self._load_asset_snapshot(asset_uuid, include_deleted)
@@ -163,18 +178,13 @@ class ViewerPresenter:
             include_deleted=self._ctx.include_deleted,
         ))
 
-    def hide_detail(self) -> None:
-        """把详情视图从栈顶弹出 / 隐藏（动画交由 UI 处理）。"""
-        ...
-
-    def setup(self, _) -> None:
+    def setup(self, _=None) -> None:
         self.view.panel.view.setModel(self.metadata_model)
         self.view.panel.view.setItemDelegate(self.metadata_delegate)
 
     def teardown(self) -> None:
         self._cancel_current_load()
         self._disconnect_signals()
-        self._disconnect_loader()
 
         self._ctx = None
         self._is_favorite = False
@@ -188,10 +198,10 @@ class ViewerPresenter:
             self, asset_uuid: str, include_deleted: bool,
     ) -> tuple[Optional["AssetDTO"], Optional[str]]:
         """一次性取回当前资产的 DTO 与磁盘路径（``refresh()`` 复用）。"""
-        dto = self.view_service.get_asset(
+        dto = self._view_service.get_asset(
             asset_uuid, include_deleted=include_deleted,
         )
-        full_path = self.view_service.get_asset_full_path(
+        full_path = self._view_service.get_asset_full_path(
             asset_uuid, include_deleted=include_deleted,
         )
         return dto, full_path
@@ -218,20 +228,20 @@ class ViewerPresenter:
         self._cancel_current_load()
         self._ctx = ctx
         self._ensure_connected()
-        self._ensure_loader_connected()
 
     def _resolve_include_deleted(self, ctx: ViewerContext) -> bool:
         """与 PresenterManager 同口径：Trash 判定走 get_scope。"""
         return (
                 ctx.include_deleted
-                or self.view_service.get_scope(ctx.album_uuid) == SCOPE_DELETED
+                or self._view_service.get_scope(ctx.album_uuid) == SCOPE_DELETED
         )
 
     def _resolve_neighbours(
             self, album_uuid: UUID, asset_uuid: str,
     ) -> tuple[Optional[str], Optional[str]]:
-        prev_uuid, next_uuid, index, total = \
-            self.view_service.get_asset_neighbours(album_uuid, asset_uuid)
+        prev_uuid, next_uuid, index, total = (
+            self._view_service.get_asset_neighbours(album_uuid, asset_uuid)
+        )
         prev_s = str(prev_uuid) if prev_uuid else None
         next_s = str(next_uuid) if next_uuid else None
         self._next_uuid = next_s
@@ -247,18 +257,19 @@ class ViewerPresenter:
             self, album_uuid: UUID, current_uuid: str, include_deleted: bool,
     ) -> None:
         asset_uuids = [
-            str(u) for u in self.view_service.get_asset_uuids(album_uuid)
+            str(u) for u in self._view_service.get_asset_uuids(album_uuid)
         ]
-        thumb_map = (
-            self.thumbnail_service.get_thumbnail_paths(asset_uuids, ThumbSpec.SMALL)
-            if asset_uuids else {}
-        )
+        thumb_map = {}
+        if asset_uuids and self._thumbnail_service is not None:
+            thumb_map = self._thumbnail_service.get_thumbnail_paths(
+                asset_uuids, ThumbSpec.SMALL,
+            )
         self.view.set_navigation_items(
             asset_uuids=asset_uuids,
             thumb_map=thumb_map,
             current_asset_uuid=current_uuid,
             include_deleted=include_deleted,
-            thumb_service=self.thumbnail_service,
+            thumb_service=self._thumbnail_service,
         )
 
     # ================================================================== #
@@ -298,7 +309,7 @@ class ViewerPresenter:
             if neighbour_uuid is None:
                 continue
             try:
-                path = self.view_service.get_asset_full_path(
+                path = self._view_service.get_asset_full_path(
                     neighbour_uuid, include_deleted=include_deleted,
                 )
             except Exception:
@@ -331,65 +342,40 @@ class ViewerPresenter:
             "is_favorite": dto.is_favorite,
             "is_deleted": dto.is_deleted,
             "deleted_at": dto.deleted_at,
-            # "exif": getattr(dto, "exif", None),
         }
 
     # ================================================================== #
     # 信号
     # ================================================================== #
-    def _view_signals(self) -> tuple[tuple["SignalInstance", Any], ...]:
-        return (
-            (self.view.close_requested, self._on_close_requested),
-            (self.view.asset_navigate_requested, self._on_asset_navigate_requested),
-            (self.view.favorite_toggle_requested, self._on_favorite_toggle),
-            (self.view.trash_requested, self._on_trash_requested),
-            (self.view.recover_requested, self._on_recover_requested),
-        )
-
-    def _loader_signals(self) -> tuple[tuple["SignalInstance", Any], ...]:
-        return (
-            (self._loader.full_loaded, self._on_full_loaded),
-            (self._loader.load_failed, self._on_load_failed),
-        )
-
-    @staticmethod
-    def _connect_pairs(pairs: Iterable[tuple["SignalInstance", Any]]) -> None:
-        for sig, slot in pairs:
-            try:
-                sig.connect(slot)
-            except (RuntimeError, TypeError):
-                _logger.debug("connect failed: %s", slot)
-
-    @staticmethod
-    def _disconnect_pairs(pairs: Iterable[tuple["SignalInstance", Any]]) -> None:
-        for sig, slot in pairs:
-            try:
-                sig.disconnect(slot)
-            except (RuntimeError, TypeError):
-                pass
-
     def _ensure_connected(self) -> None:
-        if self._connected:
-            return
-        self._connect_pairs(self._view_signals())
-        self._connected = True
+        """首次进入详情时接上视图与加载器的信号（幂等）。"""
+        if not self._connected:
+            self._adapter.connect(
+                self.view.close_requested, self._on_close_requested,
+            )
+            self._adapter.connect(
+                self.view.asset_navigate_requested,
+                self._on_asset_navigate_requested,
+            )
+            self._adapter.connect(
+                self.view.favorite_toggle_requested, self._on_favorite_toggle,
+            )
+            self._adapter.connect(
+                self.view.trash_requested, self._on_trash_requested,
+            )
+            self._adapter.connect(
+                self.view.recover_requested, self._on_recover_requested,
+            )
+            self._connected = True
 
-    def _ensure_loader_connected(self) -> None:
-        if self._loader_connected:
-            return
-        self._connect_pairs(self._loader_signals())
-        self._loader_connected = True
+        if not self._loader_connected:
+            self._adapter.connect(self._loader.full_loaded, self._on_full_loaded)
+            self._adapter.connect(self._loader.load_failed, self._on_load_failed)
+            self._loader_connected = True
 
     def _disconnect_signals(self) -> None:
-        if not self._connected:
-            return
-        self._disconnect_pairs(self._view_signals())
+        self._adapter.disconnect_all()
         self._connected = False
-
-    def _disconnect_loader(self) -> None:
-        if not self._loader_connected:
-            return
-        self._disconnect_pairs(self._loader_signals())
         self._loader_connected = False
 
     # ================================================================== #
@@ -405,7 +391,7 @@ class ViewerPresenter:
 
     # ---- 图片加载回调 --------------------------------------------------
 
-    def _on_full_loaded(self, token: str, pixmap: "QPixmap") -> None:
+    def _on_full_loaded(self, token: str, pixmap) -> None:
         if token != self._load_token:
             return
         self.view.image_viewer.set_pixmap(pixmap)
@@ -423,12 +409,12 @@ class ViewerPresenter:
         ``target`` 由 View 层直接透传自 ``QPushButton.clicked(bool)``，
         即用户点击后的期望状态，presenter 不再自行取反。
         """
-        if self._ctx is None:
+        asset_uuid = self._current_uuid()
+        if asset_uuid is None or self._asset_service is None:
             return
-        asset_uuid = self._ctx.current_asset_uuid
 
         try:
-            affected = self.asset_service.set_favorite(asset_uuid, target)
+            affected = self._asset_service.set_favorite(asset_uuid, target)
         except Exception:
             _logger.exception("set_favorite failed: uuid=%s", asset_uuid)
             return
@@ -441,13 +427,13 @@ class ViewerPresenter:
 
     def _on_trash_requested(self) -> None:
         """垃圾桶按钮 → 软删 → 广播 → 跳下一张 / 关闭详情。"""
-        if self._ctx is None:
+        asset_uuid = self._current_uuid()
+        if asset_uuid is None or self._asset_service is None:
             return
-        asset_uuid = self._ctx.current_asset_uuid
         next_uuid = self._next_uuid
 
         try:
-            self.asset_service.soft_delete(asset_uuid)
+            self._asset_service.soft_delete(asset_uuid)
         except Exception:
             _logger.exception("soft_delete failed: uuid=%s", asset_uuid)
             return
@@ -461,12 +447,12 @@ class ViewerPresenter:
 
     def _on_recover_requested(self) -> None:
         """恢复按钮 → 从回收站还原 → ``refresh()`` 追平（当前资产仍在）。"""
-        if self._ctx is None:
+        asset_uuid = self._current_uuid()
+        if asset_uuid is None or self._asset_service is None:
             return
-        asset_uuid = self._ctx.current_asset_uuid
 
         try:
-            self.asset_service.restore(asset_uuid)
+            self._asset_service.restore(asset_uuid)
         except Exception:
             _logger.exception("restore failed: uuid=%s", asset_uuid)
             return
@@ -475,3 +461,7 @@ class ViewerPresenter:
         # 直接 refresh 更新 is_deleted / deleted_at 与按钮语义。
         self.refresh()
         self.view.notify_assets_changed([asset_uuid])
+
+    def _current_uuid(self) -> Optional[str]:
+        """当前会话的资产 uuid（无会话时为 None）。"""
+        return None if self._ctx is None else self._ctx.current_asset_uuid

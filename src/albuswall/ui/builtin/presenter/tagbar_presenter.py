@@ -1,5 +1,5 @@
 #
-"""TagBar Presenter。
+"""TagBar presenter。
 
 职责：
   · 把当前资产的标签列表灌进 chip model；
@@ -11,18 +11,22 @@
 
 from __future__ import annotations
 
-from logging import getLogger
-from typing import Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtCore import QObject, Signal
 
-from albuswall.ui.builtin.model.tag_chip_model import TagChipModel
-from albuswall.ui.builtin.model.tag_tree_model import TagTreeModel
+from albuswall.log import getLogger
 from albuswall.services.asset_tag import AssetTagError, AssetTagService
 from albuswall.services.tag import TagError, TagNameConflict, TagService
+from albuswall.ui.builtin.model.tag_chip_model import TagChipModel
+from albuswall.ui.builtin.model.tag_tree_model import TagTreeModel
+from albuswall.ui.builtin.utils.signal_adapter import SignalAdapter
 
-if __import__("typing").TYPE_CHECKING:
+if TYPE_CHECKING:
     from albuswall.ui.builtin.window.tagbar import TagBar
+
+__all__ = ["TagBarPresenter"]
 
 _logger = getLogger(__name__)
 
@@ -37,8 +41,8 @@ class TagBarPresenter(QObject):
             view: "TagBar",
             tag_service: TagService,
             asset_tag_service: AssetTagService,
-            current_asset_provider: Callable[[], str | None],
-            parent: QObject | None = None,
+            current_asset_provider: Callable[[], Optional[str]],
+            parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
         self._view = view
@@ -51,16 +55,19 @@ class TagBarPresenter(QObject):
         view.set_chip_model(self._chip_model)
         view.set_tree_model(self._tree_model)
 
+        self._adapter = SignalAdapter(self)
         self._connect()
 
     # ---------------- 绑定 ----------------
     def _connect(self) -> None:
         v = self._view
-        v.apply_requested.connect(self._on_apply_requested)
-        v.chip_activated.connect(self._on_chip_activated)
-        v.chip_remove_requested.connect(self._on_chip_remove_requested)
-        v.layer_tree_open_requested.connect(self.refresh_tree)
-        v.layer_tree_activated.connect(self._on_tree_activated)
+        self._adapter.connect(v.apply_requested, self._on_apply_requested)
+        self._adapter.connect(v.chip_activated, self._on_chip_activated)
+        self._adapter.connect(
+            v.chip_remove_requested, self._on_chip_remove_requested,
+        )
+        self._adapter.connect(v.layer_tree_open_requested, self.refresh_tree)
+        self._adapter.connect(v.layer_tree_activated, self._on_tree_activated)
 
     # ---------------- 刷新 ----------------
     def refresh(self) -> None:
@@ -89,6 +96,7 @@ class TagBarPresenter(QObject):
 
     # ---------------- 槽 ----------------
     def _on_apply_requested(self, text: str) -> None:
+        """新建标签并绑定到当前资产；重名时降级为绑定已有标签。"""
         asset_uuid = self._current_asset()
         if asset_uuid is None:
             return
@@ -99,7 +107,6 @@ class TagBarPresenter(QObject):
             if e.existing_uuid is None:
                 self.error_occurred.emit(f"标签已存在：{text}")
                 return
-            # 存在就降级为「绑定到已有标签」
             try:
                 result = self._asset_tag.add(asset_uuid, [e.existing_uuid])
             except AssetTagError as ae:
@@ -142,19 +149,9 @@ class TagBarPresenter(QObject):
             self.refresh()
             self.tags_changed.emit()
 
-    def setup(self, container) -> None:
-        pass
+    # ---------------- 生命周期 ----------------
+    def setup(self, _=None) -> None:
+        return None
 
     def teardown(self) -> None:
-        pairs = (
-            (self._view.apply_requested, self._on_apply_requested),
-            (self._view.chip_activated, self._on_chip_activated),
-            (self._view.chip_remove_requested, self._on_chip_remove_requested),
-            (self._view.layer_tree_open_requested, self.refresh_tree),
-            (self._view.layer_tree_activated, self._on_tree_activated),
-        )
-        for sig, slot in pairs:
-            try:
-                sig.disconnect(slot)
-            except (RuntimeError, TypeError):
-                pass
+        self._adapter.disconnect_all()

@@ -10,48 +10,56 @@
 --------
 manager 通过一对钩子管理本类：
 
-* ``setup(container)``   —— 注入 container 提供的依赖（这里只补 source_service）；
+* ``setup(container)``   —— 注入 container 提供的依赖（这里只补服务）；
 * ``teardown()``         —— 断开信号、清空会话状态。
 
 两者都必须幂等：manager 可能重复调用，或在构造后立刻调用。
 构造期已完成"能做的绑定"，``setup`` 只做 container 里才拿得到的补充。
+
+线程
+----
+后端 ``SourceExecutor`` / ``SourceTrashService`` 在工作线程里回调本类，
+所以回调只做一件事：把事件 emit 成一个 Qt 信号搬回主线程，绝不碰 UI。
 """
 
 from __future__ import annotations
 
-import logging
-from typing import TYPE_CHECKING, Any, Final, List, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
-from PySide6.QtCore import QObject, QModelIndex, Signal as QtSignal
+from PySide6.QtCore import QModelIndex, QObject
+from PySide6.QtCore import Signal as QtSignal
 from PySide6.QtWidgets import QMenu
 
-from albuswall.ui.builtin.model.source_card import CardItem, CardListModel
-from albuswall.ui.builtin.delegate.source_card import CardItemDelegate
 from albuswall.common.enums import FileTypeCheckMode
 from albuswall.dto.source import (
     MANUAL_SOURCE_ID,
-    IngestSource,  # ★ 原 IngestSourceViewDTO 已合并到 IngestSource
+    IngestSource,
     IngestSourceCreate,
     IngestSourceFormData,
     IngestSourceUpdate,
 )
-
-DRAFT_SOURCE_ID: Final[int] = -1
+from albuswall.log import getLogger
+from albuswall.ui.builtin.delegate.source_card import CardItemDelegate
+from albuswall.ui.builtin.model.source_card import CardItem, CardListModel
 
 if TYPE_CHECKING:
-    # ★ 读模型 IngestSource 与窗口类同名，这里重命名避免 TYPE_CHECKING 冲突
-    from ..window.source.core import IngestSource as IngestSourceView
     from albuswall.services import SourceService, SourceTrashService
 
-_logger = logging.getLogger(__name__)
+    # 读模型 IngestSource 与窗口类同名，这里重命名避免冲突
+    from ..window.source.core import IngestSource as IngestSourceView
+
+__all__ = ["DRAFT_SOURCE_ID", "IngestSourcePresenter"]
+
+_logger = getLogger(__name__)
+
+DRAFT_SOURCE_ID: Final[int] = -1
 
 
 # noinspection broad-exception
 class IngestSourcePresenter(QObject):
     """IngestSource 的 presenter。"""
 
-    # 线程桥：后端 SourceExecutor 在工作线程 emit scan_finished，
-    # 我们在这里把它转成一个 Qt 信号，让 UI 槽函数在主线程执行。
+    # 线程桥：后端在工作线程 emit，我们转成 Qt 信号让 UI 槽在主线程执行。
     _scan_finished_queued = QtSignal(object)
     _refresh_queued = QtSignal()  # 无载荷刷新桥
 
@@ -64,20 +72,21 @@ class IngestSourcePresenter(QObject):
     ) -> None:
         super().__init__(parent)
 
-        # ---- 视图 ----
         self._view = view
 
         # ---- 业务服务（唯一数据入口）----
         self._service: Optional["SourceService"] = source_service
         self._trash: Optional["SourceTrashService"] = trash_service
 
-        # ---- container 引用（setup 里保存，供后续懒取依赖；可空）----
-        self._container: Optional[Any] = None
+        # 两条后端信号各自是否已连上（分开记，缺一个不影响另一个）
+        self._scan_bound: bool = False
+        self._trash_bound: bool = False
+
         self._torn_down: bool = False
 
         # ---- 会话状态 ----
         self._draft_dto: Optional[IngestSource] = None
-        self._row_source_ids: List[int] = []
+        self._row_source_ids: list[int] = []
         self._current_source_id: Optional[int] = None
 
         # ---- 数据层 ----
@@ -91,7 +100,8 @@ class IngestSourcePresenter(QObject):
 
         # ---- 连线 ----
         self._wire_view_signals()
-        self._bind_service(self._service, self._trash)
+        self._bind_service(self._service)
+        self._bind_trash(self._trash)
 
         # ---- 首次从数据库加载 ----
         self.reload()
@@ -117,40 +127,29 @@ class IngestSourcePresenter(QObject):
         """
         if self._service is service:
             return
-        self._unbind_service(self._service, self._trash)
+        self._unbind_service(self._service)
         self._service = service
-        self._bind_service(service, self._trash)
+        self._bind_service(service)
         self.reload()
 
     # ------------------------------------------------------- manager 生命周期
-    def setup(self, container: Any) -> None:
-        """manager 调用：从 container 注入依赖。幂等。
+    def setup(self, container) -> None:
+        """manager 调用：从 container 补注入依赖。幂等。
 
         构造期已经拿到了 view（manager 能构造出本实例说明这条链是通的），
-        这里只补 container 提供的 source_service —— 若构造时已经注入，
-        则本方法近似 no-op；若构造时未注入，这里补上并立即 reload。
+        这里只补 container 提供的服务 —— 若构造时已经注入，则近似 no-op；
+        若构造时未注入，这里补上并立即 reload。
         """
-        self._container = container
-
         if self._service is None:
-            try:
-                service = container.get("source_service")
-            except Exception:
-                _logger.debug(
-                    "container 未提供 source_service（忽略）", exc_info=True
-                )
-                service = None
+            service = container.get("source_service", None)
             if service is not None:
                 self._service = service
-                self._bind_service(service, self._trash)
+                self._bind_service(service)
                 self.reload()
 
         if self._trash is None:
-            try:
-                self._trash = container.get("source_trash_service")
-            except Exception:
-                _logger.debug("container 未提供 source_trash_service（忽略）",
-                              exc_info=True)
+            self._trash = container.get("source_trash_service", None)
+            self._bind_trash(self._trash)
 
     def teardown(self) -> None:
         """manager 调用：断开信号、清空会话状态。幂等。
@@ -162,7 +161,8 @@ class IngestSourcePresenter(QObject):
             return
         self._torn_down = True
 
-        self._unbind_service(self._service, self._trash)
+        self._unbind_service(self._service)
+        self._unbind_trash(self._trash)
 
         # 丢弃未 apply 的草稿与会话指针，避免误用
         self._draft_dto = None
@@ -170,47 +170,53 @@ class IngestSourcePresenter(QObject):
         self._row_source_ids = []
 
     # ------------------------------------------------------------ 服务绑定
-    def _bind_service(
-            self,
-            service: Optional["SourceService"],
-            trash_service: Optional["SourceTrashService"],
-    ) -> None:
-        if service is None or trash_service is None:
+    def _bind_service(self, service: Optional["SourceService"]) -> None:
+        """订阅源码扫描完成（列表无需刷新，仅用于观测）。"""
+        if service is None or self._scan_bound:
             return
         try:
             service.scan_finished.connect(self._on_scan_finished_backend)
+            self._scan_bound = True
         except Exception:
             _logger.debug("service.scan_finished 订阅失败（忽略）", exc_info=True)
-        # ★ 新增
-        try:
-            trash_service.sources_changed.connect(self._on_sources_changed_backend)
-        except Exception:
-            _logger.debug("service.sources_changed 订阅失败（忽略）", exc_info=True)
 
-    def _unbind_service(
-            self,
-            service: Optional["SourceService"],
-            trash_service: Optional["SourceTrashService"],
-    ) -> None:
-        if service is None or trash_service is None:
+    def _unbind_service(self, service: Optional["SourceService"]) -> None:
+        if service is None or not self._scan_bound:
             return
         try:
             service.scan_finished.disconnect(self._on_scan_finished_backend)
         except Exception:
             _logger.debug("service.scan_finished 退订失败（忽略）", exc_info=True)
-        # ★ 新增
+        self._scan_bound = False
+
+    def _bind_trash(self, trash_service: Optional["SourceTrashService"]) -> None:
+        """订阅回收站的源变更（软删 / 恢复 / 清空）。"""
+        if trash_service is None or self._trash_bound:
+            return
         try:
-            trash_service.sources_changed.disconnect(self._on_sources_changed_backend)
+            trash_service.sources_changed.connect(self._on_sources_changed_backend)
+            self._trash_bound = True
+        except Exception:
+            _logger.debug("service.sources_changed 订阅失败（忽略）", exc_info=True)
+
+    def _unbind_trash(self, trash_service: Optional["SourceTrashService"]) -> None:
+        if trash_service is None or not self._trash_bound:
+            return
+        try:
+            trash_service.sources_changed.disconnect(
+                self._on_sources_changed_backend,
+            )
         except Exception:
             _logger.debug("service.sources_changed 退订失败（忽略）", exc_info=True)
+        self._trash_bound = False
 
     # ------------------------------------------------------------ 数据加载
     def reload(self) -> None:
         """从数据库全量拉取导入源，刷新卡片列表。"""
-        items: List[CardItem] = []
-        ids: List[int] = []
+        items: list[CardItem] = []
+        ids: list[int] = []
 
-        # ★ 草稿固定放第 0 行
+        # 草稿固定放第 0 行
         if self._draft_dto is not None:
             items.append(self._dto_to_card_item(self._draft_dto))
             ids.append(DRAFT_SOURCE_ID)
@@ -237,21 +243,29 @@ class IngestSourcePresenter(QObject):
     @staticmethod
     def _dto_to_card_item(dto: IngestSource) -> CardItem:
         """IngestSource -> CardItem 的纯函数映射。"""
-        # ★ 复用 DTO 自带的 display_name 兜底逻辑
-        title = dto.display_name
         return CardItem(
-            title=title,
+            title=dto.display_name,  # DTO 自带 display_name 兜底
             description=dto.description or "",
             path=dto.source_path or "",
             tags=list(dto.tags or []),
         )
 
+    def _dto_for_id(self, source_id: int) -> Optional[IngestSource]:
+        if self._service is None:
+            return None
+        try:
+            return self._service.get_source(source_id)
+        except Exception:
+            _logger.exception("查询导入源失败 (id=%s)", source_id)
+            return None
+
     # ------------------------------------------------------------ 信号连线
     def _wire_view_signals(self) -> None:
+        # 顶部 ✕ 的关闭动作由 WindowPresenter 接（overlay.show_blank），
+        # 这里不再重复接一条空槽。
         self._view.card_clicked.connect(self._on_card_clicked)
         self._view.add_button.clicked.connect(self._on_add_requested)
         self._view.apply_button.clicked.connect(self._on_apply_requested)
-        self._view.close_button.clicked.connect(self._on_close_requested)
         self._view.detail_closed.connect(self._on_detail_closed)
         self._view.context_menu_requested.connect(self._on_context_menu_requested)
 
@@ -263,39 +277,24 @@ class IngestSourcePresenter(QObject):
         source_id = self._row_source_ids[row]
         self._current_source_id = source_id
 
-        # ★ 草稿：喂内存 DTO
+        # 草稿：喂内存 DTO
         if source_id == DRAFT_SOURCE_ID:
             if self._draft_dto is not None:
                 self._populate_detail(self._draft_dto)
             return
 
-        if self._service is None:
-            return
-        dto = self._service.get_source(source_id)
+        dto = self._dto_for_id(source_id)
         if dto is None:
             # 源已消失（被别处删除）→ 全量刷新
             self.reload()
             return
         self._populate_detail(dto)
 
-    # noinspection calling-non-callable
     def _populate_detail(self, dto: IngestSource) -> None:
-        detail = self._view.detail_widget
-        setter = getattr(detail, "set_form_data", None)
-        if callable(setter):
-            setter(dto.to_form_data())
-            return
-        # 兼容老接口（可删）
-        setter = getattr(detail, "set_source_dto", None)
-        if callable(setter):
-            setter(dto)
+        self._view.detail_widget.set_form_data(dto.to_form_data())
 
-    # noinspection calling-non-callable
     def _clear_detail(self) -> None:
-        detail = self._view.detail_widget
-        setter = getattr(detail, "clear", None)
-        if callable(setter):
-            setter()
+        self._view.detail_widget.clear()
 
     # ------------------------------------------------------------------
     # 写操作（供 view / 外部调用）
@@ -310,7 +309,7 @@ class IngestSourcePresenter(QObject):
         except Exception:
             _logger.exception("创建导入源失败")
             return None
-        # ★ service 在关闭状态下返回 None；契约已是 Optional[int]
+        # service 在关闭状态下返回 None；契约已是 Optional[int]
         if new_id is None:
             return None
         self.reload()
@@ -328,10 +327,7 @@ class IngestSourcePresenter(QObject):
             return False
         if ok:
             self.reload()
-            if source_id == self._current_source_id:
-                dto = self._service.get_source(source_id)
-                if dto is not None:
-                    self._populate_detail(dto)
+            self._refresh_detail_if_current(source_id)
         return ok
 
     def delete_source(self, source_id: int) -> bool:
@@ -340,7 +336,6 @@ class IngestSourcePresenter(QObject):
             _logger.warning("拒绝删除虚拟根 source(id=0)")
             return False
 
-        # ok = False
         if self._trash is not None:
             try:
                 ok = self._trash.delete_source(source_id)
@@ -388,21 +383,25 @@ class IngestSourcePresenter(QObject):
             return False
         if ok:
             self.reload()
-            # 如果当前详情页正是这条源，刷新一下（禁用不改变展示，但保持对称）
-            if source_id == self._current_source_id and self._service is not None:
-                dto = self._service.get_source(source_id)
-                if dto is not None:
-                    self._populate_detail(dto)
+            self._refresh_detail_if_current(source_id)
         return ok
+
+    def _refresh_detail_if_current(self, source_id: int) -> None:
+        """详情页正看着这条源时，把它从库里重新拉一遍。"""
+        if source_id != self._current_source_id:
+            return
+        dto = self._dto_for_id(source_id)
+        if dto is not None:
+            self._populate_detail(dto)
 
     # ------------------------------------------------------------ 表单桥
     @staticmethod
     def _form_to_update_patch(form: IngestSourceFormData) -> IngestSourceUpdate:
         """把表单快照组装成 PATCH DTO（全字段显式设置）。
 
-        `IngestSourceUpdate` 是 PATCH 语义（默认 UNSET），而表单是完整快照，
+        ``IngestSourceUpdate`` 是 PATCH 语义（默认 UNSET），而表单是完整快照，
         因此这里对每个字段都显式赋值。是否真正"变更"由 service 层的
-        `_source_changed` 决定 —— 展示字段（title/tags/…）变化不会触发重扫。
+        ``_source_changed`` 决定 —— 展示字段（title/tags/…）变化不会触发重扫。
 
         注意：表单**不**控制 ``disabled``，因此这里也不设置 —— 禁用走
         ``set_source_disabled``（菜单项），语义上是列表级的开关，不是详情页
@@ -410,6 +409,26 @@ class IngestSourcePresenter(QObject):
         """
         return IngestSourceUpdate(
             title=form.title or "",
+            description=form.description or None,
+            source_path=form.source_path or "",
+            target_path=form.target_path,
+            mount_point=form.mount_point,
+            auto_mount=form.auto_mount,
+            file_type_check=form.file_type_check,
+            file_types=list(form.file_types),
+            tags=list(form.tags),
+            subfolder_recursion=form.subfolder_recursion,
+            subfolder_recursion_depth=form.subfolder_recursion_depth,
+            trigger_config=form.to_trigger_config(),
+        )
+
+    @staticmethod
+    def _form_to_create_payload(
+            form: IngestSourceFormData, fallback_title: str,
+    ) -> IngestSourceCreate:
+        """表单快照 → 新建 DTO。"""
+        return IngestSourceCreate(
+            title=form.title or fallback_title,
             description=form.description or None,
             source_path=form.source_path or "",
             target_path=form.target_path,
@@ -433,7 +452,6 @@ class IngestSourcePresenter(QObject):
             self._focus_draft_row()
             return
 
-        # ★ IngestSourceViewDTO → IngestSource
         self._draft_dto = IngestSource(
             id=DRAFT_SOURCE_ID,
             title=self.tr("未命名导入源"),
@@ -456,92 +474,76 @@ class IngestSourcePresenter(QObject):
     def _focus_draft_row(self) -> None:
         if not self._row_source_ids or self._row_source_ids[0] != DRAFT_SOURCE_ID:
             return
-        idx = self._model.index(0, 0)
-        opener = getattr(self._view, "open_card", None)
-        if callable(opener):
-            # noinspection calling-non-callable
-            opener(idx)
-        else:
-            self._on_card_clicked(idx)
+        self._open_row(0)
 
     def _focus_source_by_id(self, source_id: int) -> None:
         try:
             row = self._row_source_ids.index(source_id)
         except ValueError:
             return
+        self._open_row(row)
+
+    def _open_row(self, row: int) -> None:
+        """让 view 打开第 ``row`` 张卡片（没有 open_card 时退化成点击）。"""
         idx = self._model.index(row, 0)
         opener = getattr(self._view, "open_card", None)
         if callable(opener):
-            # noinspection calling-non-callable
             opener(idx)
         else:
             self._on_card_clicked(idx)
 
     def _on_apply_requested(self) -> None:
+        """详情页"应用"：草稿态 create，普通态 patch。"""
         if self._service is None or self._current_source_id is None:
             return
 
-        detail = self._view.detail_widget
-        getter = getattr(detail, "get_form_data", None)
-        if not callable(getter):
-            _logger.debug("detail_widget 未提供 get_form_data()，apply 忽略")
-            return
+        form = self._view.detail_widget.get_form_data()
 
-        # noinspection calling-non-callable
-        form: IngestSourceFormData = getter()
-
-        # ★ 草稿态 → create
         if self._current_source_id == DRAFT_SOURCE_ID:
-            payload = IngestSourceCreate(
-                title=form.title or self.tr("未命名导入源"),
-                description=form.description or None,
-                source_path=form.source_path or "",
-                target_path=form.target_path,
-                mount_point=form.mount_point,
-                auto_mount=form.auto_mount,
-                file_type_check=form.file_type_check,
-                file_types=list(form.file_types),
-                tags=list(form.tags),
-                subfolder_recursion=form.subfolder_recursion,
-                subfolder_recursion_depth=form.subfolder_recursion_depth,
-                trigger_config=form.to_trigger_config(),
-            )
-            try:
-                new_id = self._service.create_source(payload)
-            except Exception:
-                _logger.exception("创建导入源失败")
-                return
-            if new_id is None:
-                return
-
-            self._draft_dto = None
-            self._current_source_id = new_id
-            self.reload()
-            self._focus_source_by_id(new_id)
+            self._create_from_draft(form)
             return
 
-        # ★ 普通态 → patch（DTO 层不提供 from_form_data，由 presenter 组装）
-        patch = self._form_to_update_patch(form)
-        # noinspection bad-argument-type
-        self.update_source(self._current_source_id, patch)
+        self.update_source(
+            self._current_source_id, self._form_to_update_patch(form),
+        )
 
-    def _on_close_requested(self) -> None:
-        """顶部 “✕”：关闭 / 从父容器移除本页面。纯 UI 动作。"""
-        # TODO: 与上层容器或路由协商关闭行为。
-        pass
+    def _create_from_draft(self, form: IngestSourceFormData) -> None:
+        """把草稿表单提交为一条新记录，成功后定位到新卡片。"""
+        payload = self._form_to_create_payload(form, self.tr("未命名导入源"))
+        try:
+            new_id = self._service.create_source(payload)
+        except Exception:
+            _logger.exception("创建导入源失败")
+            return
+        if new_id is None:
+            return
+
+        self._draft_dto = None
+        self._current_source_id = new_id
+        self.reload()
+        self._focus_source_by_id(new_id)
 
     # ------------------------------------------------------------ 后端事件
-    def _on_scan_finished_backend(self, event) -> None:
+    def _on_scan_finished_backend(self, _sender, *, event) -> None:
         """后端 SourceExecutor 在工作线程里回调。
 
-        ★ 绝不在此触碰 UI —— 只是把事件搬到主线程。
+        契约：``cb(sender: SourceExecutor, *, event: SourceScanFinished)``
+        （见 ``albuswall.utils.signals``）——sender 不关心，payload 具名。
+
+        绝不在此触碰 UI —— 只是把事件搬到主线程。
         """
-        # emit 是线程安全的；跨线程时 Qt 会自动走 QueuedConnection
         self._scan_finished_queued.emit(event)
 
     @staticmethod
     def _on_scan_finished_on_ui(event) -> None:
-        """在主线程里消费扫描完成事件（可安全刷新 UI）。"""
+        """在主线程里消费扫描完成事件（当前只观测，不刷新列表）。"""
+        if getattr(event, "skipped", False):
+            _logger.debug(
+                "source(id=%s) 已删除/失效，扫描跳过: seq=%s",
+                getattr(event, "source_id", None),
+                getattr(event, "task_seq", None),
+            )
+            return
         _logger.debug(
             "source(id=%s) 扫描完成: scanned=%s new=%s has_new=%s",
             getattr(event, "source_id", None),
@@ -549,8 +551,6 @@ class IngestSourcePresenter(QObject):
             getattr(event, "new_file_count", None),
             getattr(event, "has_new_content", None),
         )
-        # 如需在扫描后自动刷新列表，打开下面一行即可：
-        # self.reload()
 
     def _on_detail_closed(self) -> None:
         """关闭详情时，未 apply 的草稿直接丢弃。"""
@@ -567,57 +567,54 @@ class IngestSourcePresenter(QObject):
         source_id = self._row_source_ids[row]
 
         # 草稿行 / 虚拟根不参与 删除·禁用
-        if source_id == DRAFT_SOURCE_ID or source_id == MANUAL_SOURCE_ID:
+        if source_id in (DRAFT_SOURCE_ID, MANUAL_SOURCE_ID):
             return
 
-        # ★ 菜单标签需要看当前状态：已禁用则显示"启用"，否则显示"禁用"
-        currently_disabled = False
-        if self._service is not None:
-            dto = self._service.get_source(source_id)
-            if dto is not None:
-                currently_disabled = dto.disabled
+        self._exec_context_menu(source_id, global_pos)
+
+    def _exec_context_menu(self, source_id: int, global_pos) -> None:
+        """两态循环：
+
+            普通态: [删除]  [禁用/启用]
+            确认态: [恢复]  [确认删除]
+        """
+        dto = self._dto_for_id(source_id)
+        currently_disabled = bool(getattr(dto, "disabled", False))
         toggle_label = (
             self.tr("enable") if currently_disabled else self.tr("disable")
         )
 
-        # 两态循环：普通态 <-> 确认态
-        #   普通态: [删除]        [禁用/启用]
-        #   确认态: [恢复]        [确认删除]
         confirm_mode = False
         while True:
             menu = QMenu(self._view)
-
-            if not confirm_mode:
-                act_delete = menu.addAction(self.tr("delete"))
-                act_toggle = menu.addAction(toggle_label)
-            else:
+            if confirm_mode:
                 act_restore = menu.addAction(self.tr("recover"))
                 act_confirm = menu.addAction(self.tr("ensure deleted"))
+            else:
+                act_delete = menu.addAction(self.tr("delete"))
+                act_toggle = menu.addAction(toggle_label)
 
             chosen = menu.exec(global_pos)
-            # noinspection unreachable-code
             if chosen is None:
                 return
 
             if not confirm_mode:
-                # noinspection unbound-local-variable
                 if chosen is act_delete:
                     confirm_mode = True
                     continue
-                # noinspection unbound-local-variable
                 if chosen is act_toggle:
                     # 无状态 toggle：交给 service 按当前 DTO 决定方向
                     self._on_disable_requested(source_id)
                     return
-            else:
-                # noinspection unbound-local-variable
-                if chosen is act_restore:
-                    confirm_mode = False
-                    continue
-                # noinspection unbound-local-variable
-                if chosen is act_confirm:
-                    self.delete_source(source_id)
-                    return
+                continue
+
+            if chosen is act_restore:
+                confirm_mode = False
+                continue
+            if chosen is act_confirm:
+                self.delete_source(source_id)
+                return
+            return
 
     def _on_disable_requested(self, source_id: int) -> None:
         """禁用 / 启用导入源 —— 状态存 DB 列 ``ingest_source.disabled``。
@@ -626,21 +623,18 @@ class IngestSourcePresenter(QObject):
         ``enable_source`` / ``disable_source``。禁用后 service 会立刻把该源
         从调度跟踪集里剔除，DB 行保留（禁用 ≠ 删除）。
         """
-        if self._service is None:
-            return
-        dto = self._service.get_source(source_id)
+        dto = self._dto_for_id(source_id)
         if dto is None:
             _logger.debug("切换禁用状态时源已不存在 (id=%s)", source_id)
             return
         self.set_source_disabled(source_id, not dto.disabled)
 
     # ---- 后端线程调用：只 emit，绝不碰 UI ----
-    def _on_sources_changed_backend(self, *_args, **_kwargs) -> None:
+    def _on_sources_changed_backend(self, _sender, **_kwargs) -> None:
         """数据变更 → 转 Qt 信号搬回主线程。
 
-        * 用 *args/**kwargs 吞掉信号可能携带的任何参数——
-          `Signal.send(sender, **kwargs)` 会按 `cb(sender, **kwargs)` 调用，
-          这里不关心具体载荷。
+        * 契约是 ``cb(sender, *, source_id, kind)``；本槽不关心 sender 与
+          载荷（``_sender`` / ``**_kwargs`` 显式声明"我不关心"）。
         * emit 会因线程不同自动走 QueuedConnection，槽函数在 UI 线程执行。
         """
         self._refresh_queued.emit()

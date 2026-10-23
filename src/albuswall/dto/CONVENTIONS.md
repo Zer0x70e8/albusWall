@@ -149,8 +149,8 @@
 
 | # | 问题 | 状态 | 正文 |
 |---|------|------|------|
-| 1 | `FileTypeCheckMode.NONE` 与 `IngestSource.is_void()` 的联动 | 已拍板 B（显式白名单） | `common/CONVENTIONS.md` · 5.1 |
-| 2 | `trigger_config.update_mode` 的 `str` / `list[str]` 形态 | 本阶段不改形态，留 TODO | `common/CONVENTIONS.md` · 5.2 |
+| 1 | `FileTypeCheckMode.NONE` 与 `IngestSource.is_void()` 的联动 | 已拍板：排除哨兵（`is NONE` → void） | `common/CONVENTIONS.md` · 5.1 |
+| 2 | `trigger_config.update_mode` 的形态 | 已拍板：单值 `UpdateMode`（列表形态已删除） | `common/CONVENTIONS.md` · 5.2 |
 
 ## 三、例外
 
@@ -181,8 +181,10 @@
   `grep -rn "to_dict\\|as_dict" --include=*.py`
 - TriggerConfig.to_dict / to_json / trigger_config 的写入与存储调用点
   `grep -rn "TriggerConfig\\|trigger_config\\|to_json()" --include=*.py`
-- update_mode 的字符串/列表写入路径
+- update_mode 的单值形态与列表形态残留（列表形态应为 0）
   `grep -rn "update_mode" --include=*.py`
+- `active_modes` 归一函数残留（应为 0，统一走 `SCHEDULED_MODES` + 单值判断）
+  `grep -rn "active_modes" --include=*.py`
 - FileTypeCheckMode.NONE / _missing_ 的定义与使用点（`_missing_` 应为 0）
   `grep -rn "FileTypeCheckMode.NONE\\|_missing_" --include=*.py`
 - 旧别名 `to_json = dump_json` 残留（应为 0）
@@ -203,9 +205,9 @@
 [//]: # (修好了)
 
 - `AssetCreateDTO.is_deleted` 改 `bool` 会波及现有 `int` 绑定/写入点，需 grep 确认。
-- `TriggerConfig.update_mode` 与 `IngestSourceFormData.to_trigger_config()` 的两套形态**本阶段不改**，见
-  `common/CONVENTIONS.md` · 5.2（遗留 `__post_init__` 不归一化 `str` 的拆字符隐患）。
-- `FileTypeCheckMode.NONE` 与 `IngestSource.is_void()` 已按 `common/CONVENTIONS.md` · 5.1 拍板为**显式白名单**；
-  若 `NONE` 将来代表「关闭文件类型检查」，再同步调整语义与 schema 值域。
+- `TriggerConfig.update_mode` 已统一为**单值** `UpdateMode`（列表形态已删除），见
+  `common/CONVENTIONS.md` · 5.2；新增 / 修改触发方式时只动单值判断，不要复活 `list` 形态或归一函数。
+- `FileTypeCheckMode.NONE` 与 `IngestSource.is_void()` 已按 `common/CONVENTIONS.md` · 5.1 改判为**排除哨兵**；
+  `OFF` / `MAGIC_LAX` 是 schema 值域内的合法成员（v0.1.3 新增），不得再被 `is_void()` 判为不可用。
 - 删除 `_missing_` 后，任何 `EnumCls(未知值)` 直调都会抛 `ValueError`；读路径必须走 `coerce_enum`，不得依赖枚举自身降级。
 - TypedDict 全改 dataclass 后，`BackpressureEvent` 消费方原先的键存在性判断需改为 `is UNSET`，调用点需排查。

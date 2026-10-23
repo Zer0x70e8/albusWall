@@ -1,19 +1,49 @@
 #
-"""Configuration Unified Engine"""
+"""Configuration Unified Engine
+
+包含三块：
+
+- ``Resolver`` 的值视图：``StaticConfig``（只读）与 ``Configue``
+- 运行期回写：``Configue.set`` / ``flush`` / ``configure_persistence``
+
+回写（flush）语义见 ``Configue.flush`` 的 docstring：
+按 origin 把脏节点分组，逐文件用 ``ini_transform.transform`` + ``atomic_write``
+写回；单进程约定，不做多进程写保护，也不做外部修改检测。
+"""
 
 # import logging
+import atexit
+import os
+import threading
 import weakref
 from itertools import chain
-from typing import Optional, cast, Any, Callable, Iterator
+from pathlib import Path
+from typing import (
+    Iterable, Literal, Optional, cast, Any, Callable, Iterator,
+)
+
+import albuswall
+from albuswall.log import getLogger
 
 # import albuswall
+from .exceptions import ConfigError, ConfigueErrorSource
 from .resolver import Resolver
-
+from .utils.ini_parser import _deconvert
+from .utils.ini_transform import transform
 from .utils.namespace import Namespace
+
+_logger = getLogger(f"{albuswall.__name__}.configue")
+
+SaveMode = Literal["auto", "defer", "now"]
+AutosavePolicy = Literal["off", "manual", "atexit", "debounce"]
 
 
 class _Configue:
-    __slots__ = ("static", "dynamic", "resolver")
+    __slots__ = (
+        "static", "dynamic", "resolver",
+        "_persistence", "_debounce_interval", "_debounce_timer",
+        "_default_write_file", "_last_flush_error", "_flush_lock",
+    )
 
     # logger = logging.getLogger(f"{albuswall.__name__}.configue")
 
@@ -21,6 +51,14 @@ class _Configue:
         self.resolver = Resolver()
         self.static = StaticConfig(self.resolver)
         self.dynamic = DynamicConfig()
+
+        # ── 回写状态 ────────────────────────────
+        self._persistence: AutosavePolicy = "atexit"
+        self._debounce_interval: float = 0.5
+        self._debounce_timer: Optional[threading.Timer] = None
+        self._default_write_file: Optional[Path] = None
+        self._last_flush_error: Optional[ConfigError] = None
+        self._flush_lock = threading.RLock()
 
     def __str__(self):
         return "\n".join((
@@ -58,6 +96,276 @@ class Configue(_Configue):
         Configue._is_initialized = True
         super().__init__()
         self.dynamic._configue_ref = weakref.ref(self)
+        atexit.register(self._atexit_flush)
+
+    # ══════════════════════════════════════════════════
+    # 运行期写 + 回写
+    # ══════════════════════════════════════════════════
+    def set(
+            self,
+            section: str,
+            key: str,
+            value: Any,
+            *,
+            target: Optional[Path] = None,
+            save: SaveMode = "auto",
+    ) -> None:
+        """写入运行期值，并按持久化策略决定是否立即落盘。
+
+        Args:
+            section: 节名
+            key: 键名
+            value: 已类型化的值（回写时用 ``_deconvert`` 反解）
+            target: 显式指定写回文件；不给则按 origin 规则推导
+            save: 持久化时机
+                - ``"auto"``（默认）：按 ``configure_persistence`` 的策略走
+                - ``"defer"``：只标脏，等显式 ``flush()`` / autosave
+                - ``"now"``：立即 ``flush(only=[(section, key)])``
+
+        失败语义：本方法不把写盘异常抛给业务——写盘失败只记
+        ``last_flush_error`` 并保留 dirty；``save="now"`` 时同样吞掉
+        写盘异常（需要严格错误请直接调 ``flush(strict=True)``）。
+        参数非法（未知的 save mode）抛 ``ValueError``。
+        """
+        node = (section, key)
+        if save not in ("auto", "defer", "now"):
+            raise ValueError(f"unknown save mode: {save!r}")
+
+        self.resolver.set(section, key, value, persist=True)
+        if target is not None:
+            self.resolver.set_origin(section, key, Path(target))
+
+        if save == "now":
+            self.flush(only=[node])
+        elif save == "auto":
+            self._schedule_persistence()
+
+    def _schedule_persistence(self) -> None:
+        """按当前 autosave 策略决定「标脏之后」要不要主动写盘。"""
+        if self._persistence == "debounce":
+            self._schedule_debounce()
+        # off / manual / atexit：只标脏；atexit 在退出时统一 flush
+
+    def _schedule_debounce(self) -> None:
+        with self._flush_lock:
+            if self._debounce_timer is not None:
+                self._debounce_timer.cancel()
+            timer = threading.Timer(self._debounce_interval, self._debounce_fire)
+            timer.daemon = True
+            self._debounce_timer = timer
+            timer.start()
+
+    def _debounce_fire(self) -> None:
+        with self._flush_lock:
+            self._debounce_timer = None
+        try:
+            self.flush()
+        except Exception as exc:  # noqa: BLE001  后台线程不能炸
+            _logger.error("debounce flush failed: %s", exc)
+
+    def _cancel_debounce(self) -> None:
+        with self._flush_lock:
+            if self._debounce_timer is not None:
+                self._debounce_timer.cancel()
+                self._debounce_timer = None
+
+    def _atexit_flush(self) -> None:
+        """解释器退出时的兜底 flush（atexit / debounce 策略下生效）。"""
+        if self._persistence not in ("atexit", "debounce"):
+            return
+        try:
+            self.flush()
+        except Exception as exc:  # noqa: BLE001  退出路径不能抛
+            _logger.error("atexit flush failed: %s", exc)
+
+    @property
+    def last_flush_error(self) -> Optional[ConfigError]:
+        """最近一次 flush 中第一个写盘错误；成功后不清空，便于排查。"""
+        return self._last_flush_error
+
+    def configure_persistence(
+            self,
+            *,
+            autosave: AutosavePolicy = "atexit",
+            debounce: float = 0.5,
+            default_write_file: Optional[Path] = None,
+    ) -> None:
+        """设置回写策略。
+
+        Args:
+            autosave: 自动写盘策略
+                - ``"off"`` / ``"manual"``：set 只标脏，全靠显式 ``flush()``
+                - ``"atexit"``（默认）：退出时统一 flush
+                - ``"debounce"``：set 后重置一个 ``debounce`` 秒的定时器，
+                  到期统一 flush（高频字段必用）
+            debounce: debounce 秒数；非负
+            default_write_file: 无 origin（运行期新 key）或 origin 只读时的兜底
+                写入文件；``None`` 表示不改变当前值
+
+        失败语义：非法 autosave / 负 debounce 抛 ``ValueError``。
+        """
+        if autosave not in ("off", "manual", "atexit", "debounce"):
+            raise ValueError(f"unknown autosave policy: {autosave!r}")
+        debounce = float(debounce)
+        if debounce < 0:
+            raise ValueError(f"debounce must be >= 0, got {debounce}")
+
+        with self._flush_lock:
+            self._persistence = autosave
+            self._debounce_interval = debounce
+            if default_write_file is not None:
+                self._default_write_file = Path(default_write_file)
+            if autosave != "debounce":
+                self._cancel_debounce()
+
+    def flush(
+            self,
+            *,
+            only: Optional[Iterable[tuple[str, str]]] = None,
+            strict: bool = False,
+    ) -> list[Path]:
+        """把脏节点（或指定集合）按 origin 分组，逐文件原子写回。
+
+        分组规则（每个节点独立判定）：
+          1. origin 存在且可写 → 写回 origin
+          2. origin 存在但只读 → 回退到「也定义过该 key」的最高优先级可写文件；
+             没有备选则走 3
+          3. origin 不存在（运行期新 key）或只读无备选 → 写 default_write_file
+
+        Args:
+            only: 只回写这些节点；``None``（默认）回写 ``resolver.dirty_nodes()``
+            strict: True 时遇到写盘错误立即抛 ``ConfigError(source=FILE)``；
+                False（默认）时吞掉异常、保留 dirty、记 ``last_flush_error``，
+                其余文件继续写
+
+        Returns:
+            实际写入成功的文件列表（按写入顺序）。
+
+        失败语义：读文件 / 序列化 / 写盘异常都包装成 ``ConfigError``；
+        失败节点保持 dirty，下次 flush 会重试。整个读-改-写过程持有
+        ``resolver.lock``，``set`` 不会插进中间。
+        """
+        resolver = self.resolver
+        written: list[Path] = []
+
+        with self._flush_lock, resolver.lock:
+            nodes = [
+                tuple(node) for node in
+                (only if only is not None else resolver.dirty_nodes())
+            ]
+            if not nodes:
+                return written
+
+            plans: dict[Path, dict[str, dict[str, str]]] = {}
+            plan_nodes: dict[Path, list[tuple[str, str]]] = {}
+
+            for node in nodes:
+                section, key = node
+                try:
+                    target = self._target_file_for(node)
+                    if target is None:
+                        raise ConfigError(
+                            "no writable target file for node "
+                            "(set configure_persistence(default_write_file=...))",
+                            source=ConfigueErrorSource.FILE,
+                            key=f"[{section}]{key}",
+                            value=resolver.get_str(section, key),
+                        )
+                    value = resolver.get_typed(section, key)
+                    text = _deconvert(value, resolver.converter_of(section, key))
+                except Exception as exc:
+                    error = exc if isinstance(exc, ConfigError) else ConfigError(
+                        "flush: failed to serialize node",
+                        source=ConfigueErrorSource.FILE,
+                        key=f"[{section}]{key}",
+                        cause=exc,
+                    )
+                    self._last_flush_error = error
+                    _logger.error("flush failed: %s", error)
+                    if strict:
+                        raise error from exc
+                    continue
+
+                plans.setdefault(target, {}).setdefault(section, {})[key] = text
+                plan_nodes.setdefault(target, []).append(node)
+
+            for file, edits in plans.items():
+                try:
+                    self._write_file(file, edits)
+                except Exception as exc:  # noqa: BLE001  统一包装
+                    error = ConfigError(
+                        f"flush: failed to write {file}",
+                        source=ConfigueErrorSource.FILE,
+                        key=",".join(f"[{s}]{k}" for s, k in plan_nodes[file]),
+                        cause=exc,
+                    )
+                    self._last_flush_error = error
+                    _logger.error("flush failed: %s", error)
+                    if strict:
+                        raise error from exc
+                    continue
+
+                resolver.mark_clean(plan_nodes[file])
+                written.append(file)
+                _logger.info(
+                    "flush: file=%s nodes=%d", file, len(plan_nodes[file])
+                )
+
+        return written
+
+    # ── 回写内部 ───────────────────────────────────────
+    def _target_file_for(self, node: tuple[str, str]) -> Optional[Path]:
+        """按 origin 规则推导节点的写回文件（只读 → 备选 → 默认落点）。"""
+        resolver = self.resolver
+        origin = resolver.origin_of(*node)
+        if origin is not None:
+            if not self._is_readonly(origin):
+                return origin
+            alternative = self._writable_alternative(node, exclude=origin)
+            if alternative is not None:
+                return alternative
+        return self._default_write_file
+
+    def _writable_alternative(
+            self, node: tuple[str, str], *, exclude: Path,
+    ) -> Optional[Path]:
+        """在「也定义过该 node」的文件里挑优先级最高的可写文件。"""
+        for path in reversed(self.resolver.definitions_of(*node)):
+            if path == exclude:
+                continue
+            if not self._is_readonly(path):
+                return path
+        return None
+
+    def _is_readonly(self, path: Path) -> bool:
+        """只读判定：显式标记（include.ro）优先，其次看文件系统写权限。"""
+        if self.resolver.is_readonly_file(path):
+            return True
+        return path.exists() and not os.access(path, os.W_OK)
+
+    def _write_file(self, file: Path, edits: dict[str, dict[str, str]]) -> None:
+        """读-改-写单个文件：保留注释 / 格式 / 换行符，原子落盘。"""
+        # 延迟 import：infrastructure 包的 __init__ 反向依赖 albuswall.configue
+        from albuswall.infrastructure.fs import atomic_write
+
+        # newline="" 关闭换行符翻译，才能原样探测并保留 \r\n / \n
+        if file.exists():
+            with file.open("r", encoding="utf-8", newline="") as f:
+                original = f.read()
+        else:
+            original = ""
+        eol = "\r\n" if "\r\n" in original else "\n"
+        lines = original.splitlines(keepends=True)
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            # transform 追加新 key 时假定每行自带换行，这里补齐最后一行
+            lines[-1] += eol
+        out = "".join(transform(lines, edits, eol=eol))
+
+        def _write(path: Path) -> None:
+            with path.open("w", encoding="utf-8", newline="") as f:
+                f.write(out)
+
+        atomic_write(file, _write)
 
 
 # class StaticConfig(FrozenNamespace):
@@ -228,16 +536,23 @@ class DynamicConfig(Namespace):
       - 从根路径访问所有子树（业务层唯一入口）
       - 内部字段过滤（_lazy 等不出现在视图里）
 
-    懒加载：`mount_lazy(name, factory)` 后，第一次 `_config.dynamic.<name>`
-    才真正调用 factory；从没访问过的子树既不会读盘，也不会在
-    to_dict() / items() 里出现。
+    懒加载两条路径：
+      1. `mount_lazy(name, factory)` 后，第一次 `_config.dynamic.<name>`
+         才真正调用 factory；
+      2. 未 mount 但已通过 `@dynamic_state` 登记的挂载名，`__getattr__`
+         直接 fallback 到 ``DYNAMIC_REGISTRY``（因此 setup_dynamic_config
+         只需要 import 模块即可）。
+
+    从没访问过的子树既不会读盘，也不会在 to_dict() / items() 里出现。
     """
 
-    _INTERNAL_ATTRS = frozenset({"_lazy"})
+    _INTERNAL_ATTRS = frozenset({"_lazy", "_registry_lock"})
 
     def __init__(self, **entries: Any) -> None:
         super().__init__()
         object.__setattr__(self, "_lazy", {})
+        # DYNAMIC_REGISTRY 的「查表 → 加载 → 发布」需要互斥
+        object.__setattr__(self, "_registry_lock", threading.RLock())
         # self._configue_ref: Optional[weakref.ReferenceType[_Configue]] \
         #     = None  # 由外部注入
         # self._logger = None
@@ -299,9 +614,43 @@ class DynamicConfig(Namespace):
             node = lazy.pop(name)()
             self.__dict__[name] = node  # 缓存到 __dict__，后续直接命中
             return node
+
+        # 再 fallback 到 DYNAMIC_REGISTRY（setup_dynamic_config 只 import 模块）
+        node = self._load_registered(name)
+        if node is not None:
+            return node
+
         raise AttributeError(
             f"{type(self).__name__!r} object has no attribute {name!r}"
         )
+
+    def _load_registered(self, name: str) -> Optional[Namespace]:
+        """按 ``DYNAMIC_REGISTRY`` 登记信息加载子树；未登记返回 None。
+
+        并发约定：查表与发布在锁内，工厂（读盘）在锁外调用；
+        发布前双检，谁先完成就用谁的实例，保证同名只返回一个对象。
+        """
+        from .dynamic_declaration import DYNAMIC_REGISTRY
+
+        lock = self.__dict__.get("_registry_lock")
+        if lock is None:
+            return None
+
+        with lock:
+            spec = DYNAMIC_REGISTRY.get(name)
+        if spec is None:
+            return None
+
+        from .declaration import get_config
+        path = spec.resolve_path(get_config().static)
+        node = spec.cls.load(path, autosave=spec.autosave, **spec.overrides)
+
+        with lock:
+            existing = self.__dict__.get(name)
+            if existing is not None:
+                return existing
+            self.__dict__[name] = node
+        return node
 
     # ── 视图（屏蔽内部字段）───────────────────────
     def _public_items(self) -> Iterator[tuple[str, Any]]:

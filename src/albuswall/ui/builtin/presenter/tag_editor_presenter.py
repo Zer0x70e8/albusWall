@@ -6,18 +6,17 @@ tree panel 通过 QMenu 触发这些操作，不负责对话框本身。
 
 from __future__ import annotations
 
-from logging import getLogger
-
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from albuswall.services.tag import (
-    TagError, TagHasChildren, TagNotFound,
-    TagParentNotFound, TagService,
+    TagError,
+    TagHasChildren,
+    TagNotFound,
+    TagParentNotFound,
+    TagService,
 )
 from albuswall.ui.builtin.dialog.tag_edit_dialog import TagEditDialog
-
-_logger = getLogger(__name__)
 
 
 class TagEditorPresenter(QObject):
@@ -112,8 +111,8 @@ class TagEditorPresenter(QObject):
             )
         self.changed.emit()
 
-    def setup(self, container) -> None:
-        pass
+    def setup(self, _=None) -> None:
+        """无 container 依赖，保持 manager 协议。"""
 
     def teardown(self) -> None:
         pass  # 无持久连接，QMessageBox / Dialog 都是一次性的

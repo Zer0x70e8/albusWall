@@ -5,11 +5,11 @@ import datetime
 import json
 import re
 from dataclasses import dataclass, asdict, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 
 from albuswall.common.enums import UpdateMode
 
-from .utils import dump_json, none_or
+from .utils import coerce_enum, dump_json, none_or
 
 
 @dataclass
@@ -68,27 +68,32 @@ class ScheduledTrigger:
 class TriggerConfig:
     """总触发配置，对应 trigger_config 字段（嵌套结构）。
 
+    ``update_mode`` 是**单值** ``UpdateMode``，与存储形态（``trigger_config``
+    JSON 里的单值字符串，见 ``media_library_schema.sql``）一一对应。
+    存储写入口仍是 ``IngestSourceFormData.to_trigger_config()``，本类只承担
+    运行时视图。
+
     字段类型刻意写非 ``Optional``：这些字段在语义上"永远有值"，
-    由 ``default_factory`` 提供默认实例；``__post_init__`` 里的
+    由默认值 / ``default_factory`` 提供；``__post_init__`` 里的
     ``is None`` 分支只是防御动态构造（``TriggerConfig(update_mode=None)``）
-    绕过默认工厂，不参与类型收窄，故不写进注解。
+    绕过默认值，不参与类型收窄，故不写进注解。
     """
     id: Optional[int] = None
-    # TODO(形态待定)：存储形态是单值 str（IngestSourceFormData.to_trigger_config），
-    #  运行时是 list[UpdateMode]；两套形态暂不统一，见
-    #  common/CONVENTIONS.md · 待定 · update_mode。遗留隐患：本类不归一化
-    #  str，``to_dict()`` 里 ``list("manual")`` 会拆成字符，统一形态时一并处理。
-    update_mode: List[UpdateMode] = field(default_factory=lambda: [UpdateMode.MANUAL])
+    update_mode: UpdateMode = UpdateMode.MANUAL
     device_trigger: DeviceTrigger = field(default_factory=DeviceTrigger)
     scheduled: ScheduledTrigger = field(default_factory=ScheduledTrigger)
 
     # noinspection unreachable-code
     def __post_init__(self):
-        # 防御性兜底：外部显式传 None 时（绕过 default_factory）回落到默认实例。
-        # 对类型检查器而言这些分支"不可能命中"（字段非 Optional），保留是为了
-        # 接住 ``TriggerConfig(update_mode=None)`` 这类动态调用。
+        # 防御性兜底：外部显式传 None / 动态调用传 str 时归一为单值枚举。
+        # 对类型检查器而言 ``None`` 分支"不可能命中"（字段非 Optional），
+        # 保留是为了接住 ``TriggerConfig(update_mode=None)`` 这类动态调用。
         if self.update_mode is None:
-            self.update_mode = [UpdateMode.MANUAL]
+            self.update_mode = UpdateMode.MANUAL
+        else:
+            self.update_mode = coerce_enum(
+                self.update_mode, UpdateMode, UpdateMode.MANUAL
+            )
         if self.device_trigger is None:
             self.device_trigger = DeviceTrigger()
         if self.scheduled is None:
@@ -100,15 +105,15 @@ class TriggerConfig:
         返回 True 表示配置无效，应被忽略。
         """
         has_device_trigger = (
-                UpdateMode.DEVICE_TRIGGER in self.update_mode
+                self.update_mode is UpdateMode.DEVICE_TRIGGER
                 and self.device_trigger.enabled
                 and self.device_trigger.target is not None
         )
         has_scheduled_trigger = (
                 self.scheduled.enabled
-                and (
-                        UpdateMode.SCHEDULED_TIME in self.update_mode
-                        or UpdateMode.INTERVAL_TIME in self.update_mode
+                and self.update_mode in (
+                        UpdateMode.SCHEDULED_TIME,
+                        UpdateMode.INTERVAL_TIME,
                 )
         )
         return not (has_device_trigger or has_scheduled_trigger)
@@ -124,7 +129,7 @@ class TriggerConfig:
         """
         return {
             "id": self.id,
-            "update_mode": list(none_or(self.update_mode, list)),
+            "update_mode": self.update_mode,
             "device_trigger": asdict(none_or(self.device_trigger, DeviceTrigger)),
             "scheduled": asdict(none_or(self.scheduled, ScheduledTrigger)),
         }
@@ -138,16 +143,13 @@ class TriggerConfig:
         # 提取 id（若不存在则为 None）
         config_id = data.get("id")
 
-        # 处理 update_mode
-        raw_modes = data.get("update_mode", ["manual"])
-        if isinstance(raw_modes, str):
-            raw_modes = [raw_modes]
-        if not isinstance(raw_modes, list):
-            raw_modes = ["manual"]
-        try:
-            update_modes = [UpdateMode(mode) for mode in raw_modes]
-        except ValueError:
-            update_modes = [UpdateMode.MANUAL]
+        # 处理 update_mode：单值枚举，未知 / NULL 降级为 MANUAL
+        # （读路径容错，见 CONVENTIONS.md · 枚举容错）
+        update_mode = coerce_enum(
+            data.get("update_mode"),
+            UpdateMode,
+            UpdateMode.MANUAL,
+        )
 
         # 处理 device_trigger
         device_data = data.get("device_trigger") or {}
@@ -169,7 +171,7 @@ class TriggerConfig:
 
         return cls(
             id=config_id,
-            update_mode=update_modes,
+            update_mode=update_mode,
             device_trigger=device_trigger,
             scheduled=scheduled,
         )

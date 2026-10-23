@@ -8,7 +8,7 @@
           thumb_repo.get_paths_by_uuid(uuid) -> ThumbnailPaths | None
           thumb_service.submit_by_uuid(uuid, *, include_deleted=False)
               -> concurrent.futures.Future | None
-          thumb_service.thumbnail_ready  # 自定义 Signal，广播 uuid
+          thumb_service.thumbnail_ready  # 自定义 Signal，广播 asset_uuid
 
 循环防御（P1）：
     · 加载线程区分「加载异常」与「图不存在」：
@@ -41,32 +41,32 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Optional
 
 from PySide6.QtCore import QObject, QRect, Qt, Signal, Slot
-from PySide6.QtGui import QImage, QPixmap, QIcon
+from PySide6.QtGui import QIcon, QImage, QPixmap
 
 from albuswall.common.enums import ThumbSpec
-from albuswall.log import TRACE, Logger
+from albuswall.log import Logger, getLogger
 
-try:
-    from ..widgets.virtual_scroll import VirtualScrollWidget
-    from ..delegate.virtual_scroll_info_delegate import InfoCellDelegate, InfoMode
-except ImportError:
-    from albuswall.ui.builtin.widgets.virtual_scroll import VirtualScrollWidget
-    from albuswall.ui.builtin.delegate.virtual_scroll_info_delegate import (
-        InfoCellDelegate, InfoMode,
-    )
+from ..delegate.virtual_scroll_info_delegate import InfoCellDelegate, InfoMode
+from ..widgets.virtual_scroll import VirtualScrollWidget
 
 __all__ = ["ThumbnailGridPresenter"]
 
 _MAX_ATTEMPTS = 3
-_logger: Logger = logging.getLogger(__name__)  # noqa
-_logger.trace = lambda msg, *args: _logger.log(TRACE, msg, *args)
+_logger: Logger = getLogger(__name__)  # type: ignore
+
+
+def _coerce_spec(spec: ThumbSpec | str) -> ThumbSpec:
+    """规格归一：接受 ``ThumbSpec`` 或其字符串值，其它值直接报错。"""
+    try:
+        return ThumbSpec(spec)
+    except ValueError as exc:
+        raise ValueError(f"unsupported spec: {spec!r}") from exc
 
 
 def _coerce_icon(src: QIcon | QPixmap | str | None) -> QIcon | None:
@@ -113,13 +113,10 @@ class ThumbnailGridPresenter(QObject):
     ) -> None:
         super().__init__(parent)
 
-        if spec not in ("small", "medium", "large"):
-            raise ValueError(f"unsupported spec: {spec!r}")
-
         self._view = view
         self._repo = thumb_repo
         self._service = thumb_service
-        self._spec = spec
+        self._spec = _coerce_spec(spec)
         self._view_repo = view_repo
         self._trash_retention_days = max(0, int(trash_retention_days))
 
@@ -161,8 +158,9 @@ class ThumbnailGridPresenter(QObject):
         if self._service is not None and hasattr(
                 self._service, "thumbnail_ready"
         ):
+            # 契约：cb(sender: ThumbnailService, *, asset_uuid: str)
             self._service.thumbnail_ready.connect(
-                lambda auuid: self._thumb_ready.emit(auuid)
+                lambda _sender, *, asset_uuid: self._thumb_ready.emit(asset_uuid)
             )
 
         view.visible_range_changed.connect(self._on_visible_range_changed)
@@ -213,10 +211,9 @@ class ThumbnailGridPresenter(QObject):
         self._view.reset_source(len(self._asset_uuids) - 1)
         self._attempts.clear()
 
-    def set_spec(self, spec: ThumbSpec) -> None:
+    def set_spec(self, spec: ThumbSpec | str) -> None:
         """切换缩略图规格；清空缓存后按需重载。"""
-        if spec not in ("small", "medium", "large"):
-            raise ValueError(f"unsupported spec: {spec!r}")
+        spec = _coerce_spec(spec)
         if spec == self._spec:
             return
         self._spec = spec
@@ -419,10 +416,10 @@ class ThumbnailGridPresenter(QObject):
             return None
         if dt.tzinfo is None:
             # SQLite strftime('%Y-%m-%dT%H:%M:%f','now') 产出的是 UTC 裸时间
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
 
         elapsed_days = (
-                               datetime.now(timezone.utc) - dt
+                               datetime.now(UTC) - dt
                        ).total_seconds() / 86400.0
         remaining = self._trash_retention_days - elapsed_days
         return max(0, int(remaining))
@@ -460,7 +457,7 @@ class ThumbnailGridPresenter(QObject):
         error: str = ""
         try:
             image = self._try_load_image(asset_uuid, spec)
-        except Exception as exc:  # noqa: BLE001 —— worker 顶层兜底
+        except Exception as exc:  # worker 顶层兜底
             error = f"load:{type(exc).__name__}"
             _logger.error(
                 "thumbnail load error asset=%s: %s", asset_uuid, exc,

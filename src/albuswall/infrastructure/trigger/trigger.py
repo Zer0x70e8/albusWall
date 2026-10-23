@@ -16,7 +16,7 @@ from albuswall.log import getLogger
 from albuswall.common.enums import UpdateMode
 
 from .protocols import DeviceTriggerHandler, TriggerHandler
-from .scheduler import SchedulerService, SCHEDULED_MODES, active_modes
+from .scheduler import SchedulerService, SCHEDULED_MODES
 
 _logger = getLogger(__name__)
 
@@ -215,7 +215,7 @@ class TriggerFacadeService(Generic[K]):
             key: cfg for key, cfg in self._configs.items()
             if (
                     cfg.scheduled.enabled
-                    and bool(active_modes(cfg) & SCHEDULED_MODES)
+                    and cfg.update_mode in SCHEDULED_MODES
             )
         }
 
@@ -225,7 +225,7 @@ class TriggerFacadeService(Generic[K]):
             key: cfg for key, cfg in self._configs.items()
             if (
                     cfg.device_trigger.enabled
-                    and UpdateMode.DEVICE_TRIGGER in active_modes(cfg)
+                    and cfg.update_mode is UpdateMode.DEVICE_TRIGGER
                     and cfg.device_trigger.target is not None
             )
         }

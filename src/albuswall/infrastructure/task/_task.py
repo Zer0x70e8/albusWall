@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from albuswall.common.enums import ExecutorType
+from albuswall.dto.sentinel import UNSET
 
 
 @dataclass(order=True)
@@ -19,6 +20,9 @@ class _Task:
 
     排序只考虑 ``priority`` 与 ``seq``；其余字段 ``compare=False``，
     以便携带任意 payload（无需 payload 本身可比较）。
+
+    ``correlation_id`` 是调用方给的锚点，只用于背压事件回传
+    （见 :class:`albuswall.dto.task.BackpressureEvent`），不参与排序。
     """
     priority: int
     seq: int
@@ -27,3 +31,4 @@ class _Task:
     kwargs: dict[str, Any] = field(compare=False)
     executor: ExecutorType = field(compare=False)
     future: Future = field(compare=False)
+    correlation_id: Any = field(compare=False, default=UNSET)

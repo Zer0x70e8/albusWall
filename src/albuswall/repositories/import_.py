@@ -51,7 +51,11 @@ _UPDATE_CANDIDATE_STATUS_SQL = (
 
 # SQLite 默认 SQLITE_MAX_VARIABLE_NUMBER = 999；
 # 每次查询固定占用 1 个变量（source_id），故单批最多 998 个 path 占位符。
-_MAX_PATHS_PER_QUERY = 998
+#
+# 公开常量：``services/source.py`` 依赖它在导入时断言
+# ``_SCAN_BATCH_SIZE <= MAX_PATHS_PER_QUERY``，防止有人调大扫描批次后
+# 在运行期撞上 SQLite 的变量上限（find_missing_paths 会直接抛 ValueError）。
+MAX_PATHS_PER_QUERY = 998
 
 # 单次拉取 pending 的默认上限，避免无 limit 调用时全表扫描。
 _DEFAULT_PENDING_LIMIT = 500
@@ -65,23 +69,27 @@ class ImportRepository(BaseRepository):
     def find_missing_paths(self, source_id: int, *paths: str) -> Sequence[str]:
         """返回既不在 assets 也不在 asset_candidate_cache 中的路径。
 
-        路径语义：传入的 paths 必须与表内存储形式一致（相对路径）。
+        路径语义：传入的 paths 必须与表内存储形式**完全一致**（相对
+        ``ingest_source.source_path`` 的 POSIX 路径）。SQL 是纯字符串等值
+        比较，不在这里做绝对 / 相对归一——扫描侧自 ``SourceExecutor`` 修复
+        起写入的就是相对路径；老库里的绝对路径脏数据不做迁移（早期开发，
+        ``SCHEMA_VERSION = 0``），删库重建即可。
 
         Raises:
             ValueError: 去重后的路径数超过单次查询的 SQLite 变量上限
-                (_MAX_PATHS_PER_QUERY)。调用方需要自行分块后再调用，
+                (``MAX_PATHS_PER_QUERY``)。调用方需要自行分块后再调用，
                 而不是期望本方法静默返回全量路径。
         """
         if not paths:
             return paths
 
         unique_paths = list(dict.fromkeys(paths))
-        if len(unique_paths) > _MAX_PATHS_PER_QUERY:
+        if len(unique_paths) > MAX_PATHS_PER_QUERY:
             raise ValueError(
                 "find_missing_paths() received {} unique paths, exceeding "
                 "SQLite per-query variable limit ({}). "
                 "Split into batches before calling.".format(
-                    len(unique_paths), _MAX_PATHS_PER_QUERY
+                    len(unique_paths), MAX_PATHS_PER_QUERY
                 )
             )
 
@@ -156,28 +164,85 @@ class ImportRepository(BaseRepository):
 
     def create_candidate_cache_batch(
             self, candidates: Sequence[AssetCandidateCacheDTO]
-    ) -> None:
-        """批量插入资产候选缓存记录。
+    ) -> int:
+        """批量插入资产候选缓存记录，返回**提交尝试**的行数。
 
         仅写入 ``_CANDIDATE_INSERT_COLUMNS``（uuid / path / source_id /
         mime_type）；其余列（id / created_at / status / claimed_*）交给
         schema DEFAULT。``uuid`` 在写路径由 ``UUID→str`` 收口。
+
+        返回值口径
+        ----------
+        返回的是「源存活校验后仍要写入的行数」（``kept``），**不是**
+        ``SELECT COUNT(*)`` 的增量。原因是 INSERT 语句是 ``INSERT OR IGNORE``：
+
+        * 撞 ``(source_id, path)`` 唯一索引的重复行被**静默丢弃**；
+        * 违反列约束的行同样被静默丢弃——最典型的是 ``mime_type=None``
+          撞 ``mime_type TEXT NOT NULL``（``AssetCandidateCacheDTO.mime_type``
+          声明为 ``str``，传 ``None`` 属调用方违约）。
+
+        因此"调用了但表里没多出行"不一定是事务没提交：先看是不是被
+        ``OR IGNORE`` 吞掉了。事务边界由 :meth:`BaseRepository._transaction`
+        负责（正常路径 commit、异常 rollback），本方法不做额外处理。
+
+        源存活校验
+        ----------
+        ``asset_candidate_cache.source_id`` 外键指向 ``ingest_source(id)``。
+        扫描任务可能在排队期间赶上源被删除（回收站软删 → 异步 purge），
+        此时盲目插入会撞 ``FOREIGN KEY constraint failed``，把一次正常的
+        "源已消失" 演成事务回滚 + traceback。因此这里先在同一事务内把
+        源已不存在的候选剔除：候选本来就没有宿主，丢掉比报错安全。
+
+        校验与插入处于同一事务（``_WRITE_LOCK`` 覆盖整个上下文），
+        进程内不会有两份写入交叉。
         """
         if not candidates:
-            return
+            return 0
 
         params = [
             (as_uuid_str(c.uuid), c.path, c.source_id, c.mime_type)
             for c in candidates
         ]
+        source_ids = sorted({p[2] for p in params})
 
         with self._transaction() as conn:
-            conn.executemany(_CANDIDATE_INSERT_SQL, params)
+            alive = self._live_source_ids(conn, source_ids)
+            dropped = [p for p in params if p[2] not in alive]
+            if dropped:
+                self.logger.warning(
+                    "Dropped %d candidate(s): source(s) %s no longer exist "
+                    "(deleted while scanning).",
+                    len(dropped), sorted({p[2] for p in dropped}),
+                )
+            kept = [p for p in params if p[2] in alive]
+            # 单出口：with 块内不 return。``_transaction`` 对"块内 return"
+            # 本来就会正常 commit（@contextmanager 走的是恢复 yield 的正常
+            # 路径，不是 throw），这里只是防御未来事务实现变化（try/finally
+            # 外部 commit、加 retry / 嵌套事务等），并让日志与返回值共用
+            # 同一处出口。
+            if kept:
+                conn.executemany(_CANDIDATE_INSERT_SQL, kept)
 
         self.logger.debug(
             "Inserted %d candidate cache records (ignored duplicates if any).",
-            len(candidates),
+            len(kept),
         )
+        return len(kept)
+
+    @staticmethod
+    def _live_source_ids(
+            conn: sqlite3.Connection, source_ids: Sequence[int]
+    ) -> set[int]:
+        """在给定连接（事务）内查回仍然有效（未软删）的 source id。"""
+        if not source_ids:
+            return set()
+        ph = placeholders(len(source_ids))
+        rows = conn.execute(
+            "SELECT id FROM ingest_source "
+            f"WHERE id IN ({ph}) AND is_deleted = 0",
+            tuple(source_ids),
+        ).fetchall()
+        return {row[0] for row in rows}
 
     def create_asset(self, dto: AssetCreateDTO) -> Optional[UUID]:
         """插入新资产记录，成功返回资产 uuid；失败返回 None。

@@ -5,7 +5,7 @@
 
   1. **Qt 信号** —— ``signal.connect(slot)`` / ``signal.emit(*args)``，
      槽按位置参数接收。
-  2. **项目自有 Signal** —— ``send(sender, **kwargs)``，回调签名
+  2. **项目自有 Signal** —— ``emit(sender, **kwargs)``，回调签名
      ``cb(sender, **kwargs)``（见 signals.py）。
   3. **跨线程桥接** —— ``queued=True`` 时后台线程触发 → 主线程执行槽。
 
@@ -147,11 +147,13 @@ class _Relay(QObject):
 def _signal_kind(sig: Any) -> SignalKind:
     """返回 ``'qt' | 'custom' | 'unknown'``。
 
-    判据：项目自有的 ``Signal`` / ``ProcessSignal`` 都提供 ``send`` 方法
-    （``emit`` 只是 alias）；Qt 信号只有 ``emit``，没有 ``send``。
+    判据：项目自有的 ``Signal`` / ``ProcessSignal`` 都保留 ``send`` 方法
+    （已弃用，仅为兼容旧调用而存在）；Qt 信号只有 ``emit``，没有 ``send``。
     """
     if not (hasattr(sig, "connect") and hasattr(sig, "disconnect")):
         return "unknown"
+    if isinstance(sig, (Signal, ProcessSignal)):
+        return "custom"
     if callable(getattr(sig, "send", None)):
         return "custom"
     if callable(getattr(sig, "emit", None)):
@@ -163,7 +165,7 @@ def _describe_supported() -> str:
     return (
         "source / target 必须是以下之一：\n"
         "  · Qt 信号（具有 connect / disconnect / emit）\n"
-        "  · 自有 Signal / ProcessSignal（具有 connect / disconnect / send）"
+        "  · 自有 Signal / ProcessSignal（具有 connect / disconnect / emit）"
     )
 
 
@@ -291,7 +293,8 @@ class SignalAdapter:
 
         自动适配目标信号风格：
         · Qt 目标    → ``target.emit(*args, **kwargs)``；
-        · 自有 Signal → ``target.send(sender, **kwargs)``。
+        · 自有 Signal → ``target.emit(sender, **kwargs)``
+          （``send`` 已弃用，此处不再使用）。
         """
         target_kind = _signal_kind(target)
         if target_kind == "unknown":
@@ -304,7 +307,7 @@ class SignalAdapter:
         def _re_emit(*args, **kwargs):
             if target_kind == "custom":
                 sender = args[0] if args else None
-                target.send(sender, **kwargs)
+                target.emit(sender, **kwargs)
             else:
                 target.emit(*args, **kwargs)
 

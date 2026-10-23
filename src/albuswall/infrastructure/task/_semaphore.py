@@ -42,6 +42,10 @@ class DynamicSemaphore:
         self._max = initial
         self._min = max(0, min_value)
         self._hard_max = max_value if max_value is not None else initial
+        # release() 越界告警节流：调度器一旦算错 permit，"每次 release 都 warning"
+        # 会在高并发下刷爆日志。这里只节流**日志**，不改变 release 行为。
+        self._last_release_warn = 0.0
+        self._release_warn_interval = 1.0
 
     # ---------- acquire / release ----------
     def acquire(self, blocking: bool = True, timeout: Optional[float] = None) -> bool:
@@ -73,7 +77,15 @@ class DynamicSemaphore:
                 self._current -= 1
                 self._cond.notify()
             else:
-                _logger.warning("DynamicSemaphore.release() called with _current == 0")
+                # 越界释放：语义上说明 permit 记账出了 bug，但日志必须节流，
+                # 否则一个错误的回调就能把 warning 刷成风暴（1 秒一次）。
+                now = time.monotonic()
+                if now - self._last_release_warn >= self._release_warn_interval:
+                    self._last_release_warn = now
+                    _logger.warning(
+                        "DynamicSemaphore.release() called with _current == 0 "
+                        "(max=%d, throttled to 1/s)", self._max,
+                    )
 
     # ---------- dynamic adjust ----------
     def increase_max(self, n: int = 1) -> int:

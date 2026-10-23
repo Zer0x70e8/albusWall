@@ -1,11 +1,17 @@
-# 
-"""XDG 缩略图缓存的孤儿清理。
+#
+"""缩略图缓存的孤儿清理（与缩略图服务配套，模式无关）。
 
-真相源是**文件系统**：读每个 PNG 内嵌的 ``Thumb::URI``，
-检查源文件是否还存在。与 SourceTrashService 的 DB 真相源无关。
+真相源是**文件系统**：读每个 PNG 内嵌的 ``Thumb::URI``，检查源文件
+是否还存在。与 SourceTrashService 的 DB 真相源无关。
 
-平台判断由 bootstrap 完成；本模块通过 ``config.root is None``
-得知是否被禁用。
+为什么本模块不再叫 "XDG"：重构后私有模式与 XDG 模式的磁盘布局、
+元数据、权限完全同构，唯一差异是根目录常量。根由 bootstrap 按
+``thumbnail.config.xdg_enabled`` 计算后注入，因此本模块**不 import
+任何 thumbnail 配置**，只认 ``ThumbnailCleanerConfig.root``。
+
+删除时机契约（为什么不与 purge 联动）：常规 purge 只清 DB，文件名是
+源文件 md5、可能被多条 asset 行共享，按 asset 直接 unlink 会波及其它
+引用；孤儿一律由本清理器按 ``Thumb::URI`` 判定后删除。
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ from albuswall.utils.xdg_thumbnail import (
     uri_to_path,
 )
 
-from .config import XdgCleanerConfig
+from .config import ThumbnailCleanerConfig
 
 _logger = getLogger(__name__)
 
@@ -52,12 +58,16 @@ class OrphanCleanupReport:
         return sum(o.size for o in self.orphans)
 
 
-class XdgThumbnailCleaner:
-    """XDG 缩略图孤儿清理器。配置通过构造参数注入。"""
+class ThumbnailCleaner:
+    """缩略图孤儿清理器。配置（含 root）通过构造参数注入。
+
+    两种模式的扫描/清理逻辑完全相同，因为布局已经同构：
+    ``<root>/{normal,large,x-large,xx-large,fail}/<md5>.png``。
+    """
 
     def __init__(
             self,
-            config: XdgCleanerConfig,
+            config: ThumbnailCleanerConfig,
             *,
             log: Optional[Logger] = None,
     ) -> None:
@@ -71,13 +81,13 @@ class XdgThumbnailCleaner:
         """扫描并返回孤儿清单（不删）。禁用时返回空报告。"""
         report = OrphanCleanupReport()
         if not self._config.enabled:
-            self._log.debug("XDG cleaner disabled, skip scan")
+            self._log.debug("thumbnail cleaner disabled, skip scan")
             return report
 
         root = self._config.root
         assert root is not None  # enabled 已保证
         if not root.is_dir():
-            self._log.debug("XDG thumbnail root %s missing, skip", root)
+            self._log.debug("thumbnail root %s missing, skip", root)
             return report
 
         now = time.time()
@@ -107,7 +117,7 @@ class XdgThumbnailCleaner:
         if report.orphans:
             report.deleted, report.failed = self.purge(report.orphans)
         self._log.info(
-            "XDG orphan cleanup: scanned=%d orphans=%d deleted=%d "
+            "thumbnail orphan cleanup: scanned=%d orphans=%d deleted=%d "
             "failed=%d skipped=%d bytes=%d",
             report.scanned, len(report.orphans), report.deleted,
             report.failed, report.skipped, report.orphan_bytes,

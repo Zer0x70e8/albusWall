@@ -42,8 +42,9 @@ def register_trigger_service(
     """
 
     def _fire(key: object) -> None:
-        # 延迟解析：注册时信号可能还没注册
-        container.get("trigger_refresh_signal").emit(key)
+        # 延迟解析：注册时信号可能还没注册。
+        # 契约：cb(sender, *, source_id)；payload 必须具名。
+        container.get("trigger_refresh_signal").emit(None, source_id=key)
 
     def _make_scheduler() -> TriggerHandler:
         if scheduler_handler is not None:

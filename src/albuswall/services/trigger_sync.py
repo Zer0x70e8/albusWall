@@ -93,14 +93,16 @@ class TriggerSyncService:
 
     # ------------------------------------------------------------------ #
     # Inbound：源配置变更 → 触发器
+    #
+    # 契约：cb(sender: SourceService, *, source_id: int)
     # ------------------------------------------------------------------ #
-    def _on_source_added(self, source_id: int) -> None:
+    def _on_source_added(self, _sender: object, *, source_id: int) -> None:
         self._facade.upsert(source_id, self._load_one(source_id))
 
-    def _on_source_updated(self, source_id: int) -> None:
+    def _on_source_updated(self, _sender: object, *, source_id: int) -> None:
         self._facade.upsert(source_id, self._load_one(source_id))
 
-    def _on_source_removed(self, source_id: int) -> None:
+    def _on_source_removed(self, _sender: object, *, source_id: int) -> None:
         self._facade.remove(source_id)
 
     # ------------------------------------------------------------------ #

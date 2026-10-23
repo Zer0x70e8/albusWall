@@ -1,31 +1,21 @@
 #
-"""python -m task_service 运行示例。"""
+"""python -m albuswall.infrastructure.task 运行示例。
+
+示例任务函数定义在 :mod:`albuswall.demo.demo`（模块级顶层函数）。
+**不要**把它们搬回本文件：进程任务用 spawn 执行，定义在 ``__main__``
+里的函数在子进程反序列化时必然失败
+（``AttributeError: module '__main__' has no attribute ...``）。
+"""
 
 from __future__ import annotations
 
 import logging
 import random
-import time
 
 from albuswall.common.exceptions import BackpressureError
-from albuswall.dto.task import BackpressureEvent
+from albuswall.dto.task import BackpressureEvent, TaskSpec
 from albuswall.infrastructure.task import TaskService
-
-
-def io_task(task_id, sleep_time):
-    print(f"[Thread] Task {task_id} started (sleep {sleep_time:.2f}s)")
-    time.sleep(sleep_time)
-    print(f"[Thread] Task {task_id} completed")
-    return f"thread-{task_id}"
-
-
-def cpu_task(task_id, n):
-    print(f"[Process] Task {task_id} started (compute {n} iterations)")
-    total = 0
-    for i in range(n):
-        total += i * i
-    print(f"[Process] Task {task_id} completed")
-    return f"process-{task_id}"
+from albuswall.demo.task import cpu_task, io_task
 
 
 def on_bp(evt: BackpressureEvent):
@@ -54,19 +44,25 @@ def main():
 
     futures = []
     for idx in range(10):
-        try:
-            futures.append(service.submit(
-                io_task, idx, random.uniform(0.3, 1.0),
-                executor="thread", priority=random.randint(0, 4)))
-        except BackpressureError as e:
-            print(f"submit rejected by backpressure: {e}")
-
-        try:
-            futures.append(service.submit(
-                cpu_task, idx, random.randint(1_000_000, 5_000_000),
-                executor="process", priority=random.randint(0, 4)))
-        except BackpressureError as e:
-            print(f"submit rejected by backpressure: {e}")
+        specs = (
+            TaskSpec(
+                fn=io_task,
+                args=(idx, random.uniform(0.3, 1.0)),
+                executor="thread",
+                priority=random.randint(0, 4),
+            ),
+            TaskSpec(
+                fn=cpu_task,
+                args=(idx, random.randint(1_000_000, 5_000_000)),
+                executor="process",
+                priority=random.randint(0, 4),
+            ),
+        )
+        for spec in specs:
+            try:
+                futures.append(service.submit_spec(spec))
+            except BackpressureError as e:
+                print(f"submit rejected by backpressure: {e}")
 
     for f in futures:
         try:
@@ -74,7 +70,7 @@ def main():
         except Exception as e:
             print("Task failed:", e)
 
-    print("All tasks completed")
+    print("All demo completed")
     print("Stats:", service.get_stats())
     service.shutdown()
 

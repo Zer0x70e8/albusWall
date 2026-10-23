@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS ingest_source (
     target_path  TEXT,                                           -- 挂载目标目录：auto_mount 把 mount_point 挂到此处；可空。
     -- TODO target_path 目前只能在unix有文件系统抽象的才能用
     auto_mount              INTEGER NOT NULL DEFAULT 0,          -- 0/1 布尔：是否自动挂载
-    file_type_check         TEXT    NOT NULL DEFAULT 'suffix',   -- 'suffix' 按扩展名 / 'magic' 按文件头
+    file_type_check         TEXT    NOT NULL DEFAULT 'suffix',   -- 'suffix' 按扩展名 / 'magic' 按文件头 / 'off' 不校验 / 'magic_lax' 宽松魔数
     file_types              TEXT    NOT NULL DEFAULT '[]',       -- JSON 数组字符串，如 '["jpg","png"]'
     tags                    TEXT    NOT NULL DEFAULT '[]',       -- JSON 数组字符串，用户标签
     subfolder_recursion     INTEGER NOT NULL DEFAULT 0,          -- 0/1 布尔：是否递归子目录
@@ -61,7 +61,9 @@ CREATE TABLE IF NOT EXISTS ingest_source (
     deleted_at              TEXT,
     created_at              TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
     modified_at             TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
-    CONSTRAINT chk_file_type_check CHECK (file_type_check IN ('suffix', 'magic')),
+    -- 'off' / 'magic_lax' 于 v0.1.3 新增：SQLite 的 CHECK 无法 ALTER，
+    -- 老库需删库重建才能写入新值（见 common/CONVENTIONS.md · 一 · 值域变更与老库升级）。
+    CONSTRAINT chk_file_type_check CHECK (file_type_check IN ('suffix', 'magic', 'off', 'magic_lax')),
     CONSTRAINT chk_auto_mount_bool CHECK (auto_mount IN (0,1)),
     CONSTRAINT chk_subfolder_recursion_bool CHECK (subfolder_recursion IN (0,1)),
     CONSTRAINT chk_ingest_source_disabled_bool CHECK (disabled IN (0,1)),
@@ -89,7 +91,7 @@ INSERT OR IGNORE INTO ingest_source (
 
 -- trigger_config JSON 结构示例
 -- {
---   "update_mode": "scheduled_time",
+--   "update_mode": "scheduled_time",   // 单值字符串，不是数组
 --   // 可选值：
 --   //   scheduled_time —— 每天定时触发，使用 scheduled.time
 --   //   interval_time  —— 按固定间隔触发，使用 scheduled.interval

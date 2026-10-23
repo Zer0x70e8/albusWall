@@ -114,7 +114,8 @@ def _main() -> int | str:
     _logger.debug("Program start.")
 
     app = Application()
-    app.container.register("app", lambda: app, returns=Application)
+    app.container.register(
+        "app", lambda: app, returns=Application)
     runtime.install()
     app.boot(_boot)
     return app.exec()

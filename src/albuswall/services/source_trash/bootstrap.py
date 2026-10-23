@@ -17,9 +17,10 @@ from albuswall.log import getLogger
 
 from albuswall.utils.platform_paths import platform_cache_root
 from albuswall.utils.session_marker import SessionMarker
+from albuswall.utils.xdg_thumbnail import xdg_thumbnails_root
 
-from .config import SourceTrashConfig, XdgCleanerConfig, SessionConfig
-from ...utils.thumbnail_paths import uses_xdg_thumbnails, thumbnail_root
+from .config import SourceTrashConfig, ThumbnailCleanerConfig, SessionConfig
+from ..thumbnail.config import config as thumb_config, resolve_thumb_root
 
 _logger = getLogger(__package__)
 
@@ -67,20 +68,27 @@ def load_source_trash_config() -> SourceTrashConfig:
     )
 
 
-def load_xdg_cleaner_config() -> XdgCleanerConfig:
-    """XdgThumbnailCleaner 的运行时配置。
+def load_thumbnail_cleaner_config() -> ThumbnailCleanerConfig:
+    """ThumbnailCleaner 的运行时配置。
 
-    平台判断只在这里做一次。只有走 XDG 协议的平台才有 cleaner
-    的用武之地；其他平台直接传 root=None 让它 no-op。
+    根目录在此处**一次性**算好并注入：cleaner 只认 root，不 import
+    thumbnail 配置。两种模式的布局同构（<root>/<spec>/<md5>.png），
+    所以模式差异就只剩这一行 root 的选择 —— 与 ThumbnailService 严格同源。
+
+    平台判断（macOS / Windows 也走同一套布局）已不再需要：协议语义
+    全平台一致，只有根目录按平台惯例变化（见 xdg_thumbnail）。
     """
-    if not uses_xdg_thumbnails():
-        return XdgCleanerConfig(root=None)
+    enabled = _cfg.xdg_compat is not False  # 用户显式关闭 → 整条链路 no-op
+    if not enabled:
+        return ThumbnailCleanerConfig(enabled=False, root=None)
 
-    if _cfg.xdg_compat is False:      # 用户显式关闭
-        return XdgCleanerConfig(root=None)
-
-    return XdgCleanerConfig(
-        root=thumbnail_root(),
+    root = (
+        xdg_thumbnails_root() if thumb_config.xdg_enabled
+        else resolve_thumb_root()
+    )
+    return ThumbnailCleanerConfig(
+        enabled=True,
+        root=root,
         min_age_seconds=_cfg.orphan_min_age_seconds,
     )
 
@@ -109,7 +117,7 @@ def install_source_trash_lifecycle(
 
     与 ``_ARG_MAP`` 分工：``_ARG_MAP`` 只负责**构造**；副作用钩子
     走本函数显式安装。顺序上需在 ``register_all`` 之后调用，保证
-    容器里已有 ``xdg_thumbnail_cleaner`` 可用。
+    容器里已有 ``thumbnail_cleaner`` 可用。
     """
     if app is None:
         app = Application.instance()
@@ -121,14 +129,14 @@ def install_source_trash_lifecycle(
         # 顺序关键：先读，再置脏。反了的话永远读到自己写的 dirty。
         clean = marker.is_clean_shutdown()
         if clean:
-            _logger.debug("clean shutdown, skip XDG orphan cleanup")
+            _logger.debug("clean shutdown, skip thumbnail orphan cleanup")
         elif session_cfg.auto_cleanup_on_dirty:
-            _logger.info("dirty shutdown, running XDG orphan cleanup")
+            _logger.info("dirty shutdown, running thumbnail orphan cleanup")
             # noinspection broad-exception
             try:
-                container.get("xdg_thumbnail_cleaner").scan_and_purge()
+                container.get("thumbnail_cleaner").scan_and_purge()
             except Exception:
-                _logger.exception("XDG orphan cleanup failed")
+                _logger.exception("thumbnail orphan cleanup failed")
         marker.mark_running()
 
     def _on_final() -> None:

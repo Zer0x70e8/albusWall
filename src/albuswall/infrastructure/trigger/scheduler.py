@@ -1,6 +1,6 @@
 #
 """
-Scheduler service: schedules timed tasks using APScheduler based boot scheduled triggers
+Scheduler service: schedules timed demo using APScheduler based boot scheduled triggers
 (scheduled_time / interval_time) in TriggerConfig.
 """
 
@@ -25,26 +25,10 @@ from .protocols import TriggerHandler
 K = TypeVar("K")
 
 # The update modes that map onto a scheduled job.
-# 公开常量与解析入口；模块外请使用 active_modes(cfg) 而不是裸 in 判断。
+# 公开常量；模块外直接对 ``config.update_mode``（单值枚举）做成员判断。
 SCHEDULED_MODES = frozenset(
     {UpdateMode.SCHEDULED_TIME, UpdateMode.INTERVAL_TIME}
 )
-
-
-def active_modes(config: TriggerConfig) -> frozenset:
-    """Return the frozenset of UpdateMode values configured for ``config``.
-
-    This is the single, canonical entry point: callers must not test
-    membership against ``config.update_mode`` directly. The raw field may
-    be a single UpdateMode, a string, or a collection (legacy JSON shape);
-    this function normalises all of them to a frozenset of UpdateMode.
-    """
-    raw = getattr(config, "update_mode", None)
-    if raw is None:
-        return frozenset()
-    if isinstance(raw, (set, frozenset, list, tuple)):
-        return frozenset(raw)
-    return frozenset({raw})
 
 
 def _local_timezone():
@@ -236,12 +220,12 @@ class SchedulerService(TriggerHandler[K]):
 
     def _build_trigger(self, key: K, config: TriggerConfig):
         """Build the APScheduler trigger for _config. Returns None boot error."""
-        modes = self._active_modes(config)
+        mode = config.update_mode
 
-        if UpdateMode.SCHEDULED_TIME in modes:
+        if mode is UpdateMode.SCHEDULED_TIME:
             return self._build_cron_trigger(key, config)
 
-        if UpdateMode.INTERVAL_TIME in modes:
+        if mode is UpdateMode.INTERVAL_TIME:
             return self._build_interval_trigger(key, config)
 
         self.logger.error(
@@ -296,11 +280,6 @@ class SchedulerService(TriggerHandler[K]):
     # ------------------------------------------------------------------ #
     # Config helpers
     # ------------------------------------------------------------------ #
-    @staticmethod
-    def _active_modes(config: TriggerConfig) -> frozenset:
-        """Backwards-compatible alias for :func:`active_modes`."""
-        return active_modes(config)
-
     @classmethod
     def _should_schedule(cls, config: TriggerConfig) -> bool:
         """Single source of truth for 'this _config wants a scheduled job'."""
@@ -312,16 +291,15 @@ class SchedulerService(TriggerHandler[K]):
         if scheduled is None or not getattr(scheduled, "enabled", False):
             return False
 
-        return bool(cls._active_modes(config) & SCHEDULED_MODES)
+        return config.update_mode in SCHEDULED_MODES
 
     @classmethod
     def _describe_config(cls, config: TriggerConfig) -> str:
         """Redacted _config summary safe for production logs."""
-        modes = cls._active_modes(config)
         scheduled = getattr(config, "scheduled", None)
         enabled = bool(getattr(scheduled, "enabled", False))
-        mode_names = sorted(getattr(m, "name", repr(m)) for m in modes)
-        return "enabled=%s, modes=%s" % (enabled, mode_names)
+        mode = getattr(config.update_mode, "name", repr(config.update_mode))
+        return "enabled=%s, mode=%s" % (enabled, mode)
 
     # ------------------------------------------------------------------ #
     # Job callback

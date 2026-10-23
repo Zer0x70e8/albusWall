@@ -1,7 +1,6 @@
 #
 """ConfigDeclaration and ConfigField."""
 
-import typing
 import warnings
 from pathlib import Path
 from typing import (
@@ -31,37 +30,32 @@ def get_config() -> "Configue":
 
 # ── 从 bootstrap.py 搬过来 ─────────────────────────────
 def _resolve_annotation(ann: Any) -> Any:
-    """将字符串注解解析为类型对象，失败时回退为 str。"""
+    """将字符串注解解析为类型对象，失败时回退为 str。
+
+    委托给 ``configue.utils.annotation.resolve_annotation``（共享 eval 逻辑），
+    但保持本函数原有的回退策略：解析失败 → ``str``（配置项按字符串处理）。
+    """
     if not isinstance(ann, str):
         return ann
 
-    import builtins
-    namespace: dict[str, Any] = {}
-    namespace.update(vars(builtins))
-    namespace.update(vars(typing))
-    namespace.update({
-        "Path": Path,
-        "Any": Any,
-        "Optional": typing.Optional,
-        "List": typing.List,
-        "Tuple": typing.Tuple,
-        "Dict": typing.Dict,
-        "Union": typing.Union,
-    })
-    try:
-        return eval(ann, namespace)
-    except Exception as e:
+    from .utils.annotation import resolve_annotation
+
+    resolved = resolve_annotation(ann, warn=False)
+    if resolved is None:
         warnings.warn(
-            f"Failed to resolve annotation string '{ann}': {e}, "
+            f"Failed to resolve annotation string '{ann}', "
             f"falling back to str"
         )
         return str
+    return resolved
 
 
 class ConfigMeta(TypedDict):
     path: Sequence[str]
     default: Any
     type: Optional[Union[type, str]]
+    # False 时 load() 不把 default 注入 Resolver（例如 [configue] include 系字段）
+    inject_default: bool
 
 
 class ConfigDeclaration:
@@ -91,6 +85,7 @@ class ConfigDeclaration:
             "path": tuple(path),
             "default": default,
             "type": typ,
+            "inject_default": True,
         }
 
     @classmethod
@@ -105,7 +100,11 @@ class ConfigDeclaration:
             converter = _resolve_annotation(meta["type"])
             resolver.register_type(section, field, converter)
 
-            if meta["default"] is not _Missing and (section, field) not in resolver:
+            if (
+                    meta.get("inject_default", True)
+                    and meta["default"] is not _Missing
+                    and (section, field) not in resolver
+            ):
                 resolver.inject_raw(section, field, meta["default"])
 
     @classmethod
@@ -119,6 +118,7 @@ class ConfigDeclaration:
             "path": config_value.path,
             "default": config_value.default,
             "type": annotation,
+            "inject_default": config_value.inject_default,
         }
 
     # alias
@@ -129,9 +129,11 @@ class ConfigDeclaration:
 class ConfigField(Generic[T]):
     _declaration_cls: Type[ConfigDeclaration] = ConfigDeclaration
 
-    def __init__(self, *path: str, default=_Missing):
+    def __init__(self, *path: str, default=_Missing, inject_default: bool = True):
         self._path: Tuple[str, ...] = path
         self._default = default
+        # False：只声明类型，不把 default 注入 Resolver
+        self.inject_default = inject_default
         self._cached_value = _Missing
         self._cached_exception: Optional[Exception] = None
 

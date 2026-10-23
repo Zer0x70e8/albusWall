@@ -37,7 +37,7 @@ _config = Config()
 
 
 def register_task_service(
-        container  # type: Container
+        container: Container
 ) -> None:
     container.register(
         "task_service",

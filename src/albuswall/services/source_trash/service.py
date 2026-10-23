@@ -25,6 +25,8 @@ _logger: Logger = getLogger(__name__)
 
 class SourceTrashService:
     """源级回收站。配置与协作者全部由构造参数注入。"""
+    # 类属性 → 必须用 SignalDescriptor（lazy、实例间共享）。
+    # 契约：cb(sender: SourceTrashService, *, source_id: int, kind: str)
     sources_changed = SignalDescriptor("sources_changed")
 
     def __init__(
@@ -57,7 +59,7 @@ class SourceTrashService:
 
         self._log.info("source %d soft-deleted, scheduling purge", source_id)
         self._schedule(source_id)
-        self.sources_changed.send(self, source_id=source_id, kind="soft_delete")
+        self.sources_changed.emit(self, source_id=source_id, kind="soft_delete")
         return True
 
     def restore_source(self, source_id: int) -> bool:
@@ -65,7 +67,7 @@ class SourceTrashService:
         restored = self._sources.restore(source_id)
         if restored:
             self._log.info("source %d restored from trash", source_id)
-            self.sources_changed.send(self, source_id=source_id, kind="restore")
+            self.sources_changed.emit(self, source_id=source_id, kind="restore")
         return restored
 
     def purge_source_now(self, source_id: int) -> SourcePurgeReport:
@@ -139,7 +141,7 @@ class SourceTrashService:
             source_id, len(report.asset_ids), len(thumbs),
         )
         self._remove_thumbnail_files(source_id, thumbs)
-        self.sources_changed.send(self, source_id=source_id, kind="purged")
+        self.sources_changed.emit(self, source_id=source_id, kind="purged")
         return report
 
     def _remove_thumbnail_files(
@@ -147,11 +149,19 @@ class SourceTrashService:
             source_id: int,
             paths: dict[str, ThumbnailPaths],
     ) -> None:
-        """best-effort 删私有缩略图。任何失败都吞掉。
+        """best-effort 删缩略图文件。任何失败都吞掉。
 
-        XDG 防护：若 base 落在 XDG 缓存内，说明 thumb_root 配错了，
-        拒绝删除并记 warning——XDG 缓存是跨应用共享的。
-        平台判断由 bootstrap 完成；这里只判断路径形态。
+        三道防护，按顺序生效：
+
+        1. **共享 md5 布局不再按 asset 删文件**（本次重构引入）。新布局下
+           ``rel`` 形如 ``<spec>/<md5(file_uri)>.png``、``base`` 是整根，
+           同一源文件被多条 asset 行引用时共享同一个 PNG —— 这里 unlink
+           会波及其它 asset 的缩略图。孤儿一律交给与缩略图服务配套的
+           ``ThumbnailCleaner``（按 PNG 内嵌 Thumb::URI 判定）兜底。
+        2. **XDG 防护**：base 落在 XDG 缓存内说明 thumb_root 配错了，
+           拒绝删除并记 warning —— 那是跨应用共享目录。
+        3. 旧私有布局（``{version}/{uuid[:2]}/{uuid}/…``）仍按 base/rel
+           逐个 unlink + rmdir base，供迁移期残留在旧树上的文件清理。
         """
         if not paths:
             return
@@ -159,13 +169,25 @@ class SourceTrashService:
         removed_files = 0
         removed_dirs = 0
         skipped_xdg = 0
+        skipped_shared = 0
 
         for asset_uuid, tp in paths.items():
             base = getattr(tp, "base", None)
             if not base:
                 continue
 
-            # XDG 防护用惰性导入，避免 utils 反向依赖服务
+            # 1. 共享 md5 布局：只清 DB（调用方已清），文件交给 cleaner
+            if self._uses_shared_md5_layout(tp):
+                skipped_shared += 1
+                self._log.debug(
+                    "keep shared thumbnail file "
+                    "(source=%d, uuid=%s, base=%s); "
+                    "orphans are handled by ThumbnailCleaner",
+                    source_id, asset_uuid, base,
+                )
+                continue
+
+            # 2. XDG 防护用惰性导入，避免 utils 反向依赖服务
             from albuswall.utils.xdg_thumbnail import is_inside_xdg_cache
             if is_inside_xdg_cache(base):
                 skipped_xdg += 1
@@ -177,7 +199,8 @@ class SourceTrashService:
                 )
                 continue
 
-            for spec, rel in tp.items():
+            # 3. 旧私有布局：按 base/rel 精确删
+            for _spec, rel in tp.items():
                 if not rel:
                     continue
                 abs_path = os.path.join(base.rstrip("/\\"), rel)
@@ -200,6 +223,31 @@ class SourceTrashService:
                 pass
 
         self._log.debug(
-            "source %d: removed %d files, %d dirs, skipped_xdg=%d",
+            "source %d: removed %d files, %d dirs, skipped_xdg=%d, "
+            "skipped_shared=%d",
             source_id, removed_files, removed_dirs, skipped_xdg,
+            skipped_shared,
         )
+
+    @staticmethod
+    def _uses_shared_md5_layout(tp: ThumbnailPaths) -> bool:
+        """判断该资产的路径快照是否属于"共享 md5 文件名"布局。
+
+        判据：任一 spec 的相对路径形如 ``<spec>/<32hex>.png``
+        （两种模式的规格目录名都在 XDG_SPECS 内）。旧私有布局的
+        ``small.jpg`` / ``medium.jpg`` 等不允许被误判。
+        """
+        from albuswall.utils.xdg_thumbnail import XDG_SPECS
+
+        for _spec, rel in tp.items():
+            if not rel:
+                continue
+            norm = rel.replace("\\", "/")
+            directory, _, name = norm.rpartition("/")
+            if directory not in XDG_SPECS:
+                continue
+            if not name.endswith(".png") or len(name) != 36:
+                continue
+            if all(c in "0123456789abcdef" for c in name[:-4]):
+                return True
+        return False

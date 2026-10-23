@@ -27,23 +27,24 @@ class SourceTrashConfig:
 
 
 @dataclass(frozen=True)
-class XdgCleanerConfig:
-    """XdgThumbnailCleaner 的运行时配置。
+class ThumbnailCleanerConfig:
+    """ThumbnailCleaner 的运行时配置。
 
-    ``root is None`` 表示禁用——平台不支持 XDG（macOS / Windows）
-    或用户显式关闭时，bootstrap 传 None 即可，cleaner 所有操作 no-op。
+    ``root`` 由 bootstrap 注入（私有模式 = thumb_root，XDG 模式 =
+    xdg_thumbnails_root()），cleaner 自己不读 thumbnail 配置，保持解耦。
+
+    ``enabled=False`` 或 ``root is None`` 时 cleaner 所有操作 no-op。
     """
 
+    enabled: bool = True
     root: Path | None = None
     min_age_seconds: float = 600.0
 
     def __post_init__(self) -> None:
-        if self.root is not None and self.min_age_seconds < 0:
+        if self.min_age_seconds < 0:
             raise ValueError("min_age_seconds must be >= 0")
-
-    @property
-    def enabled(self) -> bool:
-        return self.root is not None
+        if self.enabled and self.root is None:
+            raise ValueError("root is required when enabled is True")
 
 
 @dataclass(frozen=True)

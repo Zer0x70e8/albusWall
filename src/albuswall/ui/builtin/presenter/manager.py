@@ -49,19 +49,19 @@
 
 from __future__ import annotations
 
-from logging import getLogger
+from collections.abc import Callable
 from typing import (
     TYPE_CHECKING,
-    Callable,
     Optional,
     Protocol,
-    Sequence,
     TypeVar,
     runtime_checkable,
 )
 
 from PySide6.QtCore import QObject
 
+from albuswall.common.enums import ThumbSpec
+from albuswall.log import getLogger
 from albuswall.services.view import SCOPE_DELETED
 
 from ..config.static import ThumbnailGridPresenterConfs
@@ -69,36 +69,23 @@ from ..utils.signal_adapter import SignalAdapter
 
 if TYPE_CHECKING:
     from albuswall.core import Container
-    from ..window import Window
 
+    from ..window import Window
     from .album_presenter import AlbumPresenter
     from .image_presenter import ThumbnailGridPresenter
     from .source_presenter import IngestSourcePresenter
+    from .tag_editor_presenter import TagEditorPresenter
+    from .tagbar_presenter import TagBarPresenter
     from .viewer_presenter import ViewerPresenter
     from .window_presenter import WindowPresenter
-    from .tagbar_presenter import TagBarPresenter
-    from .tag_editor_presenter import TagEditorPresenter
+
+__all__ = ["Presenter", "PresenterManager"]
 
 _logger = getLogger(__name__)
 
 
-# --------------------------------------------------------------------------- #
-# 懒加载 helpers
-# --------------------------------------------------------------------------- #
-def _import(module: str, name: str):
-    """延迟 + 相对 import，只在这里写一次。"""
-    import importlib
-    mod = importlib.import_module(module, __package__)
-    return getattr(mod, name)
-
-
-def _thumb_spec():
-    try:
-        from albuswall.common.enums import ThumbSpec
-        return ThumbSpec.MEDIUM
-    except ImportError:
-        _logger.warning("ThumbSpec unavailable; using default spec.")
-        return None
+class _DependencyMissingError(Exception):
+    """presenter 需要的 container 依赖没注册 / 构造失败。"""
 
 
 # --------------------------------------------------------------------------- #
@@ -155,7 +142,7 @@ class PresenterManager(QObject):
         self.tagbar_presenter: Optional["TagBarPresenter"] = None
         self.tag_editor_presenter: Optional["TagEditorPresenter"] = None
 
-        # 新增：当前"标签作用于哪个资产"
+        # 当前"标签作用于哪个资产"（详情打开 → 详情资产；否则 grid 选中）
         self._active_asset_uuid: str | None = None
         self._detail_visible: bool = False
 
@@ -179,118 +166,124 @@ class PresenterManager(QObject):
         self.tag_editor_presenter = self._build_tag_editor_presenter()
 
     def _build_window_presenter(self) -> Optional["WindowPresenter"]:
+        from .window_presenter import WindowPresenter
+
         w = self._window
-        return self._try_presenter(
-            "WindowPresenter",
-            lambda: _import(".window_presenter", "WindowPresenter")(w, w),
-        )
+        return self._try_presenter("WindowPresenter", lambda: WindowPresenter(w, w))
 
     def _build_album_presenter(self) -> Optional["AlbumPresenter"]:
-        w, c = self._window, self._container
+        from .album_presenter import AlbumPresenter
+
+        w = self._window
         return self._try_presenter(
             "AlbumPresenter",
-            lambda: _import(".album_presenter", "AlbumPresenter")(
+            lambda: AlbumPresenter(
                 w.title_bar, w.album.view,
-                c.require("view_service"), parent=self,
+                self._require("view_service"),
+                parent=self,
             ),
-            requires=("view_service",),
         )
 
     def _build_thumb_presenter(self) -> Optional["ThumbnailGridPresenter"]:
-        w, c = self._window, self._container
-        confs = ThumbnailGridPresenterConfs()
+        from .image_presenter import ThumbnailGridPresenter
+
+        try:
+            confs = ThumbnailGridPresenterConfs()
+        except Exception:
+            _logger.exception("ThumbnailGridPresenterConfs unavailable")
+            confs = None
 
         p = self._try_presenter(
             "ThumbnailGridPresenter",
-            lambda: _import(".image_presenter", "ThumbnailGridPresenter")(
-                w.content,
-                thumb_repo=c.require("thumbnail_repo"),
-                thumb_service=c.require("thumbnail_service"),
-                spec=_thumb_spec(),
-                view_repo=c.get("view_repo", None),
+            lambda: ThumbnailGridPresenter(
+                self._window.content,
+                thumb_repo=self._require("thumbnail_repo"),
+                thumb_service=self._require("thumbnail_service"),
+                spec=ThumbSpec.MEDIUM,
+                view_repo=self._container.get("view_repo", None),
                 trash_retention_days=30,
             ),
-            requires=("thumbnail_repo", "thumbnail_service"),
         )
-        if p is not None:
+        if p is not None and confs is not None:
             p.set_favorite_icon(confs.favorite_on_icon, checked=True)
         return p
 
     def _build_ingest_presenter(self) -> Optional["IngestSourcePresenter"]:
-        w, c = self._window, self._container
+        from .source_presenter import IngestSourcePresenter
+
         return self._try_presenter(
             "IngestSourcePresenter",
-            lambda: _import(".source_presenter", "IngestSourcePresenter")(
-                w.source,
-                c.require("source_service"),
-                c.require("source_trash_service"),
+            lambda: IngestSourcePresenter(
+                self._window.source,
+                self._require("source_service"),
+                self._container.get("source_trash_service", None),
             ),
-            requires=("source_service",),
         )
 
     def _build_viewer_presenter(self) -> Optional["ViewerPresenter"]:
-        w, c = self._window, self._container
+        from .viewer_presenter import ViewerPresenter
+
         return self._try_presenter(
             "ViewerPresenter",
-            lambda: _import(".viewer_presenter", "ViewerPresenter")(
-                w.detail,
-                c.require("view_service"),
-                c.get("thumbnail_service", None),
-                c.get("asset_repo", None),
+            lambda: ViewerPresenter(
+                self._window.detail,
+                self._require("view_service"),
+                self._container.get("thumbnail_service", None),
+                self._container.get("asset_repo", None),
             ),
-            requires=("view_service",),
         )
 
     def _build_tagbar_presenter(self) -> Optional["TagBarPresenter"]:
-        w, c = self._window, self._container
+        from .tagbar_presenter import TagBarPresenter
+
         return self._try_presenter(
             "TagBarPresenter",
-            lambda: _import(".tagbar_presenter", "TagBarPresenter")(
-                w.detail.tag_bar,  # ← 改这里
-                tag_service=c.require("tag_service"),
-                asset_tag_service=c.require("asset_tag_service"),
+            lambda: TagBarPresenter(
+                self._window.detail.tag_bar,
+                tag_service=self._require("tag_service"),
+                asset_tag_service=self._require("asset_tag_service"),
                 current_asset_provider=self._current_asset_for_tags,
                 parent=self,
             ),
-            requires=("tag_service", "asset_tag_service"),
         )
 
     def _build_tag_editor_presenter(self) -> Optional["TagEditorPresenter"]:
-        w, c = self._window, self._container
+        from .tag_editor_presenter import TagEditorPresenter
+
         return self._try_presenter(
             "TagEditorPresenter",
-            lambda: _import(".tag_editor_presenter", "TagEditorPresenter")(
-                c.require("tag_service"),
-                parent_widget=w,
+            lambda: TagEditorPresenter(
+                self._require("tag_service"),
+                parent_widget=self._window,
                 parent=self,
             ),
-            requires=("tag_service",),
         )
+
+    def _require(self, name: str):
+        """取 container 依赖；缺失时抛 :class:`_DependencyMissingError`。"""
+        try:
+            dep = self._container.get(name, None)
+        except Exception as exc:
+            raise _DependencyMissingError(f"{name}: {exc}") from exc
+        if dep is None:
+            raise _DependencyMissingError(name)
+        return dep
 
     def _try_presenter(
             self,
             name: str,
             factory: Callable[[], _P],
-            *,
-            requires: Sequence[str] = (),
     ) -> Optional[_P]:
         """构造并注册单个 presenter。
 
-        依赖缺失 / 构造异常时记录日志、返回 None，不影响其它 presenter。
-        成功时把实例加入 ``_presenters`` 并返回。
+        依赖缺失 → warning；构造异常 → exception。两者都只跳过自己，
+        并返回 None。
         """
         try:
-            missing = [k for k in requires if self._container.get(k, None) is None]
-        except Exception:
-            _logger.exception(
-                "%s skipped: dependency resolution failed", name,
-            )
-            return None
-        if missing:
-            _logger.warning("%s skipped: missing %s", name, missing)
-            return None
-        try:
             presenter = factory()
+        except _DependencyMissingError as exc:
+            _logger.warning("%s skipped: missing %s", name, exc)
+            return None
         except Exception:
             _logger.exception("%s construction failed", name)
             return None
@@ -341,16 +334,13 @@ class PresenterManager(QObject):
                 self._on_tag_error,
             )
 
-        # grid 选中 → tagbar 刷新（如果 grid 暴露了 selection_changed）
+        # grid 选中 → tagbar 刷新。当前 ThumbnailGridPresenter 只暴露
+        # item_activated（点击进入详情），没有 selection_changed；
+        # 将来 grid 补上该信号后这里会自动接上，不需要改其它代码。
         if self.thumb_presenter is not None:
-            sel = getattr(self.thumb_presenter, "selection_changed", None)
-            if sel is not None:
-                self._adapter.connect(sel, self._on_selection_changed)
-            else:
-                _logger.warning(
-                    "thumb_presenter has no selection_changed; "
-                    "tagbar will not auto-refresh on selection."
-                )
+            selection = getattr(self.thumb_presenter, "selection_changed", None)
+            if selection is not None:
+                self._adapter.connect(selection, self._on_selection_changed)
 
     def _wire_presenter_signals(self) -> None:
         """presenter ↔ presenter 之间的信号（同线程直连）。"""
@@ -401,33 +391,34 @@ class PresenterManager(QObject):
 
           因此用 ``predicate`` 过滤掉 ``kind == "purged"``。
         """
-        import_service = self._container.get("import_service", None)
-        if import_service is not None:
-            self._adapter.connect(
-                import_service.assets_imported,
-                self._refresh_grid,
-                queued=True,
-                transform=_drop_payload,
-            )
-        else:
-            _logger.warning(
-                "import_service unavailable; auto-refresh disabled."
-            )
+        self._connect_refresh_source(
+            "import_service", "assets_imported", queued=True,
+        )
+        self._connect_refresh_source(
+            "source_trash_service", "sources_changed", queued=True,
+            predicate=_should_refresh_on_source_change,
+        )
 
-        source_trash = self._container.get("source_trash_service", None)
-        if source_trash is not None:
-            self._adapter.connect(
-                source_trash.sources_changed,
-                self._refresh_grid,
-                queued=True,
-                predicate=_should_refresh_on_source_change,
-                transform=_drop_payload,
-            )
-        else:
-            _logger.warning(
-                "source_trash_service unavailable; "
-                "source-level refresh disabled."
-            )
+    def _connect_refresh_source(
+            self,
+            service_name: str,
+            signal_name: str,
+            *,
+            queued: bool,
+            predicate: Optional[Callable[..., bool]] = None,
+    ) -> None:
+        """把 ``service.<signal_name>`` 桥到 ``_refresh_grid``（后台 → 主线程）。"""
+        service = self._container.get(service_name, None)
+        if service is None:
+            _logger.warning("%s unavailable; auto-refresh disabled.", service_name)
+            return
+        self._adapter.connect(
+            getattr(service, signal_name),
+            self._refresh_grid,
+            queued=queued,
+            predicate=predicate,
+            transform=_drop_payload,
+        )
 
     # ------------------------------------------------------------------ #
     # slots
@@ -442,12 +433,15 @@ class PresenterManager(QObject):
         入参是本批变化的资产 uuid 列表；本槽只关心"有变化"这一事实。
         """
         self._refresh_grid()
-        if self.tagbar_presenter is not None:
-            self.tagbar_presenter.refresh()
+        self._refresh_tagbar()
 
     def _refresh_grid(self) -> None:
         if self.album_presenter is None:
             return
+        # 封面是派生数据（相册内最新资产 / scope 首项），资产集合变了它
+        # 也可能从「无」变成「有」。这里和网格一起刷，否则会出现
+        # 「缩略图有图、相册封面一直空白」的割裂状态。
+        self.album_presenter.reload_covers()
         self._apply_album_to_grid(self.album_presenter.current)
 
     def _apply_album_to_grid(self, album) -> None:
@@ -457,6 +451,10 @@ class PresenterManager(QObject):
         self.thumb_presenter.set_assets(
             asset_uuids, include_deleted=include_deleted,
         )
+
+    def _refresh_tagbar(self) -> None:
+        if self.tagbar_presenter is not None:
+            self.tagbar_presenter.refresh()
 
     # ---- viewer ----
 
@@ -468,12 +466,7 @@ class PresenterManager(QObject):
             _logger.warning("item activated with no current album, ignored")
             return
 
-        try:
-            # noinspection pep8-naming
-            ViewerContext = _import(".viewer_presenter", "ViewerContext")
-        except ImportError:
-            _logger.exception("ViewerContext unavailable")
-            return
+        from .viewer_presenter import ViewerContext
 
         ctx = ViewerContext(
             album_uuid=album.uuid,
@@ -483,16 +476,13 @@ class PresenterManager(QObject):
         try:
             ok = self.viewer_presenter.open(ctx)
         except Exception:
-            _logger.exception(
-                "viewer open failed for asset=%s", asset_uuid,
-            )
+            _logger.exception("viewer open failed for asset=%s", asset_uuid)
             return
         if self.window_presenter is not None:
             self.window_presenter.show_detail()
         self._active_asset_uuid = str(asset_uuid)
         self._detail_visible = True
-        if self.tagbar_presenter is not None:
-            self.tagbar_presenter.refresh()
+        self._refresh_tagbar()
         if not ok:
             _logger.info(
                 "viewer opened with placeholder (asset=%s)", asset_uuid,
@@ -502,8 +492,7 @@ class PresenterManager(QObject):
         self._active_asset_uuid = str(asset_uuid)
         if self.viewer_presenter is not None:
             self.viewer_presenter.navigate(asset_uuid)
-        if self.tagbar_presenter is not None:
-            self.tagbar_presenter.refresh()
+        self._refresh_tagbar()
 
     def _on_detail_close_requested(self) -> None:
         self._close_viewer()
@@ -517,26 +506,28 @@ class PresenterManager(QObject):
         self._refresh_grid()
         self._detail_visible = False
         # 关详情后由 grid 选中决定标签作用域
-        if self.thumb_presenter is not None:
-            getter = getattr(self.thumb_presenter, "current_asset_uuid", None)
-            try:
-                self._active_asset_uuid = (
-                    str(getter()) if callable(getter) and getter() else None
-                )
-            except Exception:
-                _logger.exception("current_asset_uuid failed during close")
-                self._active_asset_uuid = None
-        else:
-            self._active_asset_uuid = None
-        if self.tagbar_presenter is not None:
-            self.tagbar_presenter.refresh()
+        self._active_asset_uuid = self._grid_selected_uuid()
+        self._refresh_tagbar()
+
+    def _grid_selected_uuid(self) -> str | None:
+        """grid 当前选中的资产 uuid（没有 grid / 没选中时为 None）。"""
+        if self.thumb_presenter is None:
+            return None
+        getter = getattr(self.thumb_presenter, "current_asset_uuid", None)
+        if not callable(getter):
+            return None
+        try:
+            value = getter()
+        except Exception:
+            _logger.exception("current_asset_uuid failed")
+            return None
+        return str(value) if value else None
 
     def _on_selection_changed(self, asset_uuid: str) -> None:
         if self._detail_visible:
             return
         self._active_asset_uuid = str(asset_uuid) if asset_uuid else None
-        if self.tagbar_presenter is not None:
-            self.tagbar_presenter.refresh()
+        self._refresh_tagbar()
 
     def _current_asset_for_tags(self) -> str | None:
         """TagBar 的"作用于哪个资产"来源。
@@ -557,8 +548,7 @@ class PresenterManager(QObject):
         如果详情打开且看的是同一资产，详情侧栏的标签 chip 也应刷新——
         那由 viewer_presenter 自己的 assets_changed 路径负责，manager 不重复。
         """
-        if self.tagbar_presenter is not None:
-            self.tagbar_presenter.refresh()
+        self._refresh_tagbar()
 
     def _on_tag_metadata_changed(self) -> None:
         """标签元数据变更（create / rename / delete / restore）。
@@ -588,14 +578,31 @@ class PresenterManager(QObject):
 
     def _on_tag_error(self, message: str) -> None:
         """tag 业务错误 → 弹提示。"""
-        w = self._window
-        toast = getattr(w, "show_toast", None)
+        toast = getattr(self._window, "show_toast", None)
         if callable(toast):
             toast(message)
         else:
             _logger.warning("tag error (no toast available): %s", message)
 
     # ---- scope helpers ----
+
+    def _scope_of(self, album) -> str | None:
+        """``view_service.get_scope(album.uuid)``；取不到时为 None。"""
+        album_uuid = getattr(album, "uuid", None)
+        if album_uuid is None:
+            return None
+        view_service = self._container.get("view_service", None)
+        if view_service is None:
+            return None
+        try:
+            return view_service.get_scope(album_uuid)
+        except Exception:
+            _logger.exception("resolve scope failed for %s", album)
+            return None
+
+    def _include_deleted(self, album) -> bool:
+        """album 所属视图是否包含已删资产（Trash 视图）。"""
+        return self._scope_of(album) == SCOPE_DELETED
 
     def _album_scope(self, album) -> tuple[list[str], bool]:
         """返回 ``(asset_uuids, include_deleted)``。
@@ -606,32 +613,13 @@ class PresenterManager(QObject):
         """
         view_service = self._container.get("view_service", None)
         if view_service is None or album is None:
-            return [], False
+            return [], self._include_deleted(album)
         try:
             uuids = view_service.get_asset_uuids(album)
-            # noinspection unresolved-references
-            include_deleted = (
-                    view_service.get_scope(album.uuid) == SCOPE_DELETED
-            )
-            return [str(u) for u in uuids], include_deleted
         except Exception:
             _logger.exception("resolve album scope failed for %s", album)
-            return [], False
-
-    def _include_deleted(self, album) -> bool:
-        """album 所属视图是否包含已删资产（Trash 视图）。"""
-        if album is None:
-            return False
-        view_service = self._container.get("view_service", None)
-        if view_service is None:
-            return False
-        try:
-            return view_service.get_scope(album.uuid) == SCOPE_DELETED
-        except Exception:
-            _logger.exception(
-                "resolve include_deleted failed for %s", album,
-            )
-            return False
+            return [], self._include_deleted(album)
+        return [str(u) for u in uuids], self._include_deleted(album)
 
     # ------------------------------------------------------------------ #
     # lifecycle
@@ -650,8 +638,7 @@ class PresenterManager(QObject):
                 _logger.exception(
                     "presenter %s.setup failed", type(p).__name__,
                 )
-        if self.tagbar_presenter is not None:
-            self.tagbar_presenter.refresh()
+        self._refresh_tagbar()
 
     def teardown(self) -> None:
         """断开所有 adapter 连接并逆序 teardown presenter。"""

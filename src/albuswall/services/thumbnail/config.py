@@ -17,8 +17,10 @@
 
 字段与 assets 表的关系
 ----------------------
-version / image_format 参与路径生成，改动必须 bump version，
-否则旧资产会映射到新目录而读空文件。
+``version`` / ``image_format`` / ``quality`` **不再参与路径生成或编码**：
+两种模式都写 ``<root>/<xdg-spec>/<md5(file_uri)>.png``，格式恒为 PNG。
+``version`` 仅保留为 ``_inflight`` 去重键的一部分（``(uuid, version)``），
+改它不会让旧资产映射到空文件。
 """
 
 from pathlib import Path
@@ -26,7 +28,6 @@ from pathlib import Path
 from albuswall.configue import ConfigField
 from albuswall.common.enums import ThumbSpec
 
-# 默认 spec 尺寸
 _DEFAULT_SPECS: dict[str, int] = {
     ThumbSpec.SMALL.value: 128,
     ThumbSpec.MEDIUM.value: 512,
@@ -37,58 +38,49 @@ __version__ = "0.0.1.dev"
 
 
 class ThumbnailConfig:
-    """缩略图服务配置。
-
-    section 锚点确保 ``[thumbnail]`` 段存在，其他字段都挂在该段下。
-    """
-
-    # 段锚点（default={} 保证空配置也能解析出 section）
+    """缩略图服务配置。"""
     section = ConfigField("thumbnail", default={})
-
-    # 缩略图目录 scheme 版本。升级生成策略（尺寸、格式、布局）必须 bump。
-    # version: str = ConfigField("thumbnail", "version", default=__version__)
     version = __version__
-
-    # spec → 最大边长（像素）。key 允许字符串形式，service 会归一化。
     specs: dict = ConfigField("thumbnail", "specs", default=dict(_DEFAULT_SPECS))
-
-    # 输出格式与质量。service 会 upper() 归一化。
     image_format: str = ConfigField("thumbnail", "image_format", default="JPEG")
     quality: int = ConfigField("thumbnail", "quality", default=85)
-
-    # 缩略图根目录。service 会 expanduser().resolve()。
     thumb_root: str = ConfigField(
         "thumbnail", "thumb_root",
         default="~/.cache/albuswall/thumbs",
     )
-
-    # 单次 scan 的批量大小
     batch_size: int = ConfigField("thumbnail", "batch_size", default=32)
-
-    # 永久失败冷却秒数：避免 scan_and_submit 对同一 asset 死循环提交
     failure_cooldown_sec: float = ConfigField(
         "thumbnail", "failure_cooldown_sec", default=300.0,
     )
-
-    # 写盘重试：单次 _work_one 内，写盘失败后的最大重试次数（首次不计）。
-    # 超过后该资产标记为永久失败并进入 failure_cooldown_sec 冷却。
     write_max_retries: int = ConfigField(
         "thumbnail", "write_max_retries", default=2,
     )
-
-    # 写盘重试退避基数（秒）。第 n 次重试等待 backoff * 2**n。
     write_retry_backoff_sec: float = ConfigField(
         "thumbnail", "write_retry_backoff_sec", default=0.2,
     )
 
+    # ------------------------------------------------------------------ #
+    # 缩略图根目录选择（布局本身两种模式同构）
+    # ------------------------------------------------------------------ #
+    # 两种模式共用同一套磁盘协议：<root>/<spec>/<md5(file_uri)>.png、
+    # 强制 PNG、内嵌 Thumb::URI/Thumb::MTime 元数据、0700/0600 权限、
+    # fail/<md5>.png 永久失败标记。唯一差异就是根目录常量。
+    #
+    # False（默认）→ root = thumb_root（私有目录）。
+    # True         → root = $CACHE/thumbnails（与桌面环境其它应用共享；
+    #                按平台惯例，见 xdg_thumbnail.xdg_cache_home）。
+    xdg_enabled: bool = ConfigField("thumbnail", "xdg_enabled", default=False)
 
-# 模块级单例。其它模块 ``from .config import config`` 直接取。
+    # ThumbSpec → 协议 spec 目录的映射（两种模式通用）。
+    # None 用内置默认：SMALL→normal, MEDIUM→x-large, LARGE→xx-large。
+    xdg_spec_map: dict | None = ConfigField(
+        "thumbnail", "xdg_spec_map", default=None,
+    )
+
+
 config = ThumbnailConfig()
 
 
-# ---------------------------------------------------------------------- #
-# 辅助：把 config 中需要归一化的字段解析成 service 可直接用的形态
-# ---------------------------------------------------------------------- #
 def resolve_thumb_root() -> Path:
     """thumb_root 展开 + 绝对化。"""
     return Path(config.thumb_root).expanduser().resolve()
@@ -107,3 +99,20 @@ def resolve_specs() -> dict[ThumbSpec, int]:
 
 def resolve_image_format() -> str:
     return str(config.image_format).upper()
+
+
+def resolve_xdg_spec_map() -> dict[ThumbSpec, str]:
+    """ThumbSpec → 协议 spec 目录名（两种模式通用）。"""
+    default: dict[ThumbSpec, str] = {
+        ThumbSpec.SMALL: "normal",
+        ThumbSpec.MEDIUM: "x-large",
+        ThumbSpec.LARGE: "xx-large",
+    }
+    raw = config.xdg_spec_map
+    if not raw:
+        return default
+    result: dict[ThumbSpec, str] = {}
+    for k, v in raw.items():
+        spec = k if isinstance(k, ThumbSpec) else ThumbSpec(k)
+        result[spec] = str(v)
+    return result

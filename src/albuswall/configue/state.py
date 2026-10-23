@@ -8,15 +8,20 @@
                             运行时状态（socket、锁、线程句柄……）。
   - StatefulNamespace     ：在 Observable 之上叠加 JSON 落盘（save/load）。
   - StateField            ：声明式字段（类型校验 + 默认值），两个基类通用。
+                            类型既可以显式传（StateField(str)），
+                            也可以从类注解兜底（x: str = StateField()）。
 """
 
 import json
 import threading
+import types
 from pathlib import Path
 from typing import (
     Any, Callable, Generic, Iterator, Optional, TypeVar,
+    Union, get_args, get_origin,
 )
 
+from .utils.annotation import resolve_annotation
 from .utils.namespace import Namespace
 
 __all__ = [
@@ -78,21 +83,151 @@ class StateContext(ObservableContext):
 
 
 # ─────────────────────────────────────────────────────────────
+# 类型的两个静态辅助：嵌套判定 / 实例校验
+# ─────────────────────────────────────────────────────────────
+# Optional[X] 既可能来自 typing.Union，也可能是 PEP 604 的 X | None
+_UNION_ORIGINS = (Union, getattr(types, "UnionType", Union))
+
+
+def _analyze_nested(typ: Any) -> tuple[bool, Optional[type]]:
+    """判定类型是否应把 dict 自动提升成 Namespace 子树。
+
+    Returns:
+        (nested, nested_cls)：
+          - ``typ is None``                     → ``(False, None)``
+          - ``Optional[X]`` / 单分支 ``Union``   → 递归 ``X``
+          - 多分支 ``Union``                     → ``(False, None)``（不支持自动嵌套）
+          - ``Namespace`` 子类                   → ``(True, typ)``
+          - 其余（含 ``list[X]`` / ``dict[str, X]``）→ ``(False, None)``
+
+    ``nested_cls`` 是解包后的实际类：注解是 ``Optional[UserPrefs]`` 时
+    ``type`` 不能直接实例化，必须用 ``nested_cls`` 调构造。
+    """
+    if typ is None or typ is Any:
+        return False, None
+
+    origin = get_origin(typ)
+    if origin in _UNION_ORIGINS:
+        non_none = [arg for arg in get_args(typ) if arg is not type(None)]
+        if len(non_none) == 1:
+            return _analyze_nested(non_none[0])
+        return False, None
+
+    if isinstance(typ, type) and issubclass(typ, Namespace):
+        return True, typ
+
+    return False, None
+
+
+def _matches_type(value: Any, typ: Any) -> bool:
+    """``isinstance`` 的安全版：支持 ``Optional`` / 泛型容器，无法判断时 fail-open。
+
+    先前的 ``isinstance(value, Optional[str])`` 会抛
+    ``TypeError: Subscripted generics cannot be used with class and instance checks``，
+    这里统一收口：
+
+    - ``Any`` / ``None`` 类型 → True
+    - ``Union`` → 任一分支匹配即 True
+    - ``list`` / ``tuple`` / ``set`` / ``frozenset`` → 校验容器本身 + 元素（浅层递归）
+    - ``dict`` → 校验容器本身；key 类型为 ``str`` 时一并校验，value 按类型校验
+    - 其余 → ``isinstance``；抛 ``TypeError`` 时返回 True（fail-open，不误伤）
+    """
+    if typ is None or typ is Any:
+        return True
+
+    origin = get_origin(typ)
+    args = get_args(typ)
+
+    if origin in _UNION_ORIGINS:
+        return any(_matches_type(value, arg) for arg in args)
+
+    if origin in (list, tuple, set, frozenset):
+        if not isinstance(value, origin):
+            return False
+        if not args:
+            return True
+        if len(args) == 2 and args[1] is ...:  # tuple[int, ...]
+            item_types: tuple = (args[0],)
+        elif origin is tuple:  # tuple[int, str]
+            item_types = args
+        else:  # list[int] / set[int]
+            item_types = (args[0],)
+        for index, item in enumerate(value):
+            item_type = (
+                item_types[index] if index < len(item_types) else item_types[0]
+            )
+            if not _matches_type(item, item_type):
+                return False
+        return True
+
+    if origin is dict:
+        if not isinstance(value, dict):
+            return False
+        if len(args) != 2:
+            return True
+        key_type, value_type = args
+        if key_type is str:
+            return all(
+                isinstance(k, str) and _matches_type(v, value_type)
+                for k, v in value.items()
+            )
+        return all(_matches_type(v, value_type) for v in value.values())
+
+    try:
+        return isinstance(value, typ)
+    except TypeError:
+        # 无法用于 isinstance 的类型（TypeVar / 奇特的泛型）→ 不校验
+        return True
+
+
+def _type_name(typ: Any) -> str:
+    """给报错文案用的类型名（泛型没有 __name__）。"""
+    return getattr(typ, "__name__", None) or repr(typ)
+
+
+# ─────────────────────────────────────────────────────────────
 # 声明式字段（两个 Namespace 通用）
 # ─────────────────────────────────────────────────────────────
 class StateField(Generic[T]):
     """声明式 state 字段。用法和普通类属性一致：
 
         class UserState(ObservableNamespace):
-            user_id = StateField(str, default="anon")
-            theme   = StateField(str, default="dark")
+            user_id = StateField(str, default="anon")   # 显式类型
+            theme: str = StateField(default="dark")     # 注解兜底类型
 
         s = UserState(user_id="alice")
         s.user_id = "bob"        # 类型校验 + 脏标记，使用方无感
         del s.user_id            # 恢复默认值（__dict__ 里清掉）
+
+    类型来源（优先级从高到低）：
+
+    1. 显式 ``type_`` 参数；
+    2. 类注解（``x: str = StateField()``），在 ``__set_name__`` 时解析一次；
+    3. 都没有 → ``type`` 为 ``None``，不做校验。
+
+    行为总览：
+
+    ================================  ==================  ===========================
+    声明                                type / nested        校验
+    ================================  ==================  ===========================
+    ``StateField(str, default="x")``   str / (F, None)      ``isinstance(v, str)``
+    ``x: str = StateField()``          str / (F, None)      同上
+    ``StateField()``（无注解）           None / (F, None)     不校验
+    ``x: Optional[str]``               Optional[str] / F    ``None`` 或 ``str``
+    ``x: list[int]``                   list[int] / F        元素为 int 的 list
+    ``p: UserPrefs``                   UserPrefs / (T, C)   dict 自动提升为 ``UserPrefs``
+    ``p: Optional[UserPrefs]``         Optional[..] / TC   同上；``None`` 允许
+    ``p: list[UserPrefs]``             list[..] / F         不自动嵌套（写死）
+    显式 ``nested=False``              任意 / F             不嵌套
+    ================================  ==================  ===========================
+
+    约定：``value is None`` 永远放行（即便类型不是 Optional），
+    保持 ``StateField(object)`` 这类既有用法不受影响。
     """
 
-    __slots__ = ("type", "default", "name", "nested")
+    __slots__ = (
+        "type", "default", "name", "nested", "nested_cls", "_nested_explicit",
+    )
 
     def __init__(self, type_: Optional[type] = None, *,
                  default: Any = _Missing,
@@ -100,17 +235,33 @@ class StateField(Generic[T]):
         self.type = type_
         self.default = default
         self.name = None
-        # type_ 是 Namespace 子类 → 默认嵌套；否则默认不嵌套。
-        # 想覆盖可以显式传 nested=True/False。
-        if nested is None:
-            nested = (
-                    isinstance(type_, type)
-                    and issubclass(type_, Namespace)
-            )
-        self.nested = nested
+        # nested 三态：True/False = 用户显式指定（不再推断）；None = 待推断
+        self._nested_explicit = nested is not None
+        self.nested = bool(nested) if nested is not None else False
+        self.nested_cls: Optional[type] = None
+        if type_ is not None:
+            # 显式类型可以立刻推断；注解路径要等 __set_name__
+            self._refresh_nested(infer_switch=not self._nested_explicit)
+
+    def _refresh_nested(self, *, infer_switch: bool) -> None:
+        """重算 nested / nested_cls；``infer_switch=False`` 时保留用户的开关。"""
+        inferred, nested_cls = _analyze_nested(self.type)
+        self.nested_cls = nested_cls
+        if infer_switch:
+            self.nested = inferred
 
     def __set_name__(self, owner: type, name: str) -> None:
         self.name = name
+
+        # 注解兜底类型。owner.__annotations__ 是 O(1) 的字典读取；
+        # 绝不在这里调 typing.get_type_hints(owner)（n 个字段 = n 次全类遍历）。
+        if self.type is None:
+            ann = getattr(owner, "__annotations__", {}).get(name)
+            if ann is not None:
+                self.type = resolve_annotation(ann, owner=owner, field=name)
+
+        # __set_name__ 每个字段只跑一次，之后运行期不再碰注解
+        self._refresh_nested(infer_switch=not self._nested_explicit)
 
     def __get__(self, instance: Any, owner: Optional[type] = None) -> Any:
         if instance is None:
@@ -129,11 +280,15 @@ class StateField(Generic[T]):
     def __set__(self, instance: Any, value: Any) -> None:
         if self.name is None:
             raise RuntimeError("StateField not bound to a class attribute")
-        if self.type is not None and value is not None \
-                and not isinstance(value, self.type):
+        # dict 是「声明为 Namespace 子类」字段的原始形态：显式 nested=False 时
+        # 不做提升，也照原样接收（见 README 的行为表）。
+        raw_nested_dict = isinstance(value, dict) and self.nested_cls is not None
+        if (self.type is not None and value is not None
+                and not raw_nested_dict
+                and not _matches_type(value, self.type)):
             raise TypeError(
                 f"{type(instance).__name__}.{self.name}: "
-                f"expected {self.type.__name__}, got {type(value).__name__}"
+                f"expected {_type_name(self.type)}, got {type(value).__name__}"
             )
         instance.__dict__[self.name] = value
 
@@ -194,7 +349,10 @@ class ObservableNamespace(Namespace):
             field = getattr(type(self), name, None)
             if isinstance(field, StateField) and field.nested:
                 ctx = object.__getattribute__(self, "_ctx")
-                value = field.type(_ctx=ctx, **value)
+                # nested_cls 是解包后的实际类：注解为 Optional[UserPrefs] 时
+                # field.type 不能直接实例化
+                cls = field.nested_cls or field.type
+                value = cls(_ctx=ctx, **value)
 
         object.__setattr__(self, name, value)
 

@@ -201,15 +201,12 @@ class IngestSource:
                 or not Path(self.source_path).is_dir()
         ):
             return True
-        if self.file_type_check not in (
-                FileTypeCheckMode.SUFFIX,
-                FileTypeCheckMode.MAGIC,
-        ):
-            # 显式白名单：只有 suffix / magic 视为"配置完整"。
-            # NONE 是 Python 侧哨兵（schema CHECK 只允许 suffix/magic，
-            # 且读路径经 coerce_enum 后拿不到 NONE），此处与显式 ``is NONE``
-            # 行为等价，但对未来新增成员默认收紧为 void。
-            # 见 common/CONVENTIONS.md · 待定 · FileTypeCheckMode.NONE。
+        if self.file_type_check is FileTypeCheckMode.NONE:
+            # 排除哨兵：NONE 是 Python 侧哨兵（schema CHECK 只允许
+            # suffix / magic / off / magic_lax，且读路径经 coerce_enum
+            # 后拿不到 NONE）。用"排除哨兵"而非白名单，保证新增成员
+            # （off / magic_lax 以及未来的成员）默认放行。
+            # 见 common/CONVENTIONS.md · 5.1 · FileTypeCheckMode.NONE。
             return True
         if (
                 self.auto_mount
@@ -523,9 +520,8 @@ class IngestSourceFormData:
         契约（``CONVENTIONS.md`` · TriggerConfig.to_dict）：这是**存储形态**
         的唯一出口，``TriggerConfig.to_dict`` 仅作运行时视图，不进存储。
 
-        TODO(形态待定)：本方法恒写单值 str，而 ``TriggerConfig.update_mode``
-        是 ``list[UpdateMode]``；两套形态的取舍见
-        ``common/CONVENTIONS.md`` · 待定 · update_mode，本阶段不改形态。
+        形态：``update_mode`` 恒为**单值**，与 ``TriggerConfig.update_mode``
+        （单值 ``UpdateMode``）以及 ``media_library_schema.sql`` 的注释一致。
         """
         if not self.scheduled_enabled and not self.device_trigger_enabled:
             return {"update_mode": UpdateMode.MANUAL.value}
@@ -560,15 +556,17 @@ def _apply_trigger_config_to_form(
 ) -> None:
     """把 trigger_config dict 反解回 form 的扁平字段（原地写入）。
 
-    兼容历史脏数据：``update_mode`` 可能是 ``str`` / ``list`` / ``tuple``。
+    ``update_mode`` 是单值字符串，未知 / NULL 降级为 ``MANUAL``
+    （读路径容错，见 ``CONVENTIONS.md`` · 枚举容错）。
     """
     if not tc:
         return
 
-    raw_mode = tc.get("update_mode") or "manual"
-    if isinstance(raw_mode, (list, tuple, set, frozenset)):
-        raw_mode = next(iter(raw_mode), "manual")
-    update_mode = str(raw_mode)
+    update_mode = coerce_enum(
+        tc.get("update_mode"),
+        UpdateMode,
+        UpdateMode.MANUAL,
+    )
 
     scheduled = tc.get("scheduled") or {}
     device = tc.get("device_trigger") or {}
@@ -578,7 +576,7 @@ def _apply_trigger_config_to_form(
 
     # form 只区分 scheduled_time / interval_time 两种；
     # device_trigger / manual 一律落回 scheduled_time 分支（表单保持可编辑）。
-    if update_mode == UpdateMode.INTERVAL_TIME:
+    if update_mode is UpdateMode.INTERVAL_TIME:
         form.update_mode = UpdateMode.INTERVAL_TIME
     else:
         form.update_mode = UpdateMode.SCHEDULED_TIME
@@ -593,7 +591,12 @@ def _apply_trigger_config_to_form(
 
 @dataclass(frozen=True, slots=True)
 class SourceScanFinished:
-    """单个 source 扫描/持久化任务完成事件。"""
+    """单个 source 扫描/持久化任务完成事件。
+
+    ``skipped=True`` 表示任务被**主动跳过**（扫描开始前发现源已被删除 /
+    禁用），既不是成功也不是失败：扫描没有发生，``ok`` 仍为 ``True``，
+    但 ``inserted_count`` 等计数全部为 0，订阅方不应据此判定"无新内容"。
+    """
 
     source_id: int
     task_seq: int
@@ -602,6 +605,7 @@ class SourceScanFinished:
     has_new_content: bool
     inserted_count: int = 0
     error: Optional[str] = None
+    skipped: bool = False
 
     @property
     def ok(self) -> bool:
@@ -610,8 +614,8 @@ class SourceScanFinished:
 
     @property
     def is_noop(self) -> bool:
-        """扫描成功但无新内容。"""
-        return self.ok and not self.has_new_content
+        """扫描成功但无新内容（被跳过的事件不算 noop）。"""
+        return self.ok and not self.skipped and not self.has_new_content
 
 
 @dataclass(frozen=True, slots=True)

@@ -43,3 +43,5 @@ ignore = ["E501"]  # 交给 formatter
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]
 "**/window/source/detail_widget.py" = ["E402"]  # __main__ 段
+"**/__main__.py" = ["T20"]  # 示例入口靠 print 给用户看结果
+"src/albuswall/tasks/demo.py" = ["T20"]  # 示例任务本体同样是演示输出

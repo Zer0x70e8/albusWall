@@ -12,7 +12,8 @@
 
     · 磁盘上尚无缩略图（``thumb_map`` 缺失该 uuid，或 ImageLoader 加载失败）
       → 通过 ``submit_by_uuid`` 提交生成；
-    · 收到 ``thumbnail_ready(uuid)`` → 重新解析路径 → ``dataChanged`` 触发重绘；
+    · 收到 ``thumbnail_ready(sender, *, asset_uuid)`` → 重新解析路径 →
+      ``dataChanged`` 触发重绘；
     · 同一 uuid 的生成尝试上限 ``_MAX_GENERATION_ATTEMPTS``，命中后静默
       放弃，避免与 ImageLoader 的错误路径形成死循环。
 
@@ -402,7 +403,8 @@ class ThumbnailModel(QAbstractListModel):
             return
 
         # 用 relay 保存引用，便于断开；走 bridge 队列切回主线程。
-        def relay(asset_uuid: str) -> None:
+        # 契约：cb(sender: ThumbnailService, *, asset_uuid: str)
+        def relay(_sender, *, asset_uuid: str) -> None:
             self._thumbnail_ready_bridge.emit(asset_uuid)
 
         self._service_relay = relay

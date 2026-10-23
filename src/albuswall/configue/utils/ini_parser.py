@@ -45,6 +45,11 @@ logger = logging.getLogger(f"{albuswall.__name__}.configue")
 # noinspection unresolved-references
 logger.trace = lambda msg: logger.log(TRACE, msg)
 
+# bool 的真值写法（大小写不敏感）。不在集合里的字符串一律转换为 False。
+# 注意：这里曾是 ("true", "1", "yes", "boot")——"boot" 是 "on" 的笔误，
+# 已修正；`_deconvert` 的反向只产出 "true"/"false"，往返不受影响。
+_TRUE_STRINGS = frozenset({"true", "1", "yes", "on"})
+
 
 def _needs_default_section(content: str) -> bool:
     """第一行有效内容不是节头时返回 True。"""
@@ -392,7 +397,9 @@ def _convert(
 
     # Basic types
     if converter is bool:
-        result = raw.strip().lower() in ("true", "1", "yes", "boot")
+        # 真值集合：true / 1 / yes / on（大小写不敏感，容忍首尾空白）；
+        # 其余（false / 0 / no / off / 任意串）一律为 False。
+        result = raw.strip().lower() in _TRUE_STRINGS
         logger.trace(f"[_convert] bool result: {result}")
         return result
     if converter is int:
@@ -417,6 +424,93 @@ def _convert(
         return result
     # noinspection PyStringConversionWithoutDunderMethod
     raise TypeError(f"Unhandled converter type: {type(converter)} (value: {converter})")
+
+
+def _matches_type(value: Any, typ: Any) -> bool:
+    """``_deconvert`` 内部用：判断 value 是否属于 typ（Union 选型用）。"""
+    if typ is bool:
+        return isinstance(value, bool)
+    if typ is int:
+        return isinstance(value, int) and not isinstance(value, bool)
+    try:
+        return isinstance(value, typ)
+    except TypeError:
+        return False
+
+
+def _join_items(items, item_types, custom_converters) -> str:
+    """把容器元素按「raw 形态」拼成逗号分隔串，与 ``_convert`` 的 split(",") 对称。
+
+    item_types: 与 items 等长的类型列表，或 None（元素直接 str）。
+    """
+    parts = []
+    for i, item in enumerate(items):
+        typ = item_types[i] if item_types is not None else None
+        parts.append(_deconvert(item, typ, custom_converters))
+    return ", ".join(parts)
+
+
+def _deconvert(
+        value: Any,
+        converter: Any,
+        custom_converters: Optional[Dict[Any, Callable[[str], Any]]] = None,
+) -> str:
+    """与 ``_convert`` 对称：typed value -> INI 原始字符串。
+
+    约定（fail-safe，不抛异常）：
+      - None -> ""
+      - bool -> "true" / "false"
+      - Path -> str(value)
+      - list / tuple -> ", ".join(...)（与 ``_convert`` 里 split(",") 对称）
+      - int / float / str -> str(value)
+      - Optional / Union：None -> ""，其余按匹配的内部类型处理
+      - 未知类型 -> str(value)
+
+    注意：注册了自定义转换器的 converter 无法反解，直接 ``str(value)``。
+    """
+    logger.trace(f"[_deconvert] Input: value={value!r}, converter={converter}")
+
+    # None 对任何类型都写成空串（Optional / Union 的对称面）
+    if value is None:
+        return ""
+
+    if custom_converters and converter in custom_converters:
+        return str(value)
+
+    origin = get_origin(converter)
+    if origin is not None:
+        args = get_args(converter)
+        if origin is Union:
+            non_none = [t for t in args if t is not type(None)]
+            if not non_none:
+                return str(value)
+            if len(non_none) == 1:
+                return _deconvert(value, non_none[0], custom_converters)
+            for t in non_none:
+                if _matches_type(value, t):
+                    return _deconvert(value, t, custom_converters)
+            return str(value)
+        if origin is list:
+            if not isinstance(value, (list, tuple)):
+                return str(value)
+            item_types = [args[0]] * len(value) if args else None
+            return _join_items(value, item_types, custom_converters)
+        if origin is tuple:
+            if not isinstance(value, (list, tuple)):
+                return str(value)
+            if not args:
+                item_types = None
+            elif len(args) == 2 and args[1] is ...:
+                item_types = [args[0]] * len(value)
+            else:
+                item_types = list(args)
+            return _join_items(value, item_types, custom_converters)
+        return str(value)
+
+    if converter is bool:
+        return "true" if value else "false"
+
+    return str(value)
 
 
 if __name__ == "__main__":
@@ -444,9 +538,13 @@ if __name__ == "__main__":
             self.assertTrue(_convert("1", bool))
             self.assertTrue(_convert("yes", bool))
             self.assertTrue(_convert("ON", bool))
+            self.assertTrue(_convert("on", bool))
+            self.assertTrue(_convert(" True ", bool))
             self.assertFalse(_convert("false", bool))
             self.assertFalse(_convert("0", bool))
             self.assertFalse(_convert("no", bool))
+            self.assertFalse(_convert("off", bool))
+            self.assertFalse(_convert("", bool))
 
         def test_int_conversion(self):
             self.assertEqual(_convert("123", int), 123)

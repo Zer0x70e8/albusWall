@@ -1,47 +1,75 @@
 #
-""""""
+"""专辑网格 + 标题栏 presenter。
+
+一块状态、两处呈现：``_current_album`` 是唯一事实，
+网格高亮与 ``TitleBar`` 的 ``TitleBarVO`` 都从它派生。
+
+封面是派生数据（虚拟相册取 scope 首项、物理相册取 ``cover_asset_id``
+或最新资产），所以资产集合一变就要重新解析 —— 见 :meth:`reload_covers`。
+解码 + 缩放放在线程池，路径解析留在主线程，回填按 uuid 对齐。
+"""
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Optional
 from uuid import UUID
-from logging import getLogger
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
 
 from PySide6.QtCore import (
-    QObject, QRunnable, QThreadPool, Qt, Signal, Slot,
-    QModelIndex, QMetaObject, Q_ARG,
+    Q_ARG,
+    QMetaObject,
+    QModelIndex,
+    QObject,
+    QRunnable,
+    Qt,
+    QThreadPool,
+    Signal,
+    Slot,
 )
-from PySide6.QtGui import QPixmap, QImage
+from PySide6.QtGui import QImage, QPixmap
 
 import albuswall
-from albuswall.log import TRACE, Logger
 from albuswall.dto.album import Album
+from albuswall.log import Logger, getLogger
 from albuswall.ui.vo.album import TitleBarVO
 
-from ..config.registory import PreferenceField
-from ..config.static import WindowPresenterConfs
-from ..model.album_model import AlbumModel, AlbumRole
+from ..config import PreferenceConfig
 from ..delegate.album_cover_delegate import AlbumCOverDelegate
+from ..model.album_model import AlbumModel, AlbumRole
 from ..widgets.square_grid import SquareGridView
 
 if TYPE_CHECKING:
     from albuswall.services.view import ViewService
+
     from ..window.titlebar import TitleBar
+
+__all__ = ["AlbumPresenter", "PreferenceConfig"]
 
 _DEFAULT_TITLE = albuswall.__title__
 
 _logger: Logger = getLogger(__name__)  # type: ignore
-_logger.trace = lambda msg, *args: _logger.log(TRACE, msg, *args)
 
-# 图标默认文件名
-_DEFAULT_ALBUM_ICON = "album_button.svg"
-_DEFAULT_EXTRA_ICON = "more_button.svg"
-_DEFAULT_SEARCH_ICON = "search_button.svg"
-
-_ICON_DIR_CANDIDATES = ("icons", "cover", "imgs", "assets")
-
+#: 后台解码时预缩放的短边像素。``KeepAspectRatioByExpanding`` 保证
+#: 短边恰好等于它，paint 阶段就永远不需要放大。
 _PREVIEW_EDGE = 512
+
+
+def _read_cover_preview(path: str) -> QImage:
+    """在线程池里把封面原图解码并预缩放一次。
+
+    只碰文件与 ``QImage``，不碰任何 UI 对象 —— 结果通过
+    ``invokeMethod`` 排队回主线程。
+    """
+    image = QImage(path)
+    if image.isNull():
+        return image
+    if image.width() <= _PREVIEW_EDGE and image.height() <= _PREVIEW_EDGE:
+        return image
+    return image.scaled(
+        _PREVIEW_EDGE,
+        _PREVIEW_EDGE,
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation,
+    )
 
 
 class _CoverJob(QRunnable):
@@ -55,148 +83,25 @@ class _CoverJob(QRunnable):
     def run(self) -> None:
         try:
             self._fn()
-        except Exception:  # noqa: BLE001
+        except Exception:
             _logger.exception("封面加载任务异常")
-
-
-# noinspection bad-assignment
-class PreferenceConfig:
-    """标题栏 / 专辑相关的统一用户偏好配置。"""
-
-    # ---------------- ui / 主题 ----------------
-    theme: str = PreferenceField("ui", "theme", default="default")
-    theme_dir: Optional[str | Path] = PreferenceField(
-        "ui", "theme_dir", default=None)
-    style_sheet: Optional[str | Path] = PreferenceField(
-        "ui", "style_sheet", default=None)
-    icon_dir_pref: Optional[str | Path] = PreferenceField(
-        "ui", "icon_dir", default=None)
-    window_title: str = PreferenceField(
-        "ui", "window_title", default="AlbusWall")
-
-    # ---------------- 图标文件 ----------------
-    album_icon: Optional[str | Path] = PreferenceField(
-        "icons", "album_icon", default=_DEFAULT_ALBUM_ICON)
-    extra_icon: Optional[str | Path] = PreferenceField(
-        "icons", "extra_icon", default=_DEFAULT_EXTRA_ICON)
-    search_icon: Optional[str | Path] = PreferenceField(
-        "icons", "search_icon", default=_DEFAULT_SEARCH_ICON)
-
-    # ---------------- 专辑 / 标题栏文案 ----------------
-    default_album_uuid: Optional[str] = PreferenceField(
-        "album", "default_album_uuid", default=None)
-    search_expanded: bool = PreferenceField(
-        "album", "search_expanded", default=False)
-    album_text: str = PreferenceField("album", "album_text", default="")
-    extra_text: str = PreferenceField("album", "extra_text", default="")
-    search_placeholder: str = PreferenceField(
-        "album", "search_text", default="")
-
-    # ---------------- 通用 ----------------
-    language: str = PreferenceField(
-        "general", "language", default="en_US")
-
-    # ---------------- 图标路径解析 ----------------
-
-    @classmethod
-    def icon_dir(cls) -> Optional[Path]:
-        pref = getattr(cls(), "icon_dir_pref", None)
-        if pref:
-            p = Path(str(pref))
-            _logger.trace("图标目录命中 preference.ui.icon_dir = %s", p)
-            return p
-
-        static = WindowPresenterConfs()
-
-        path_obj = getattr(static, "path", None)
-        if path_obj is not None:
-            static_icon = getattr(path_obj, "cover", None)
-            if static_icon:
-                p = Path(str(static_icon))
-                _logger.trace("图标目录命中 static.path.cover = %s", p)
-                return p
-
-        for attr in ("icon_dir", "cover"):
-            v = getattr(static, attr, None)
-            if v:
-                p = Path(str(v))
-                _logger.trace("图标目录命中 static.%s = %s", attr, p)
-                return p
-
-        ui_obj = getattr(static, "ui", None)
-        style_sheet = (
-            getattr(ui_obj, "style_sheet", None) if ui_obj is not None else None
-        )
-        if not style_sheet:
-            style_sheet = getattr(static, "qss", None)
-        if style_sheet:
-            base = Path(str(style_sheet)).parent
-            for name in _ICON_DIR_CANDIDATES:
-                candidate = base / name
-                if candidate.is_dir():
-                    _logger.trace("图标目录命中样式表同级 %s", candidate)
-                    return candidate
-                else:
-                    _logger.trace("未解析到图标目录: %s", candidate)
-        _logger.trace("未解析到图标目录")
-        return None
-
-    @classmethod
-    def _resolve(cls, raw: Any) -> Optional[Path]:
-        if not raw:
-            return None
-
-        p = Path(str(raw))
-
-        if p.is_absolute():
-            if p.is_file():
-                _logger.trace("图标绝对路径命中: %s", p)
-                return p
-            _logger.debug("图标文件不存在: %s", p)
-            return None
-
-        d = cls.icon_dir()
-        if d is None:
-            _logger.debug("未解析到图标目录，无法定位图标 %s", p)
-            return None
-
-        full = d / p
-        if full.is_file():
-            _logger.trace("图标路径命中: %s", full)
-            return full
-
-        _logger.debug("图标文件不存在: %s", full)
-        return None
-
-    def album_icon_path(self) -> Optional[Path]:
-        return self._resolve(self.album_icon)
-
-    def extra_icon_path(self) -> Optional[Path]:
-        return self._resolve(self.extra_icon)
-
-    def search_icon_path(self) -> Optional[Path]:
-        return self._resolve(self.search_icon)
 
 
 class AlbumPresenter(QObject):
     """专辑面板 presenter。
 
-    同时管两件事，状态只有一份（`_current_album`）：
+    同时管两件事，状态只有一份（``_current_album``）：
 
     - 网格列表：从 ``ViewService`` 拉专辑 → 喂给 ``SquareGridView``；
-    - 标题栏：把当前专辑 + 偏好配置 → 打包成 ``TitleBarVO`` 交给 ``TitleBar``。
+    - 标题栏：当前专辑 + 偏好配置 → 打包成 ``TitleBarVO`` 交给 ``TitleBar``。
 
     两侧通过同一个 ``_current_album`` 保持一致：
 
     - 列表点击 → ``set_album`` → 刷 TitleBar + 高亮网格
     - 外部 ``set_album`` → 刷 TitleBar + 高亮网格
 
-    接口契约（与 ViewService 收敛对齐）：
-        · 视图服务只以 uuid 为键：
-              list_album_uuids() -> list[UUID]
-              get_album(uuid)    -> Album | None
-              get_cover_full_path(uuid) -> str | None
-        · 本 presenter 不接触 Album.id / asset id。
+    接口契约（与 ViewService 收敛对齐）：视图服务只以 uuid 为键，
+    本 presenter 不接触 ``Album.id`` / asset id。
 
     依赖 ``AlbumModel`` 至少提供以下接口::
 
@@ -204,9 +109,8 @@ class AlbumPresenter(QObject):
         clear() -> None
         rowCount() -> int
         uuid_at(row: int) -> str
+        pixmap_at(row: int) -> QPixmap | None
         setPixmap(row: int, pixmap: QPixmap) -> None
-        index(row: int, column: int) -> QModelIndex   # QAbstractItemModel 自带
-        data(index: QModelIndex, role: int) -> Any
     """
 
     album_changed = Signal(Album)
@@ -216,7 +120,7 @@ class AlbumPresenter(QObject):
             title_bar: "TitleBar",
             album_view: SquareGridView,
             view_service: "ViewService",
-            parent=None
+            parent=None,
     ):
         super().__init__(parent)
         self._title_bar = title_bar
@@ -225,6 +129,13 @@ class AlbumPresenter(QObject):
         self._config = PreferenceConfig()
         self._current_album: Album | None = None
         self._pool = QThreadPool.globalInstance()
+
+        # 封面状态（只在主线程读写）：
+        #   _cover_paths    —— uuid → 当前"想要的"封面路径（None = 无封面），
+        #                      用于「路径没变就不重复解码原图」；
+        #   _cover_inflight —— uuid → 正在后台解码的路径，避免同一封面重复入队。
+        self._cover_paths: dict[str, Optional[str]] = {}
+        self._cover_inflight: dict[str, str] = {}
 
         # --- 注入 model / delegate（SquareGridView 是被动的，得我们提供）---
         self._model = AlbumModel(self)
@@ -241,24 +152,29 @@ class AlbumPresenter(QObject):
 
     # ---------------- 生命周期 ----------------
 
-    def setup(self, _) -> None:
-        # arg is container
+    def setup(self, _=None) -> None:
+        """首刷：列表（含封面）、默认专辑、标题栏，最后广播一次当前专辑。"""
         self._populate_list()
         self._load_default_album()
-        self.refresh()
+        self._apply_window_settings()
+        self._title_bar.set_vo(self._build_vo(self._current_album))
+        self._sync_selection(self._current_album)
         self.album_changed.emit(self._current_album)
-        _logger.debug(
+        _logger.trace(
             "view_service=%r module=%s",
             self._view_service, type(self._view_service).__module__)
 
     def teardown(self):
-        ...
+        # model / delegate / view 都由 Qt 父子关系或外部持有，这里没有
+        # 需要主动释放的资源；线程池是全局的，不能也不能在这里关。
+        return None
 
     def refresh(self) -> None:
-        """重绘 TitleBar + 重新同步网格选中。"""
+        """重绘 TitleBar + 重新同步网格选中 + 重新解析封面。"""
         self._apply_window_settings()
         self._title_bar.set_vo(self._build_vo(self._current_album))
         self._sync_selection(self._current_album)
+        self.reload_covers()
 
     def set_album(self, album: Album) -> None:
         """切换当前专辑：状态、TitleBar、网格高亮一起变。"""
@@ -273,78 +189,120 @@ class AlbumPresenter(QObject):
     def _populate_list(self) -> None:
         """拉活动专辑列表，先塞占位，再异步回填封面。"""
         self._model.clear()
+        self._cover_paths.clear()
+        self._cover_inflight.clear()
         try:
             uuids = self._view_service.list_album_uuids()
-        except Exception:  # noqa: BLE001
+        except Exception:
             _logger.exception("拉取活动专辑列表失败")
             return
 
-        _logger.debug("活动专辑: %r", uuids)
+        _logger.trace("活动专辑: %r", uuids)
         for u in uuids:
             self._model.append(str(u))
-        for u in uuids:
-            self._load_cover_async(u)
+        self.reload_covers()
 
-    def _load_cover_async(self, album_uuid: UUID | str) -> None:
-        """在后台把封面读成 QPixmap，回主线程按 uuid 回填。
+    def reload_covers(self) -> None:
+        """重新解析并回填全部相册封面（资产集合变化后必须调用）。
 
-        ``ViewService.get_cover_full_path`` 直接以 album uuid 为键，
-        内部完成「album → cover asset → 磁盘路径」的组合，这里无需
-        先查 album DTO。
+        为什么需要它：封面是**派生数据**（虚拟相册取 scope 首项、物理相册取
+        ``cover_asset_id`` 或最新资产），资产一导入 / 软删 / 恢复，封面就可能
+        从「无」变成「有」或者换一张。而封面只在 ``_populate_list``（启动）
+        时加载过一次，之后没有任何刷新入口 —— 启动时库里还没资产，封面就
+        永远是空白（缩略图网格却有图），这正是「导入完了相册封面还是空的」
+        的原因。
+
+        契约：
+            · 路径没变且已有 pixmap → 跳过（不重复解码原图）；
+            · 路径变成 None        → 清空 pixmap，不显示已失效的旧封面；
+            · 解析失败（DB/异常）  → 保留现状，宁可旧图也不闪成空白；
+            · 幂等、开销小（每张封面一次轻量 DB 查询），可被高频调用。
         """
+        for row in range(self._model.rowCount()):
+            album_uuid = self._model.uuid_at(row)
+            if not album_uuid:
+                continue
+
+            ok, path = self._resolve_cover_path(album_uuid)
+            if not ok:
+                continue  # 解析失败：保留当前封面
+
+            if path == self._cover_paths.get(album_uuid) and (
+                    path is None or self._model.pixmap_at(row) is not None
+            ):
+                continue  # 目标没变，且已经画出来了
+
+            self._cover_paths[album_uuid] = path
+            if path is None:
+                self._cover_inflight.pop(album_uuid, None)
+                self._model.setPixmap(row, QPixmap())
+                continue
+
+            if self._cover_inflight.get(album_uuid) == path:
+                continue  # 同一目标已在后台解码
+            self._cover_inflight[album_uuid] = path
+            self._load_cover_async(album_uuid, path)
+
+    def _resolve_cover_path(
+            self, album_uuid: UUID | str,
+    ) -> tuple[bool, Optional[str]]:
+        """解析封面磁盘路径，返回 ``(ok, path)``。
+
+        ``ok=False`` 表示解析本身失败（DB 异常等），调用方应保留现状；
+        ``ok=True, path=None`` 表示"这个相册现在确实没有封面"。
+        """
+        try:
+            raw = self._view_service.get_cover_full_path(album_uuid)
+        except Exception:
+            _logger.exception("解析相册封面失败 album=%s", album_uuid)
+            return False, None
+        path = str(raw) if raw else None
+        _logger.trace("cover path for album=%s -> %r", album_uuid, path)
+        return True, path
+
+    def _cover_path_or_none(self, album: Album | None) -> Optional[str]:
+        """标题栏用的封面路径：解析失败按「无封面」处理，不影响渲染。"""
+        if album is None:
+            return None
+        return self._resolve_cover_path(album.uuid)[1]
+
+    def _load_cover_async(self, album_uuid: UUID | str, path: str) -> None:
+        """后台把封面原图读成 QImage（顺带缩放一次），回主线程按 uuid 回填。
+
+        路径解析在主线程完成（一次轻量 DB 查询，见 ``_resolve_cover_path``），
+        解码 + 缩放留在后台线程；这样"路径没变"时完全不碰原图。
+        """
+        uuid_str, target = str(album_uuid), path
 
         def job() -> None:
-            path = self._view_service.get_cover_full_path(album_uuid)
-            _logger.debug(
-                "cover path for album=%s -> %r",
-                album_uuid, path
-            )
-            img = QImage(str(path)) if path else QImage()
-
-            # ---- 第一次缩放：在后台线程完成 ----
-            if (
-                    not img.isNull() and
-                    (img.width() > _PREVIEW_EDGE or img.height() > _PREVIEW_EDGE)
-            ):
-                # 用 KeepAspectRatioByExpanding 保证短边 = _PREVIEW_EDGE，
-                # 长边 >= _PREVIEW_EDGE，这样 paint 里永远不需要放大。
-                img = img.scaled(
-                    _PREVIEW_EDGE, _PREVIEW_EDGE,
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-
             QMetaObject.invokeMethod(
                 self, "_on_cover_ready_image",
                 Qt.ConnectionType.QueuedConnection,
-                Q_ARG(str, str(album_uuid)),
-                Q_ARG(QImage, img),
+                Q_ARG(str, uuid_str),
+                Q_ARG(str, target),
+                Q_ARG(QImage, _read_cover_preview(target)),
             )
 
         self._pool.start(_CoverJob(job))
 
-    @Slot(str, QImage)
-    def _on_cover_ready_image(self, uuid_str: str, image: QImage) -> None:
+    @Slot(str, str, QImage)
+    def _on_cover_ready_image(
+            self, uuid_str: str, path: str, image: QImage,
+    ) -> None:
+        if self._cover_inflight.get(uuid_str) == path:
+            self._cover_inflight.pop(uuid_str, None)
+
+        # 解码期间数据又变了（封面换人 / 被删）：丢弃这次结果并立刻重新解析，
+        # 否则这个 uuid 会一直停在旧画面上。
+        if self._cover_paths.get(uuid_str) != path:
+            self.reload_covers()
+            return
+
         row = self._row_for_uuid(uuid_str)
         if row < 0:
-            return
-        _logger.debug(
-            "cover ready uuid=%s row=%d imageNull=%s size=%s",
-            uuid_str, row, image.isNull(), image.size(),
-        )
+            return  # 该专辑已不在列表里
         pixmap = QPixmap.fromImage(image) if not image.isNull() else QPixmap()
         self._model.setPixmap(row, pixmap)
-
-    # @Slot(str, QPixmap)
-    # def _on_cover_ready(self, uuid_str: str, pixmap: QPixmap) -> None:
-    #     row = self._row_for_uuid(uuid_str)
-    #     if row < 0:
-    #         return
-    #     _logger.debug(
-    #         "cover ready uuid=%s row=%d isNull=%s size=%s",
-    #         uuid_str, row, pixmap.isNull(), pixmap.size(),
-    #     )
-    #     self._model.setPixmap(row, pixmap)
 
     def _row_for_uuid(self, uuid_str: str) -> int:
         for r in range(self._model.rowCount()):
@@ -389,12 +347,12 @@ class AlbumPresenter(QObject):
 
         if not album_uuid:
             active = self._view_service.list_album_uuids()
-            _logger.debug("presenter active = %r", active)
+            _logger.trace("presenter active = %r", active)
             album_uuid = active[0] if active else None
 
         if album_uuid is None:
             self._current_album = None
-            _logger.debug("未解析到默认专辑，标题栏将以空专辑渲染")
+            _logger.trace("未解析到默认专辑，标题栏将以空专辑渲染")
             return
 
         self._current_album = self._view_service.get_album(album_uuid)
@@ -416,17 +374,14 @@ class AlbumPresenter(QObject):
         s = str(value)
         return s if s != "" else None
 
-    def _album_cover_path(self, album: Album | None) -> Optional[str]:
-        if album is None:
-            return None
-        return self._view_service.get_cover_full_path(album.uuid)
-
     def _build_vo(self, album: Album | None) -> TitleBarVO:
         return TitleBarVO(
             window_title=self._window_title(),
-            cover=self._album_cover_path(album),
+            cover=self._cover_path_or_none(album),
             title=self._text_or_none(album.title) if album is not None else None,
-            description=self._text_or_none(album.description) if album is not None else None,
+            description=(
+                self._text_or_none(album.description) if album is not None else None
+            ),
             album_icon=self._config.album_icon_path(),
             extra_icon=self._config.extra_icon_path(),
             search_icon=self._config.search_icon_path(),
@@ -437,8 +392,9 @@ class AlbumPresenter(QObject):
         )
 
     def __str__(self) -> str:
+        album_uuid = self._current_album.uuid if self._current_album else "None"
         return "\n".join((
             f"{type(self).__name__} (",
-            f"\tcurrent: UUID({self._current_album.uuid if self._current_album else 'None'})",
-            ")"
+            f"\tcurrent: UUID({album_uuid})",
+            ")",
         ))
