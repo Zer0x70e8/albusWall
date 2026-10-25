@@ -16,7 +16,7 @@ from typing import Optional, Sequence
 from uuid import UUID
 
 from albuswall.common.enums import CandidateStatus
-from albuswall.dto.import_ import AssetCandidateCacheDTO, AssetCreateDTO
+from albuswall.dto.import_ import AssetCandidateCache, AssetCreate
 from albuswall.dto.utils import coerce_enum
 from albuswall.utils.time import cutoff_str, now_str
 
@@ -26,7 +26,7 @@ from .utils.sql_helpers import as_uuid_str, placeholders
 # ---- 从 DTO 派生的 SQL 片段（单一事实源：DTO.COLUMNS） ----
 
 # 候选表 SELECT 列清单
-_CANDIDATE_COLUMNS = ", ".join(AssetCandidateCacheDTO.COLUMNS)
+_CANDIDATE_COLUMNS = ", ".join(AssetCandidateCache.COLUMNS)
 
 # 候选表 INSERT 只写「用户提供」的列；其余列（id / created_at / status /
 # claimed_*）交给 schema DEFAULT。显式绑定 NULL 会绕过 DEFAULT，反而把
@@ -38,11 +38,11 @@ _CANDIDATE_INSERT_SQL = (
     f"VALUES ({placeholders(len(_CANDIDATE_INSERT_COLUMNS))})"
 )
 
-# 资产 INSERT：列名与占位符均从 AssetCreateDTO.COLUMNS 生成，
-# 与 AssetCreateDTO.to_insert_params() 严格同序。
+# 资产 INSERT：列名与占位符均从 AssetCreate.COLUMNS 生成，
+# 与 AssetCreate.to_insert_params() 严格同序。
 _INSERT_ASSET_SQL = (
-    f"INSERT INTO assets ({', '.join(AssetCreateDTO.COLUMNS)}) "
-    f"VALUES ({placeholders(len(AssetCreateDTO.COLUMNS))})"
+    f"INSERT INTO assets ({', '.join(AssetCreate.COLUMNS)}) "
+    f"VALUES ({placeholders(len(AssetCreate.COLUMNS))})"
 )
 
 _UPDATE_CANDIDATE_STATUS_SQL = (
@@ -117,14 +117,14 @@ class ImportRepository(BaseRepository):
 
     def get_pending_candidates(
             self, limit: Optional[int] = None
-    ) -> Sequence[AssetCandidateCacheDTO]:
+    ) -> Sequence[AssetCandidateCache]:
         """获取状态为 pending 的候选记录，按 id 升序。
 
         limit=None 时使用 _DEFAULT_PENDING_LIMIT，避免无界全量拉取。
         """
         effective_limit = _DEFAULT_PENDING_LIMIT if limit is None else limit
         return self._fetch_all_dtos(
-            AssetCandidateCacheDTO,
+            AssetCandidateCache,
             f"SELECT {_CANDIDATE_COLUMNS} FROM asset_candidate_cache "
             f"WHERE status = ? ORDER BY id LIMIT ?",
             (CandidateStatus.PENDING.value, effective_limit),
@@ -163,7 +163,7 @@ class ImportRepository(BaseRepository):
     # ---------- 写 ----------
 
     def create_candidate_cache_batch(
-            self, candidates: Sequence[AssetCandidateCacheDTO]
+            self, candidates: Sequence[AssetCandidateCache]
     ) -> int:
         """批量插入资产候选缓存记录，返回**提交尝试**的行数。
 
@@ -178,7 +178,7 @@ class ImportRepository(BaseRepository):
 
         * 撞 ``(source_id, path)`` 唯一索引的重复行被**静默丢弃**；
         * 违反列约束的行同样被静默丢弃——最典型的是 ``mime_type=None``
-          撞 ``mime_type TEXT NOT NULL``（``AssetCandidateCacheDTO.mime_type``
+          撞 ``mime_type TEXT NOT NULL``（``AssetCandidateCache.mime_type``
           声明为 ``str``，传 ``None`` 属调用方违约）。
 
         因此"调用了但表里没多出行"不一定是事务没提交：先看是不是被
@@ -244,7 +244,7 @@ class ImportRepository(BaseRepository):
         ).fetchall()
         return {row[0] for row in rows}
 
-    def create_asset(self, dto: AssetCreateDTO) -> Optional[UUID]:
+    def create_asset(self, dto: AssetCreate) -> Optional[UUID]:
         """插入新资产记录，成功返回资产 uuid；失败返回 None。
 
         契约：仓储**不暴露** ``assets.id``（内部自增键），对外标识统一用
@@ -263,7 +263,7 @@ class ImportRepository(BaseRepository):
 
     def claim_next_candidate(
             self, worker_id: str
-    ) -> Optional[AssetCandidateCacheDTO]:
+    ) -> Optional[AssetCandidateCache]:
         """原子性地领取一条 pending 状态的候选记录，标记为 processing。"""
         claimed_at = now_str()
 
@@ -302,12 +302,12 @@ class ImportRepository(BaseRepository):
                 ).fetchone()
                 if full_row is None:
                     return None
-                return AssetCandidateCacheDTO.from_row(full_row)
+                return AssetCandidateCache.from_row(full_row)
 
     def finalize_candidate(
             self,
             candidate_id: int,
-            dto: AssetCreateDTO,
+            dto: AssetCreate,
     ) -> Optional[UUID]:
         """在一个事务里完成「插入资产 + 候选置终态」。
 

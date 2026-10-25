@@ -21,13 +21,9 @@ from typing import Any, Callable, Final, Optional
 from uuid import UUID
 
 from albuswall.dto.sentinel import UNSET
-from albuswall.dto.source import (
-    MANUAL_SOURCE_ID,
-    IngestSource,
-    IngestSourceCreate,
-    IngestSourceUpdate,
-    SourcePurgeReport,
-)
+from albuswall.dto.source.command import IngestSourceCreate, IngestSourceUpdate
+from albuswall.dto.source.events import SourcePurgeReport
+from albuswall.dto.source.query import MANUAL_SOURCE_ID, IngestSource
 from albuswall.dto.trigger import TriggerConfig
 from albuswall.dto.utils import json_default, to_uuid
 from albuswall.utils.time import now_str

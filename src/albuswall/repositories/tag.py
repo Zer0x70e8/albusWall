@@ -21,9 +21,10 @@ from sqlite3 import IntegrityError
 from typing import Optional, Sequence
 from uuid import UUID
 
-from albuswall.dto.album import AssetDTO
+from albuswall.dto.album import Asset
 from albuswall.dto.sentinel import UNSET
-from albuswall.dto.tag import Tag, TagCreate, TagUpdate
+from albuswall.dto.tag.command import TagCreate, TagUpdate
+from albuswall.dto.tag.query import Tag
 from albuswall.dto.utils import normalize_tag_name, to_uuid
 from albuswall.utils.time import now_str
 
@@ -337,7 +338,7 @@ class TagRepository(BaseRepository):
             tag_uuid: _UUIDLike,
             offset: int = 0,
             limit: int = 100,
-    ) -> list[AssetDTO]:
+    ) -> list[Asset]:
         """按唯一确定顺序分页获取标签内资产 DTO。
 
         排序读 ``assets.taken_at``（与 scope / album 排序同源）。
@@ -346,7 +347,7 @@ class TagRepository(BaseRepository):
         """
         order = order_by("active", prefix="a.")
         return self._fetch_all_dtos(
-            AssetDTO,
+            Asset,
             f"""
             SELECT a.*
               FROM asset_tags AS at

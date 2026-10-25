@@ -286,7 +286,10 @@ src/
     ├── common/              # Enums, exceptions, shared primitives
     ├── configue/            # Configuration system
     ├── core/                # Application lifecycle, bootstrap, runtime
-    ├── dto/                 # Data transfer objects
+    ├── dto/                 # Data transfer objects（按 Command / Query 归属分包）
+    │                          #   album|import_|trash|task|trigger|sentinel.py 单文件
+    │                          #   tag|source|thumbnail → {command,query[,events|paths]}.py
+    │                          #   见 dto/CONVENTIONS.md · DTO 归属与命名
     ├── infrastructure/      # Database and infrastructure bootstrapping
     ├── log/                 # Logging system
     ├── plugin/              # Plugin declaration, discovery, manager

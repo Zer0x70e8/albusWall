@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING, Literal, Optional, Sequence
 from uuid import UUID
 
 from albuswall.dto.sentinel import UNSET
-from albuswall.dto.tag import Tag, TagCreate, TagUpdate
+from albuswall.dto.tag.command import TagCreate, TagUpdate
+from albuswall.dto.tag.query import Tag, TagMatch, TagTreeNode, TagWithStats
 from albuswall.dto.utils import to_uuid
 from albuswall.repositories.utils.types import UuidKeyed
 
@@ -83,57 +84,19 @@ class TagRestoreConflict(TagError):
 
 
 # ============================== 结果 DTO ==============================
-
-
-@dataclass(frozen=True, slots=True)
-class TagTreeNode:
-    """UI 树节点（service ↔ presenter 契约，不属于持久化模型）。"""
-
-    tag: Tag
-    children: tuple["TagTreeNode", ...] = ()
-    depth: int = 0
-    path: tuple[str, ...] = ()  # 从根到当前的 display_name 链（不含自身）
-
-    @property
-    def uuid(self) -> UUID:
-        return self.tag.uuid
-
-    @property
-    def is_leaf(self) -> bool:
-        return not self.children
-
-
-@dataclass(frozen=True, slots=True)
-class TagWithStats:
-    tag: Tag
-    asset_count: int  # 直接挂在该标签上的可见资产数
-    child_count: int  # 直接子标签数
-    subtree_asset_count: int  # 含子孙的资产数（仅 include_subtree=True 时计算）
+#
+# 视图 DTO（``TagTreeNode`` / ``TagWithStats`` / ``TagMatch``）已按归属下沉到
+# ``dto/tag/query.py``：它们是 service 构建、presenter 消费的读侧契约，定义放
+# dto 的 Query 侧，禁止在 service 里再声明第二份。
+# 这里只留**仅由本 service 生产与消费**的命令结果，不对外作为列表/详情返回。
 
 
 @dataclass(frozen=True, slots=True)
 class RestoreResult:
-    """restore 的结构化结果。"""
+    """restore 的结构化结果（service 内部命令结果，不外流）。"""
 
     tag: Optional[Tag]
     parent_visible: bool  # False = 已恢复但父仍软删，当前是孤儿
-
-
-@dataclass(frozen=True, slots=True)
-class TagMatch:
-    """标签搜索结果：标签本体 + 作用域内资产数 + 完整路径。"""
-
-    tag: Tag
-    asset_count: int
-    path: str  # 从根到自身的展示路径，如 "旅行/日本/京都"
-
-    @property
-    def uuid(self) -> UUID:
-        return self.tag.uuid
-
-    @property
-    def label(self) -> str:
-        return self.path or self.tag.display_name or self.tag.name
 
 
 # ============================== Service ==============================

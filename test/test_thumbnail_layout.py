@@ -35,7 +35,8 @@ except ModuleNotFoundError:  # pragma: no cover
 
 import albuswall.services.thumbnail.service as svc_mod
 from albuswall.common.enums import ThumbSpec
-from albuswall.dto.thumbnail import ThumbnailPaths, ThumbnailTaskInput
+from albuswall.dto.thumbnail.command import ThumbnailTaskInput
+from albuswall.dto.thumbnail.paths import ThumbnailPaths
 from albuswall.services.source_trash.config import ThumbnailCleanerConfig
 from albuswall.services.source_trash.thumbnail_cleaner import ThumbnailCleaner
 from albuswall.services.thumbnail.service import ThumbnailService

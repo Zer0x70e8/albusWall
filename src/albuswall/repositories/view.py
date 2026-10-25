@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 from uuid import UUID
 
-from albuswall.dto.album import Album, AssetDTO
+from albuswall.dto.album import Album, Asset
 from albuswall.dto.utils import to_uuid
 
 from .base import BaseRepository
@@ -77,19 +77,19 @@ class ViewRepository(BaseRepository):
     # 虚拟相册（scope）封面 / 列表
     # ==================================================================
 
-    def get_cover_asset_by_scope(self, scope: str) -> Optional[AssetDTO]:
+    def get_cover_asset_by_scope(self, scope: str) -> Optional[Asset]:
         where = self._scope_where(scope)
         order = order_by(scope)
         return self._fetch_one_dto(
-            AssetDTO,
+            Asset,
             f"SELECT * FROM assets WHERE {where} ORDER BY {order} LIMIT 1",
         )
 
-    def list_assets_by_scope(self, scope: str) -> list[AssetDTO]:
+    def list_assets_by_scope(self, scope: str) -> list[Asset]:
         where = self._scope_where(scope)
         order = order_by(scope)
         return self._fetch_all_dtos(
-            AssetDTO,
+            Asset,
             f"SELECT * FROM assets WHERE {where} ORDER BY {order}",
         )
 
@@ -144,11 +144,11 @@ class ViewRepository(BaseRepository):
             (as_uuid_str(album_uuid),),
         )
 
-    def get_album_cover(self, album_uuid: _UUIDLike) -> Optional[AssetDTO]:
+    def get_album_cover(self, album_uuid: _UUIDLike) -> Optional[Asset]:
         """按相簿 uuid 获取其封面资产（相簿与资产都必须可见）。"""
         asset_where = active_asset_where("asset")
         return self._fetch_one_dto(
-            AssetDTO,
+            Asset,
             f"""
             SELECT asset.*
               FROM albums AS a
@@ -202,7 +202,7 @@ class ViewRepository(BaseRepository):
             album_uuid: _UUIDLike,
             offset: int = 0,
             limit: int = 100,
-    ) -> list[AssetDTO]:
+    ) -> list[Asset]:
         """按唯一确定顺序分页获取相簿内资产 DTO。
 
         排序读 ``assets.taken_at``（与 scope 排序同源）。
@@ -211,7 +211,7 @@ class ViewRepository(BaseRepository):
         """
         order = order_by("active", prefix="a.")
         return self._fetch_all_dtos(
-            AssetDTO,
+            Asset,
             f"""
             SELECT a.*
               FROM album_assets AS aa
@@ -250,8 +250,8 @@ class ViewRepository(BaseRepository):
 
     def get_asset(
             self, asset_uuid: _UUIDLike, include_deleted: bool = False
-    ) -> Optional[AssetDTO]:
-        """按 uuid 取 AssetDTO。
+    ) -> Optional[Asset]:
+        """按 uuid 取 Asset。
 
         ``include_deleted=False``（默认）按 **active 语义**：资产未软删
         且所属 source 未软删，与 ``list_asset_uuids_by_scope("active")`` /
@@ -265,7 +265,7 @@ class ViewRepository(BaseRepository):
         if not include_deleted:
             where += f" AND {self._ACTIVE_WHERE}"
         return self._fetch_one_dto(
-            AssetDTO,
+            Asset,
             f"SELECT * FROM assets WHERE {where}",
             (as_uuid_str(asset_uuid),),
         )

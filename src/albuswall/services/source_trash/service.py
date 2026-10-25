@@ -12,8 +12,9 @@ from typing import Optional
 
 from albuswall.repositories.source import IngestSourceRepository
 from albuswall.repositories.thumbnail import ThumbnailRepository
-from albuswall.dto.source import MANUAL_SOURCE_ID, SourcePurgeReport
-from albuswall.dto.thumbnail import ThumbnailPaths
+from albuswall.dto.source.events import SourcePurgeReport
+from albuswall.dto.source.query import MANUAL_SOURCE_ID
+from albuswall.dto.thumbnail.paths import ThumbnailPaths
 from albuswall.infrastructure.reconcile.service import Reconciler
 from albuswall.log import getLogger, Logger
 from albuswall.utils.signals import SignalDescriptor

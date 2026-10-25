@@ -16,9 +16,9 @@
 from typing import List, Optional
 
 from albuswall.dto.trash import (
-    PurgeCandidateDTO,
-    TrashedAssetDTO,
-    TrashStateDTO,
+    PurgeCandidate,
+    TrashedAsset,
+    TrashState,
 )
 from albuswall.repositories.base import BaseRepository
 from albuswall.utils.time import now_str
@@ -43,11 +43,11 @@ class TrashRepository(BaseRepository):
 
     # ---------- 查询 ----------
 
-    def list_deleted(self, limit: int, offset: int) -> List[TrashedAssetDTO]:
+    def list_deleted(self, limit: int, offset: int) -> List[TrashedAsset]:
         if limit <= 0 or offset < 0:
             return []
         return self._fetch_all_dtos(
-            TrashedAssetDTO,
+            TrashedAsset,
             f"""
             SELECT {self._LIST_COLUMNS}
               FROM assets
@@ -58,9 +58,9 @@ class TrashRepository(BaseRepository):
             (limit, offset),
         )
 
-    def get_deleted(self, asset_id: int) -> Optional[TrashedAssetDTO]:
+    def get_deleted(self, asset_id: int) -> Optional[TrashedAsset]:
         return self._fetch_one_dto(
-            TrashedAssetDTO,
+            TrashedAsset,
             f"""
             SELECT {self._LIST_COLUMNS}
               FROM assets
@@ -113,7 +113,7 @@ class TrashRepository(BaseRepository):
 
     def find_expired(
             self, cutoff_iso: str, limit: int
-    ) -> List[PurgeCandidateDTO]:
+    ) -> List[PurgeCandidate]:
         """取出 ``deleted_at <= cutoff_iso`` 的软删资产（到期清理候选）。
 
         Args:
@@ -127,7 +127,7 @@ class TrashRepository(BaseRepository):
         if limit <= 0:
             return []
         return self._fetch_all_dtos(
-            PurgeCandidateDTO,
+            PurgeCandidate,
             f"""
             SELECT {self._PURGE_COLUMNS}
               FROM assets
@@ -140,12 +140,12 @@ class TrashRepository(BaseRepository):
             (cutoff_iso, limit),
         )
 
-    def find_any_deleted(self, limit: int) -> List[PurgeCandidateDTO]:
+    def find_any_deleted(self, limit: int) -> List[PurgeCandidate]:
         """不判断到期，直接按删除时间升序取任意软删资产（清空回收站用）。"""
         if limit <= 0:
             return []
         return self._fetch_all_dtos(
-            PurgeCandidateDTO,
+            PurgeCandidate,
             f"""
             SELECT {self._PURGE_COLUMNS}
               FROM assets
@@ -193,7 +193,7 @@ class TrashRepository(BaseRepository):
 class TrashStateRepository(BaseRepository):
     _STATE_ID = 1
 
-    def get(self) -> TrashStateDTO:
+    def get(self) -> TrashState:
         row = self._fetchone(
             "SELECT * FROM trash_state WHERE id = ?",
             (self._STATE_ID,),
@@ -215,7 +215,7 @@ class TrashStateRepository(BaseRepository):
             raise RuntimeError(
                 "trash_state singleton row missing after INSERT OR IGNORE"
             )
-        return TrashStateDTO.from_row(row)
+        return TrashState.from_row(row)
     def update(
             self,
             *,

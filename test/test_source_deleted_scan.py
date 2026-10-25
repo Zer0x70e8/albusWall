@@ -36,8 +36,9 @@ try:  # 允许直接以文件路径运行
 except ModuleNotFoundError:  # pragma: no cover
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from albuswall.dto.import_ import AssetCandidateCacheDTO
-from albuswall.dto.source import IngestSource, IngestSourceCreate
+from albuswall.dto.import_ import AssetCandidateCache
+from albuswall.dto.source.command import IngestSourceCreate
+from albuswall.dto.source.query import IngestSource
 from albuswall.infrastructure.database import Connector
 from albuswall.repositories.import_ import ImportRepository
 from albuswall.repositories.source import IngestSourceRepository
@@ -90,13 +91,13 @@ class FakeImportRepo:
 
     def __init__(self) -> None:
         self.cached: set[tuple[int, str]] = set()
-        self.batches: list[list[AssetCandidateCacheDTO]] = []
+        self.batches: list[list[AssetCandidateCache]] = []
 
     def find_missing_paths(self, source_id: int, *paths: str) -> list[str]:
         return [p for p in paths if (source_id, p) not in self.cached]
 
     def create_candidate_cache_batch(
-            self, batch: list[AssetCandidateCacheDTO]
+            self, batch: list[AssetCandidateCache]
     ) -> int:
         self.batches.append(list(batch))
         for candidate in batch:
@@ -169,8 +170,8 @@ def make_service() -> tuple[SourceService, FakeSourceRepo, FakeImportRepo,
     return service, source_repo, import_repo, task_service
 
 
-def make_candidate(source_id: int, path: str) -> AssetCandidateCacheDTO:
-    return AssetCandidateCacheDTO(
+def make_candidate(source_id: int, path: str) -> AssetCandidateCache:
+    return AssetCandidateCache(
         uuid=uuid4(),
         path=path,
         source_id=source_id,

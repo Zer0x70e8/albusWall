@@ -26,7 +26,7 @@ from typing import Mapping, TYPE_CHECKING
 
 from albuswall.common.constants.thumbnail import ALL_SPECS
 from albuswall.common.enums import ThumbSpec
-from albuswall.dto.thumbnail import ThumbnailPaths
+from albuswall.dto.thumbnail.paths import ThumbnailPaths
 from albuswall.infrastructure.fs import atomic_write
 from albuswall.log import getLogger
 from albuswall.utils.xdg_thumbnail import (

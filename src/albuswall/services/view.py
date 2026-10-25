@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, NamedTuple, Optional, Union
 from uuid import UUID
 
 from albuswall.log import TRACE, Logger
-from albuswall.dto.album import Album, AssetDTO
+from albuswall.dto.album import Album, Asset
 from albuswall.utils.time import now_str
 
 if TYPE_CHECKING:
@@ -131,7 +131,7 @@ class ViewService:
 
     def get_album_cover(
             self, album_uuid: Union[UUID, str]
-    ) -> Optional[AssetDTO]:
+    ) -> Optional[Asset]:
         """取相册封面资产 DTO（虚拟相册取 scope 首项）。"""
         spec = self._spec(album_uuid)
         if spec is None:
@@ -155,8 +155,8 @@ class ViewService:
             asset_uuid: Union[UUID, str],
             *,
             include_deleted: bool = False,
-    ) -> Optional[AssetDTO]:
-        """按 uuid 取 AssetDTO。
+    ) -> Optional[Asset]:
+        """按 uuid 取 Asset。
 
         Args:
             asset_uuid: assets.uuid。
@@ -172,7 +172,7 @@ class ViewService:
             *,
             offset: int = 0,
             limit: int = 100,
-    ) -> list[AssetDTO]:
+    ) -> list[Asset]:
         """列出相册内资产 DTO。
 
         - 物理相册：分页，走 repo。
@@ -246,7 +246,7 @@ class ViewService:
             cover.uuid, include_deleted=include_deleted
         )
 
-    def _fallback_cover_asset(self, album_uuid) -> Optional[AssetDTO]:
+    def _fallback_cover_asset(self, album_uuid) -> Optional[Asset]:
         """物理相册无显式封面时，取排序第一张（= 最新）。
 
         虚拟相册已由 get_album_cover → get_cover_asset_by_scope 处理，

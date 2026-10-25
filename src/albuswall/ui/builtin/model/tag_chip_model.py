@@ -7,7 +7,7 @@ from uuid import UUID
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt
 
-from albuswall.dto.tag import Tag
+from albuswall.dto.tag.query import Tag
 
 
 class TagChipModel(QAbstractListModel):

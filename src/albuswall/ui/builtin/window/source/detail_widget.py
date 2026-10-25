@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QFileDialog
 )
 
-from albuswall.dto.source import IngestSourceFormData
+from albuswall.dto.source.command import IngestSourceForm
 from albuswall.common.enums import FileTypeCheckMode
 
 from ...i18n import Retranslatable
@@ -452,7 +452,7 @@ class IngestSourceDetailWidget(Retranslatable, QFrame):
     # ============================================================
     # ★ Presenter 依赖的两个接口（+ 一个清空接口）
     # ============================================================
-    def set_form_data(self, form: IngestSourceFormData) -> None:
+    def set_form_data(self, form: IngestSourceForm) -> None:
         """把 form 快照刷到所有控件。"""
         # ---- meta ----
         self.title_line_edit.setText(form.title or "")
@@ -502,10 +502,10 @@ class IngestSourceDetailWidget(Retranslatable, QFrame):
         # 保证可见性状态与 combo 同步
         self._on_update_mode_changed(self.update_mode_combo.currentIndex())
 
-    def get_form_data(self) -> IngestSourceFormData:
+    def get_form_data(self) -> IngestSourceForm:
         """从控件读回 form 快照。"""
         no_depth_limit = self.subfolder_recursion_depth_check_box.isChecked()
-        return IngestSourceFormData(
+        return IngestSourceForm(
             title=self.title_line_edit.text().strip(),
             description=self.description_line_edit.text().strip(),
             tags=list(self._tags_model.stringList()),
@@ -537,7 +537,7 @@ class IngestSourceDetailWidget(Retranslatable, QFrame):
 
     def clear(self) -> None:
         """复位到默认空表单。"""
-        self.set_form_data(IngestSourceFormData())
+        self.set_form_data(IngestSourceForm())
 
 if __name__ == "__main__":
     import sys

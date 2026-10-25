@@ -30,7 +30,7 @@ from ..widgets.image_loader import (
 )
 
 if TYPE_CHECKING:
-    from albuswall.dto.album import AssetDTO
+    from albuswall.dto.album import Asset
     from albuswall.repositories import AssetRepository
     from albuswall.services import ThumbnailService, ViewService
 
@@ -201,7 +201,7 @@ class ViewerPresenter:
     # ================================================================== #
     def _load_asset_snapshot(
             self, asset_uuid: str, include_deleted: bool,
-    ) -> tuple[Optional["AssetDTO"], Optional[str]]:
+    ) -> tuple[Optional["Asset"], Optional[str]]:
         """一次性取回当前资产的 DTO 与磁盘路径（``refresh()`` 复用）。"""
         dto = self._view_service.get_asset(
             asset_uuid, include_deleted=include_deleted,
@@ -212,15 +212,15 @@ class ViewerPresenter:
         return dto, full_path
 
     def _push_metadata(
-            self, dto: Optional["AssetDTO"], full_path: Optional[str],
+            self, dto: Optional["Asset"], full_path: Optional[str],
     ) -> None:
         self.metadata_model.set_metadata(self._build_metadata(dto, full_path))
 
-    def _push_favorite(self, dto: Optional["AssetDTO"]) -> None:
+    def _push_favorite(self, dto: Optional["Asset"]) -> None:
         self._is_favorite = bool(dto.is_favorite) if dto is not None else False
         self.view.set_favorite_state(self._is_favorite)
 
-    def _push_deleted(self, dto: Optional["AssetDTO"]) -> None:
+    def _push_deleted(self, dto: Optional["Asset"]) -> None:
         self.view.set_deleted_state(
             bool(dto.is_deleted) if dto is not None else False
         )
@@ -328,7 +328,7 @@ class ViewerPresenter:
     # ================================================================== #
     @staticmethod
     def _build_metadata(
-            dto: Optional["AssetDTO"], full_path: Optional[str],
+            dto: Optional["Asset"], full_path: Optional[str],
     ) -> Optional[dict[str, Any]]:
         if dto is None:
             return None

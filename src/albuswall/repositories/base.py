@@ -18,7 +18,7 @@ class RowConstructible(Protocol):
 
     DTO 层的 ``from_row`` 固定接受 ``sqlite3.Row``，负责 ``str→UUID`` /
     ``Enum`` / ``bool`` 等边界转换（见 ``dto/CONVENTIONS.md``）。
-    仓储只调用它，不再自己拼 DTO：``self._fetch_one_dto(AssetDTO, ...)``。
+    仓储只调用它，不再自己拼 DTO：``self._fetch_one_dto(Asset, ...)``。
     """
 
     @classmethod

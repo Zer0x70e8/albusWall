@@ -22,7 +22,8 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from albuswall.dto.utils import normalize_tag_name
 from albuswall.log import getLogger
-from albuswall.services.tag import TagError, TagMatch, TagService
+from albuswall.dto.tag.query import TagMatch
+from albuswall.services.tag import TagError, TagService
 from albuswall.ui.builtin.utils.signal_adapter import SignalAdapter
 
 if TYPE_CHECKING:

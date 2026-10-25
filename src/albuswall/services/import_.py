@@ -11,7 +11,7 @@
   在子进程执行，无状态、无 DB 连接、可 pickle。``process_candidate`` 是
   "两段式文件类型判断"的 Stage 2（Stage 1 的 glob 粗筛在
   ``services/source.py::SourceExecutor`` 里），返回三态 ``ProcessResult``
-  （ok / skip / fail），取代旧的二态 ``Optional[AssetCreateDTO]``。
+  （ok / skip / fail），取代旧的二态 ``Optional[AssetCreate]``。
 - ImportService：
   常驻后台 worker + 单轮 process_pending；
   外部（SourceService.scan_finished、调度器）通过 trigger() 唤醒一轮。
@@ -34,8 +34,11 @@ from urllib.parse import unquote, urlparse
 from albuswall.common.enums import CandidateStatus, FileTypeCheckMode
 from albuswall.configue import ConfigField
 from albuswall.configue.typed import load_typed
-from albuswall.dto.import_ import AssetCandidateCacheDTO, AssetCreateDTO
-from albuswall.dto.source import MANUAL_SOURCE_ID, IngestSource
+from albuswall.dto.import_ import AssetCandidateCache, AssetCreate
+from albuswall.dto.source.query import (
+    MANUAL_SOURCE_ID,
+    IngestSourceSnapshot,
+)
 from albuswall.dto.utils import coerce_enum
 from albuswall.log import getLogger
 from albuswall.services.schema import ImportServiceConfig
@@ -209,7 +212,7 @@ def detect_magic(path: Path) -> Optional[str]:
 class ProcessResult:
     """``process_candidate`` 的三态返回。
 
-    取代旧契约 ``Optional[AssetCreateDTO]``：``None`` 同时表示"跳过"和
+    取代旧契约 ``Optional[AssetCreate]``：``None`` 同时表示"跳过"和
     "失败"，调用方无法区分（一律 ``mark_candidate_failed``）。三态语义：
 
     * ``"ok"``   —— 产出资产，``dto`` 必填，调用方走 ``finalize_candidate``；
@@ -223,7 +226,7 @@ class ProcessResult:
     """
 
     status: Literal["ok", "skip", "fail"]
-    dto: Optional[AssetCreateDTO] = None
+    dto: Optional[AssetCreate] = None
     reason: Optional[str] = None
 
     @property
@@ -244,7 +247,7 @@ def _try_resolve(path: Path) -> Optional[Path]:
 
 
 def _resolve_candidate_path(
-        candidate: AssetCandidateCacheDTO, source_path: str,
+        candidate: AssetCandidateCache, source_path: str,
 ) -> Optional[Path]:
     """把 DB 里的 ``candidate.path`` 归一为可安全打开的绝对 Path。
 
@@ -254,7 +257,7 @@ def _resolve_candidate_path(
       ``SKIPPED``（reason=path_invalid），不崩、不越权读；
     * 本函数 **不做 IO**，只做纯字符串 / Path 归一与越界判断，
       因此可以放心在进程池里调用；
-    * 返回值只用于"读文件"，**不**写回 ``AssetCreateDTO.file_path``
+    * 返回值只用于"读文件"，**不**写回 ``AssetCreate.file_path``
       （后者始终沿用 ``candidate.path`` 原值）。Stage 1 自路径契约修复起
       写入的就是相对路径，因此新数据的 ``file_path`` 天然合规；历史绝对
       路径只在此处归一读取，不再回写。
@@ -317,7 +320,7 @@ def _resolve_candidate_path(
 
 
 def process_candidate(
-        candidate: AssetCandidateCacheDTO,
+        candidate: AssetCandidateCache,
         source_path: str,
         type_check: FileTypeCheckMode = FileTypeCheckMode.SUFFIX,
 ) -> ProcessResult:
@@ -335,7 +338,7 @@ def process_candidate(
       ``application/octet-stream``。
 
     ``type_check`` 由调用方（``ImportService``）从内存快照取得后作为参数传入
-    —— 进程池里**不查 DB**，``AssetCandidateCacheDTO`` 也不为此加字段。
+    —— 进程池里**不查 DB**，``AssetCandidateCache`` 也不为此加字段。
 
     路径语义（与 media_library_schema.sql 保持一致）
     ----------------------------------------------
@@ -408,7 +411,7 @@ def process_candidate(
         if mime_type.startswith("image/") and HAS_EXIF:
             width, height, taken_at, exif_json = _extract_image_metadata(abs_path)
 
-        return ProcessResult("ok", dto=AssetCreateDTO(
+        return ProcessResult("ok", dto=AssetCreate(
             uuid=candidate.uuid,
             # 直接沿用候选表的相对路径（自本次修复起 candidate.path 即相对
             # source_path 的 POSIX 路径）。历史绝对路径脏数据由
@@ -471,7 +474,7 @@ def _extract_image_metadata(path: Path):
 
     taken_at = meta.get("taken_at")
     if taken_at is not None and not isinstance(taken_at, str):
-        # AssetCreateDTO.taken_at 语义是 ISO8601 字符串；
+        # AssetCreate.taken_at 语义是 ISO8601 字符串；
         # 上游给 datetime 是常见误用，容忍并转字符串。
         taken_at = str(taken_at)
 
@@ -651,7 +654,7 @@ class ImportService:
             self,
             candidates,
             source_paths,
-            source_map: Dict[int, IngestSource],
+            source_map: Dict[int, IngestSourceSnapshot],
             totals
     ) -> None:
         futures = {}
@@ -753,7 +756,7 @@ class ImportService:
             return
 
         if not isinstance(result, ProcessResult):
-            # 旧契约（Optional[AssetCreateDTO]）兜底：不应发生，但语义上
+            # 旧契约（Optional[AssetCreate]）兜底：不应发生，但语义上
             # None 现在明确属于失败而不是"跳过"。
             _logger.error(
                 "Candidate %s returned a non-ProcessResult value: %r",
@@ -784,7 +787,7 @@ class ImportService:
 
         self._finalize(cand, result.dto, totals)
 
-    def _finalize(self, cand, asset_dto: AssetCreateDTO, totals: Dict[str, int]) -> None:
+    def _finalize(self, cand, asset_dto: AssetCreate, totals: Dict[str, int]) -> None:
         try:
             asset_uuid = self._repo.finalize_candidate(cand.id, asset_dto)
         except Exception:
@@ -868,8 +871,12 @@ class ImportService:
                     "Fallback mark failed failed too cand=%s", candidate_id
                 )
 
-    def _load_source_map(self) -> Dict[int, IngestSource]:
-        """构建 ``{source_id: IngestSource}`` 内存快照（每轮一次）。
+    def _load_source_map(self) -> Dict[int, IngestSourceSnapshot]:
+        """构建 ``{source_id: IngestSourceSnapshot}`` 只读配置快照（每轮一次）。
+
+        用 ``IngestSourceSnapshot`` 别名标注"这是命令侧的写前读 / 只读快照"，
+        与 UI 列表里的读模型是同一个类（见 ``dto/CONVENTIONS.md`` · 交叉引用
+        与写前读白名单）。
 
         为什么不在候选表里冗余 type_check 列：``candidate.source_id`` 已能
         反查到源配置，内存快照足够；进程池里不查 DB，所以 type_check 只能在

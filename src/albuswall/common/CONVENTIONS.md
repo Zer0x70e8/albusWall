@@ -64,7 +64,8 @@ SQLite 的 `CHECK` 约束**无法 ALTER**，所以"加一个枚举值"必然同�
 
 - "调用了但表里没多出行"要先查 `OR IGNORE` 吞行，**不要**误判为事务未提交——
   `BaseRepository._transaction` 是标准 `@contextmanager`，块内 `return` 会走正常路径 commit。
-- `AssetCandidateCacheDTO.mime_type` 声明为 `str`，传 `None` 属调用方违约（会被静默吞掉）。
+- `AssetCandidateCache.mime_type` 声明为 `str`，传 `None` 属调用方违约（会被静默吞掉）。
+  该类属 **Command 侧**（`dto/CONVENTIONS.md` · DTO 归属与命名），理解本条时不要按"读模型"期待兜底。
 
 ## 二、异常
 
@@ -90,8 +91,11 @@ SQLite 的 `CHECK` 约束**无法 ALTER**，所以"加一个枚举值"必然同�
 
 - **schema 契约**（列名、spec 映射、表/列清单）→ `common`；
 - 单模块私有配置 / 默认值 → 留在原模块；
-- 只被单域显式 import 的域常量（如 `dto/source.py` 的 `MANUAL_SOURCE_ID`）→ 留在原处，
+- 只被单域显式 import 的域常量（如 `MANUAL_SOURCE_ID`）→ 留在原域，
   被 repo/service 显式 import 属正常依赖，不构成倒挂。
+  现状：`MANUAL_SOURCE_ID` 定义在 `dto/source/query.py`，由 `dto/source/__init__.py` 显式再导出，
+  消费方仍写 `from albuswall.dto.source import MANUAL_SOURCE_ID`（拆分后不迁 `common`，避免为单个
+  常量新增域文件）。
 
 ### 现状
 
@@ -143,19 +147,33 @@ SQLite 的 `CHECK` 约束**无法 ALTER**，所以"加一个枚举值"必然同�
 
 - **每条规则只有一个正文**：正文在 `common` 的规则，`dto/CONVENTIONS.md` 只写
   `见 common/CONVENTIONS.md · 条目名` 指针。
+- **DTO 归属与命名**（Command / Query / 事件与结果 / 共享值对象、交叉引用白名单、分包门槛）
+  的正文在 `dto/CONVENTIONS.md` · 一、DTO 归属与命名；本文件不复述。
 - **`common` 变更优先**：先改本文件，再改 `dto/CONVENTIONS.md` 的指针。
 - 两份文档**平级交叉引用**，不搞父子层级；**不给 service / repo / ui 建 CONVENTIONS.md**。
 - 指针写法统一为：`见 common/CONVENTIONS.md · 条目名`（条目名用二级/三级标题原文）。
 
+## 七、变更记录
+
+### 2026-10-25 · DTO 归属结论联动（仅指针与措辞，无新增跨层规则）
+
+- 六、文档维护：新增一条"DTO 归属与命名的正文在 `dto/CONVENTIONS.md`"，明确本文件不复述。
+- 三、常量 · 归属判据：`MANUAL_SOURCE_ID` 的"原处"随 `dto/source/` 分包改为 `dto/source/query.py`
+  + `__init__` 再导出，并写明不迁 `common` 的理由。
+- 一、候选缓存批量插入的返回值口径：`AssetCandidateCacheDTO` → `AssetCandidateCache`，
+  并补充"该类属 Command 侧"的提示。
+- grep-checklist：`_missing_` 一条改为 `def _missing_`（原模式会命中 `find_missing_paths` /
+  `_missing_section_head` 等子串，属长期假阳性）；schema 常量一条注明分包后的子模块路径。
+
 <!-- grep-checklist
-- 枚举值域里出现 _missing_（应为 0）
-  `grep -rn "_missing_" --include=*.py src/albuswall`
+- 枚举值域里出现 _missing_（应为 0；用 `def _missing_` 避免命中 find_missing_paths 之类子串）
+  `grep -rn "def _missing_" --include=*.py src/albuswall`
 - DTO 内定义异常类（应为 0）
   `grep -rn "class .*Exception\\|class .*Error" --include=*.py src/albuswall/dto`
 - DTO 内定义枚举（应为 0）
   `grep -rn "class .*Enum" --include=*.py src/albuswall/dto`
-- repo/service 反向从 dto 取 schema 常量（应为 0）
-  `grep -rn "from albuswall.dto.thumbnail import" --include=*.py src/albuswall/repositories src/albuswall/services`
+- repo/service 反向从 dto 取 schema 常量（应为 0；分包后路径为 dto.thumbnail.paths 等子模块）
+  `grep -rn "from albuswall.dto.thumbnail" --include=*.py src/albuswall/repositories src/albuswall/services`
 - 集中式常量垃圾桶（应不存在）
   `ls src/albuswall/common/constants.py`
 - 枚举构造点（`EnumCls(` 直调，非法值应抛 ValueError）

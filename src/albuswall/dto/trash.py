@@ -1,5 +1,13 @@
 #
-"""Trash domain DTOs.
+"""Trash domain DTOs。
+
+归属（``dto/CONVENTIONS.md`` · DTO 归属与命名）：本文件**未分包**（Command / Query 门槛未达），
+两侧用分区注释标出：
+
+* Query         —— ``TrashState``（单例行状态）/ ``TrashedAsset``（列表项 / 详情）；
+* 命令侧写前读   —— ``PurgeCandidate``（``find_expired``/``find_any_deleted`` → ``purge_batch``）；
+* 事件与结果     —— ``RestoreReport`` / ``PurgeReport`` / ``CleanupReport`` 及其子结构
+  （``RestoreConflict`` / ``ThumbFailure`` / ``ClockJump``）。
 
 边界契约
 --------
@@ -24,11 +32,11 @@ from .utils import to_uuid
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 实体型 DTO
+# Query —— 实体 / 状态读模型
 # ──────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True, slots=True)
-class TrashStateDTO:
-    """``trash_state`` 单例行。
+class TrashState:
+    """``trash_state`` 单例行（Query）。
 
     ``last_observed_at`` 是单调水位，只增不减。
     """
@@ -38,7 +46,7 @@ class TrashStateDTO:
     suspicious_clock_jumps: int
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "TrashStateDTO":
+    def from_row(cls, row: sqlite3.Row) -> "TrashState":
         """契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。"""
         return cls(
             last_observed_at=row["last_observed_at"],
@@ -49,38 +57,8 @@ class TrashStateDTO:
 
 
 @dataclass(frozen=True, slots=True)
-class RestoreConflictDTO:
-    """单条恢复冲突记录。"""
-    asset_id: int
-    file_path: str
-    reason: str  # 当前统一为 "path_conflict"，未来可扩展
-
-
-@dataclass(frozen=True, slots=True)
-class ThumbFailureDTO:
-    asset_id: int
-    error: str
-
-
-@dataclass(frozen=True, slots=True)
-class ClockJumpDTO:
-    """时钟诊断结论。
-
-    ``kind`` 取值：
-      * ``"normal"``   —— 正常推进，本轮允许清理
-      * ``"backward"`` —— 时钟回拨，本轮**不**清理，水位冻结
-      * ``"forward"``  —— 时钟前跳，本轮**不**清理，水位受限推进
-
-    ``advised_cutoff``：本轮若允许清理，使用的截止时间；
-    为 None 时表示本轮跳过清理（``kind`` 非 normal）。
-    """
-    kind: str
-    advised_cutoff: Optional[str]
-
-
-@dataclass(frozen=True, slots=True)
-class TrashedAssetDTO:
-    """垃圾箱列表项 / 单条详情。
+class TrashedAsset:
+    """垃圾箱列表项 / 单条详情（Query）。
 
     与 ``TrashRepository._LIST_COLUMNS`` 一一对应。
     """
@@ -103,7 +81,7 @@ class TrashedAssetDTO:
     created_at: str
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "TrashedAssetDTO":
+    def from_row(cls, row: sqlite3.Row) -> "TrashedAsset":
         """契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。"""
         return cls(
             id=row["id"],
@@ -126,9 +104,12 @@ class TrashedAssetDTO:
         )
 
 
+# ──────────────────────────────────────────────────────────────────────
+# 命令侧写前读
+# ──────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True, slots=True)
-class PurgeCandidateDTO:
-    """物理清除流程的候选行。
+class PurgeCandidate:
+    """物理清除流程的候选行（命令侧写前读）。
 
     故意不携带 ``original_name`` / ``mime_type`` 等展示字段：
     清除流程只需要"定位行 + 定位文件"所需的最小信息。
@@ -144,7 +125,7 @@ class PurgeCandidateDTO:
     thumb_large_path: Optional[str]
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "PurgeCandidateDTO":
+    def from_row(cls, row: sqlite3.Row) -> "PurgeCandidate":
         """契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。"""
         return cls(
             id=row["id"],
@@ -159,10 +140,40 @@ class PurgeCandidateDTO:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 结果型 DTO
+# 事件与结果 —— 命令侧产出，供 service / UI 消费
 # ──────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True, slots=True)
-class RestoreReportDTO:
+class RestoreConflict:
+    """单条恢复冲突记录。"""
+    asset_id: int
+    file_path: str
+    reason: str  # 当前统一为 "path_conflict"，未来可扩展
+
+
+@dataclass(frozen=True, slots=True)
+class ThumbFailure:
+    asset_id: int
+    error: str
+
+
+@dataclass(frozen=True, slots=True)
+class ClockJump:
+    """时钟诊断结论。
+
+    ``kind`` 取值：
+      * ``"normal"``   —— 正常推进，本轮允许清理
+      * ``"backward"`` —— 时钟回拨，本轮**不**清理，水位冻结
+      * ``"forward"``  —— 时钟前跳，本轮**不**清理，水位受限推进
+
+    ``advised_cutoff``：本轮若允许清理，使用的截止时间；
+    为 None 时表示本轮跳过清理（``kind`` 非 normal）。
+    """
+    kind: str
+    advised_cutoff: Optional[str]
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreReport:
     """恢复操作结果。
 
     * ``restored``：实际恢复的 id 列表。
@@ -173,11 +184,11 @@ class RestoreReportDTO:
     """
     restored: List[int]
     not_found: List[int]
-    conflicts: List[RestoreConflictDTO]
+    conflicts: List[RestoreConflict]
 
 
 @dataclass(frozen=True, slots=True)
-class PurgeReportDTO:
+class PurgeReport:
     """物理清除结果。
 
     * ``purged``：实际删除的 id 列表（Service 需要它定位缩略图目录）。
@@ -185,17 +196,17 @@ class PurgeReportDTO:
       DB 层已删，文件残留不会回滚——这条信息用于上层记录告警。
     """
     purged: List[int]
-    thumb_failures: List[ThumbFailureDTO]
+    thumb_failures: List[ThumbFailure]
 
 
 @dataclass(frozen=True, slots=True)
-class CleanupReportDTO:
+class CleanupReport:
     """一轮清理周期的完整结果。
 
     * ``purged``：本轮物理删除的 id 列表。
-    * ``clock_jump``：本轮对系统时钟的诊断结论，见 ``ClockJumpDTO``。
+    * ``clock_jump``：本轮对系统时钟的诊断结论，见 ``ClockJump``。
     * ``state``：更新后的水位状态，方便上层直接展示。
     """
     purged: List[int]
-    clock_jump: ClockJumpDTO
-    state: TrashStateDTO
+    clock_jump: ClockJump
+    state: TrashState

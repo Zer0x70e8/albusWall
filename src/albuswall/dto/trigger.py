@@ -1,5 +1,11 @@
 #
-""""""
+"""触发配置 DTO（共享配置值对象）。
+
+归属（``dto/CONVENTIONS.md`` · DTO 归属与命名）：``TriggerConfig`` / ``DeviceTrigger`` /
+``ScheduledTrigger`` 是**配置值对象**，不判 Command / Query —— 读路径
+（``get_trigger_config`` → 调度器）与写路径（``IngestSourceForm.to_trigger_config()``）
+都合法引用。存储形态的唯一出口在 ``dto/source/command.py``，本模块只承担运行时视图。
+"""
 
 import datetime
 import json
@@ -70,7 +76,7 @@ class TriggerConfig:
 
     ``update_mode`` 是**单值** ``UpdateMode``，与存储形态（``trigger_config``
     JSON 里的单值字符串，见 ``media_library_schema.sql``）一一对应。
-    存储写入口仍是 ``IngestSourceFormData.to_trigger_config()``，本类只承担
+    存储写入口仍是 ``IngestSourceForm.to_trigger_config()``，本类只承担
     运行时视图。
 
     字段类型刻意写非 ``Optional``：这些字段在语义上"永远有值"，
@@ -124,7 +130,7 @@ class TriggerConfig:
         契约（见 ``CONVENTIONS.md`` · TriggerConfig.to_dict）：
         * ``id`` 保留；
         * ``update_mode`` 保持 ``Enum`` 原样，不转 ``.value``；
-        * 存储形态**不**走本方法，走 ``IngestSourceFormData.to_trigger_config()``。
+        * 存储形态**不**走本方法，走 ``IngestSourceForm.to_trigger_config()``。
           运行时视图与存储视图职责分离，运行时字段不污染存储。
         """
         return {

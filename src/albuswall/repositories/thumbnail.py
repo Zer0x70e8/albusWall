@@ -38,12 +38,12 @@ from albuswall.common.constants.thumbnail import (
 )
 from albuswall.common.enums import ThumbSpec
 from albuswall.dto.sentinel import UNSET, UnsetType
-from albuswall.dto.thumbnail import (
+from albuswall.dto.thumbnail.command import ThumbnailTaskInput
+from albuswall.dto.thumbnail.paths import ThumbnailPaths
+from albuswall.dto.thumbnail.query import (
     MissingThumbnailRow,
     ThumbnailHashRow,
-    ThumbnailPaths,
     ThumbnailStats,
-    ThumbnailTaskInput,
 )
 from albuswall.log import getLogger
 # from albuswall.utils.path import join_path

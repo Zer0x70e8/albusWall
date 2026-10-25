@@ -32,8 +32,8 @@ try:  # 允许直接以文件路径运行
 except ModuleNotFoundError:  # pragma: no cover
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from albuswall.dto.import_ import AssetCandidateCacheDTO
-from albuswall.dto.source import IngestSource
+from albuswall.dto.import_ import AssetCandidateCache
+from albuswall.dto.source.query import IngestSource
 from albuswall.services.source import (
     SourceExecutor,
     SourceService,
@@ -90,7 +90,7 @@ class FakeImportRepo:
         return [p for p in paths if (source_id, p) not in self.cached]
 
     def create_candidate_cache_batch(
-            self, batch: list[AssetCandidateCacheDTO]
+            self, batch: list[AssetCandidateCache]
     ) -> int:
         for candidate in batch:
             self.cached.add((candidate.source_id, candidate.path))

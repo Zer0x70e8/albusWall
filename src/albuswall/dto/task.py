@@ -1,6 +1,13 @@
 #
 """任务域 DTO：背压事件、任务提交描述与提交参数别名。
 
+归属（``dto/CONVENTIONS.md`` · DTO 归属与命名）：本文件**未分包**（Query 只有 1 个），
+两侧用类的角色标注：
+
+* Command            —— ``TaskSpec``（提交写模型）；
+* 事件与结果          —— ``BackpressureEvent``（回调 payload，``frozen``）；
+* Query              —— ``TaskServiceStats``（``get_stats()`` 观测快照）。
+
 枚举（``ExecutorType`` / ``BackpressureReason`` / ``PermitKind``）属
 共享内核，定义在 ``albuswall.common.enums.task``，本模块只负责转发
 导入；``ExecutorArg`` 是 submit 入参的类型别名（DTO 侧契约），留在本模块。

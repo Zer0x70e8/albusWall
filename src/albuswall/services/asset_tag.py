@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from typing import Sequence
 from uuid import UUID
 
-from albuswall.dto.album import AssetDTO
-from albuswall.dto.tag import Tag
+from albuswall.dto.album import Asset
+from albuswall.dto.tag.query import Tag
 from albuswall.repositories.asset import AssetRepository
 from albuswall.repositories.tag import TagRepository
 from albuswall.repositories.utils.types import UuidKeyed
@@ -177,5 +177,5 @@ class AssetTagService:
             tag_uuid: _UUIDLike,
             offset: int = 0,
             limit: int = 100,
-    ) -> list[AssetDTO]:
+    ) -> list[Asset]:
         return self._tag.list_assets(tag_uuid, offset, limit)

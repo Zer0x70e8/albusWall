@@ -31,13 +31,13 @@ from PySide6.QtCore import Signal as QtSignal
 from PySide6.QtWidgets import QMenu
 
 from albuswall.common.enums import FileTypeCheckMode
-from albuswall.dto.source import (
-    MANUAL_SOURCE_ID,
-    IngestSource,
+from albuswall.dto.source.command import (
     IngestSourceCreate,
-    IngestSourceFormData,
+    IngestSourceForm,
     IngestSourceUpdate,
+    form_from_source,
 )
+from albuswall.dto.source.query import MANUAL_SOURCE_ID, IngestSource
 from albuswall.log import getLogger
 from albuswall.ui.builtin.delegate.source_card import CardItemDelegate
 from albuswall.ui.builtin.model.source_card import CardItem, CardListModel
@@ -315,7 +315,9 @@ class IngestSourcePresenter(QObject):
         self._populate_detail(dto)
 
     def _populate_detail(self, dto: IngestSource) -> None:
-        self._view.detail_widget.set_form_data(dto.to_form_data())
+        # 读模型 → 表单快照的桥在命令侧（dto.source.command.form_from_source），
+        # 读模型本身不再知道"表单"这件事（见 dto/CONVENTIONS.md · 交叉引用）。
+        self._view.detail_widget.set_form_data(form_from_source(dto))
 
     def _clear_detail(self) -> None:
         self._view.detail_widget.clear()
@@ -425,7 +427,7 @@ class IngestSourcePresenter(QObject):
 
     # ------------------------------------------------------------ 表单桥
     @staticmethod
-    def _form_to_update_patch(form: IngestSourceFormData) -> IngestSourceUpdate:
+    def _form_to_update_patch(form: IngestSourceForm) -> IngestSourceUpdate:
         """把表单快照组装成 PATCH DTO（全字段显式设置）。
 
         ``IngestSourceUpdate`` 是 PATCH 语义（默认 UNSET），而表单是完整快照，
@@ -453,7 +455,7 @@ class IngestSourcePresenter(QObject):
 
     @staticmethod
     def _form_to_create_payload(
-            form: IngestSourceFormData, fallback_title: str,
+            form: IngestSourceForm, fallback_title: str,
     ) -> IngestSourceCreate:
         """表单快照 → 新建 DTO。"""
         return IngestSourceCreate(
@@ -536,7 +538,7 @@ class IngestSourcePresenter(QObject):
             self._current_source_id, self._form_to_update_patch(form),
         )
 
-    def _create_from_draft(self, form: IngestSourceFormData) -> None:
+    def _create_from_draft(self, form: IngestSourceForm) -> None:
         """把草稿表单提交为一条新记录，成功后定位到新卡片。"""
         payload = self._form_to_create_payload(
             form, self._default_source_title()

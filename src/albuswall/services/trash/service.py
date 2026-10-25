@@ -47,15 +47,15 @@ from typing import Callable, List, Optional
 from albuswall.log import getLogger
 from albuswall.utils.time import format_iso, parse_iso
 from albuswall.dto.trash import (
-    CleanupReportDTO,
-    ClockJumpDTO,
-    PurgeCandidateDTO,
-    PurgeReportDTO,
-    RestoreConflictDTO,
-    RestoreReportDTO,
-    TrashedAssetDTO,
-    ThumbFailureDTO,
-    TrashStateDTO,
+    CleanupReport,
+    ClockJump,
+    PurgeCandidate,
+    PurgeReport,
+    RestoreConflict,
+    RestoreReport,
+    TrashedAsset,
+    ThumbFailure,
+    TrashState,
 )
 from albuswall.repositories.trash import (
     TrashRepository,
@@ -113,23 +113,23 @@ class TrashService:
     # ────────────────────────────────────────────────────────────────
     # 查询（直接透传 repo）
     # ────────────────────────────────────────────────────────────────
-    def list_deleted(self, limit: int, offset: int) -> List[TrashedAssetDTO]:
+    def list_deleted(self, limit: int, offset: int) -> List[TrashedAsset]:
         return self._trash.list_deleted(limit, offset)
 
     def count_deleted(self) -> int:
         return self._trash.count_deleted()
 
-    def get_deleted(self, asset_id: int) -> Optional[TrashedAssetDTO]:
+    def get_deleted(self, asset_id: int) -> Optional[TrashedAsset]:
         return self._trash.get_deleted(asset_id)
 
-    def get_state(self) -> TrashStateDTO:
+    def get_state(self) -> TrashState:
         """暴露单例水位状态，供 UI / 运维展示。"""
         return self._state.get()
 
     # ────────────────────────────────────────────────────────────────
     # 恢复
     # ────────────────────────────────────────────────────────────────
-    def restore(self, asset_ids: List[int]) -> RestoreReportDTO:
+    def restore(self, asset_ids: List[int]) -> RestoreReport:
         """批量恢复。
 
         策略
@@ -143,7 +143,7 @@ class TrashService:
         上的 ``(source_id, file_path)`` 与现有 active 资产重复。
         """
         if not asset_ids:
-            return RestoreReportDTO(restored=[], not_found=[], conflicts=[])
+            return RestoreReport(restored=[], not_found=[], conflicts=[])
 
         try:
             restored = self._trash.restore_batch(asset_ids)
@@ -156,16 +156,16 @@ class TrashService:
 
         restored_set = set(restored)
         not_found = [aid for aid in asset_ids if aid not in restored_set]
-        return RestoreReportDTO(
+        return RestoreReport(
             restored=restored,
             not_found=not_found,
             conflicts=[],
         )
 
-    def _restore_one_by_one(self, asset_ids: List[int]) -> RestoreReportDTO:
+    def _restore_one_by_one(self, asset_ids: List[int]) -> RestoreReport:
         restored: List[int] = []
         not_found: List[int] = []
-        conflicts: List[RestoreConflictDTO] = []
+        conflicts: List[RestoreConflict] = []
 
         for aid in asset_ids:
             try:
@@ -174,7 +174,7 @@ class TrashService:
                 # 事务已回滚，资产仍在垃圾箱，可以查到 file_path
                 asset = self._trash.get_deleted(aid)
                 file_path = asset.file_path if asset is not None else "<unknown>"
-                conflicts.append(RestoreConflictDTO(
+                conflicts.append(RestoreConflict(
                     asset_id=aid,
                     file_path=file_path,
                     reason="path_conflict",
@@ -186,7 +186,7 @@ class TrashService:
             else:
                 not_found.append(aid)
 
-        return RestoreReportDTO(
+        return RestoreReport(
             restored=restored,
             not_found=not_found,
             conflicts=conflicts,
@@ -195,7 +195,7 @@ class TrashService:
     # ────────────────────────────────────────────────────────────────
     # 定时清理（调度器周期调用，例如每小时一次）
     # ────────────────────────────────────────────────────────────────
-    def cleanup_expired(self) -> CleanupReportDTO:
+    def cleanup_expired(self) -> CleanupReport:
         """按保留期物理清除过期垃圾箱资产。
 
         返回本轮完整结果：删除列表 + 时钟诊断 + 更新后的水位状态。
@@ -209,7 +209,7 @@ class TrashService:
         )
 
         purged: List[int] = []
-        thumb_failures: List[ThumbFailureDTO] = []
+        thumb_failures: List[ThumbFailure] = []
 
         if cutoff_iso is not None:
             report = self._purge_loop(
@@ -246,16 +246,16 @@ class TrashService:
                 len(thumb_failures),
             )
 
-        return CleanupReportDTO(
+        return CleanupReport(
             purged=purged,
-            clock_jump=ClockJumpDTO(kind=kind, advised_cutoff=cutoff_iso),
+            clock_jump=ClockJump(kind=kind, advised_cutoff=cutoff_iso),
             state=self._state.get(),
         )
 
     # ────────────────────────────────────────────────────────────────
     # 用户手动清空垃圾箱
     # ────────────────────────────────────────────────────────────────
-    def empty_trash(self) -> PurgeReportDTO:
+    def empty_trash(self) -> PurgeReport:
         """用户点击"清空垃圾箱"时调用。
 
         与 ``cleanup_expired`` 的差别：
@@ -308,8 +308,8 @@ class TrashService:
     # ────────────────────────────────────────────────────────────────
     def _purge_loop(
             self,
-            fetch_page: Callable[[int], List[PurgeCandidateDTO]],
-    ) -> PurgeReportDTO:
+            fetch_page: Callable[[int], List[PurgeCandidate]],
+    ) -> PurgeReport:
         """分页循环：取一批 → 物理删除 → 删缩略图。
 
         分页安全性：``find_*`` 按 ``deleted_at ASC, id ASC`` 排序，
@@ -317,7 +317,7 @@ class TrashService:
         小于 ``PURGE_BATCH_SIZE``，说明已扫到底，退出。
         """
         purged_all: List[int] = []
-        failures: List[ThumbFailureDTO] = []
+        failures: List[ThumbFailure] = []
 
         while True:
             batch = fetch_page(PURGE_BATCH_SIZE)
@@ -336,7 +336,7 @@ class TrashService:
                     continue
                 err = self._delete_thumb_files(cand)
                 if err is not None:
-                    failures.append(ThumbFailureDTO(
+                    failures.append(ThumbFailure(
                         asset_id=cand.id, error=err,
                     ))
 
@@ -344,13 +344,13 @@ class TrashService:
             if len(batch) < PURGE_BATCH_SIZE:
                 break
 
-        return PurgeReportDTO(purged=purged_all, thumb_failures=failures)
+        return PurgeReport(purged=purged_all, thumb_failures=failures)
 
     # ────────────────────────────────────────────────────────────────
     # 内部：文件清理
     # ────────────────────────────────────────────────────────────────
     @staticmethod
-    def _delete_thumb_files(cand: PurgeCandidateDTO) -> Optional[str]:
+    def _delete_thumb_files(cand: PurgeCandidate) -> Optional[str]:
         """删除候选行的缩略图目录。
 
         返回 ``None`` 表示成功，否则返回错误摘要字符串。

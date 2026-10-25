@@ -1,5 +1,11 @@
 #
-""""""
+"""Album / Asset 读模型（Query）。
+
+归属（``dto/CONVENTIONS.md`` · DTO 归属与命名）：本文件只有 **Query** 侧 DTO
+（``Album`` / ``Asset``），只由读路径消费（``ViewRepository`` / ``TagRepository.list_assets``
+→ ``ViewService`` → presenter）。相簿写入尚未实现，因此本域暂无 Command DTO；
+将来实现时按 ``AlbumCreate`` / ``AlbumUpdate`` 命名，放 ``dto/album/command.py``。
+"""
 
 from __future__ import annotations
 
@@ -11,7 +17,7 @@ from uuid import UUID
 
 from .utils import to_uuid, row_get
 
-__all__ = ["Album", "AssetDTO"]
+__all__ = ["Album", "Asset"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +55,7 @@ class Album:
 
 
 @dataclass(frozen=True, slots=True)
-class AssetDTO:
+class Asset:
     """资产 DTO，对应 assets 表；不包含软删除等内部字段。
 
     缩略图字段说明：
@@ -107,7 +113,7 @@ class AssetDTO:
     modified_at: Optional[str] = None
 
     @classmethod
-    def from_row(cls, row: Row) -> "AssetDTO":
+    def from_row(cls, row: Row) -> "Asset":
         """从 ``sqlite3.Row`` 构造 DTO。
 
         契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。

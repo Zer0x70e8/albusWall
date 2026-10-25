@@ -11,7 +11,7 @@ from uuid import UUID
 
 from PySide6.QtCore import QAbstractItemModel, QModelIndex, Qt
 
-from albuswall.services.tag import TagTreeNode
+from albuswall.dto.tag.query import TagTreeNode
 
 
 @dataclass

@@ -65,14 +65,10 @@ from albuswall.common.exceptions import (
     BackpressureError,
     TaskServiceShutdownError,
 )
-from albuswall.dto.import_ import AssetCandidateCacheDTO
-from albuswall.dto.source import (
-    MANUAL_SOURCE_ID,
-    IngestSource,
-    IngestSourceCreate,
-    IngestSourceUpdate,
-    SourceScanFinished,
-)
+from albuswall.dto.import_ import AssetCandidateCache
+from albuswall.dto.source.command import IngestSourceCreate, IngestSourceUpdate
+from albuswall.dto.source.events import SourceScanFinished
+from albuswall.dto.source.query import MANUAL_SOURCE_ID, IngestSource
 from albuswall.utils.signals import Signal, SignalDescriptor
 from albuswall.utils.mount import auto_mount
 from albuswall.utils.path import iter_files_depth_first
@@ -612,7 +608,7 @@ class SourceExecutor:
             return 0
 
         candidates = [
-            AssetCandidateCacheDTO(
+            AssetCandidateCache(
                 uuid=uuid4(),
                 path=p,
                 source_id=self.source.id,

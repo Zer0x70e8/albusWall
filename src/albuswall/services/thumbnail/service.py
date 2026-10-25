@@ -61,10 +61,8 @@ from uuid import UUID
 
 from albuswall.common.constants.thumbnail import ALL_SPECS
 from albuswall.common.enums import ExecutorType, ThumbSpec
-from albuswall.dto.thumbnail import (
-    ThumbnailResult,
-    ThumbnailStats,
-)
+from albuswall.dto.thumbnail.command import ThumbnailResult
+from albuswall.dto.thumbnail.query import ThumbnailStats
 from albuswall.log import getLogger
 from albuswall.utils import path as path_util
 from albuswall.utils.signals import SignalDescriptor

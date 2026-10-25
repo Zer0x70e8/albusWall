@@ -58,8 +58,9 @@ except ModuleNotFoundError:  # pragma: no cover
 import albuswall.services.import_ as import_mod
 import albuswall.services.source as source_mod
 from albuswall.common.enums import CandidateStatus, FileTypeCheckMode
-from albuswall.dto.import_ import AssetCandidateCacheDTO, AssetCreateDTO
-from albuswall.dto.source import IngestSource, IngestSourceCreate
+from albuswall.dto.import_ import AssetCandidateCache, AssetCreate
+from albuswall.dto.source.command import IngestSourceCreate
+from albuswall.dto.source.query import IngestSource
 from albuswall.infrastructure.database import Connector
 from albuswall.repositories.import_ import (
     MAX_PATHS_PER_QUERY,
@@ -87,7 +88,7 @@ class FakeImportRepo:
 
     def __init__(self) -> None:
         self.status: dict[int, CandidateStatus] = {}
-        self.finalized: list[tuple[int, AssetCreateDTO]] = []
+        self.finalized: list[tuple[int, AssetCreate]] = []
         self.failures: list[int] = []
         # finalize_candidate 的剧本：True → 返回 uuid（成功）；
         # False → 返回 None 且按 final_status 落终态。
@@ -122,7 +123,7 @@ class FakeImportRepo:
         self.failures.append(candidate_id)
         self.update_candidate_status(candidate_id, CandidateStatus.FAILED)
 
-    def finalize_candidate(self, candidate_id: int, dto: AssetCreateDTO):
+    def finalize_candidate(self, candidate_id: int, dto: AssetCreate):
         self.finalized.append((candidate_id, dto))
         if self.finalize_ok:
             self.status[candidate_id] = CandidateStatus.DONE
@@ -132,7 +133,7 @@ class FakeImportRepo:
 
     # 测试侧字段
     source_paths: dict[int, str] = {}
-    pending: list[AssetCandidateCacheDTO] = []
+    pending: list[AssetCandidateCache] = []
 
 
 class SyncTaskService:
@@ -189,8 +190,8 @@ def make_candidate(
         source_id: int = 7,
         mime_type: Optional[str] = None,
         candidate_id: Optional[int] = None,
-) -> AssetCandidateCacheDTO:
-    return AssetCandidateCacheDTO(
+) -> AssetCandidateCache:
+    return AssetCandidateCache(
         uuid=uuid4(),
         path=path,
         source_id=source_id,
@@ -737,7 +738,7 @@ def test_batch_insert_or_ignore_masks_notnull_violation() -> None:
 
     既不是"事务没提交"，也不是 ``_transaction`` 的问题——裸 INSERT 同一行
     会抛 IntegrityError，而 ``INSERT OR IGNORE`` 静默跳过，返回值仍是提交
-    尝试数。``AssetCandidateCacheDTO.mime_type`` 声明为 ``str``，传 None
+    尝试数。``AssetCandidateCache.mime_type`` 声明为 ``str``，传 None
     属调用方违约。
     """
     conn = Connector()

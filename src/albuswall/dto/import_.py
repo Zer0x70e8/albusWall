@@ -1,5 +1,13 @@
 #
-""""""
+"""导入域写模型（Command）。
+
+归属（``dto/CONVENTIONS.md`` · DTO 归属与命名）：本文件只有 **Command** 侧 DTO
+（``AssetCandidateCache`` / ``AssetCreate``），只由命令路径消费
+（``ImportService`` → 进程池 → ``ImportRepository`` 写方法）。
+
+``AssetCandidateCache`` 同时提供 ``from_row``（命令侧事务内回读），属已登记的例外；
+它仍带 ``to_insert_params()``，写模型身份不变。
+"""
 
 from __future__ import annotations
 
@@ -12,12 +20,12 @@ from albuswall.common.enums import CandidateStatus
 
 from .utils import to_uuid, coerce_enum
 
-__all__ = ["AssetCreateDTO", "AssetCandidateCacheDTO"]
+__all__ = ["AssetCreate", "AssetCandidateCache"]
 
 
 
 @dataclass(frozen=True, slots=True)
-class AssetCandidateCacheDTO:
+class AssetCandidateCache:
     """asset_candidate_cache 表的数据传输对象。
 
     路径语义（与 media_library_schema.sql 一致）：
@@ -48,7 +56,7 @@ class AssetCandidateCacheDTO:
     )
 
     @classmethod
-    def from_row(cls, row: Row) -> "AssetCandidateCacheDTO":
+    def from_row(cls, row: Row) -> "AssetCandidateCache":
         """只接受 sqlite3.Row（connector 已设置 row_factory）。
 
         契约：``from_row`` 固定接受 ``sqlite3.Row``，不兼容 ``Mapping``。
@@ -84,7 +92,7 @@ class AssetCandidateCacheDTO:
 
 
 @dataclass(frozen=True, slots=True)
-class AssetCreateDTO:
+class AssetCreate:
     """assets 表插入用的 DTO。
 
     路径语义（与 media_library_schema.sql 一致）：
@@ -118,7 +126,7 @@ class AssetCreateDTO:
     city: Optional[str] = None
     exif_json: Optional[str] = None
 
-    # 契约：仅 AssetCreateDTO.is_favorite 保留 int（未来星级）
+    # 契约：仅 AssetCreate.is_favorite 保留 int（未来星级）
     is_favorite: int = 0
     # 契约：is_deleted 改 bool（DB 仍是 INTEGER 0/1，写入时归一）
     is_deleted: bool = False
