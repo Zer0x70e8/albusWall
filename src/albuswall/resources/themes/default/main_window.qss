@@ -1348,6 +1348,18 @@ QPushButton#DetailCloseButton:focus,
     border-radius: 0;
 }
 
+/* 键盘焦点：标题行可获得焦点，Enter / Space 展开 / 折叠 */
+#SettingSetting CollapsibleGroupBox:focus {
+    border: 1px solid rgba(0, 122, 255, 0.85);
+    background: rgba(0, 122, 255, 0.10);
+}
+
+#SettingSetting CollapsibleGroupBox[collapsed="true"]:focus {
+    border: 1px solid rgba(0, 122, 255, 0.85);
+    border-radius: 8px;
+    background: rgba(0, 122, 255, 0.08);
+}
+
 
 /* ---------------------------------------------------------------------------
  *  3.4  Setting Header  ·  设置页头部（标题 / 概览 / 写回状态）
@@ -1483,6 +1495,79 @@ QPushButton#DetailCloseButton:focus,
     border: 1px solid rgba(0, 122, 255, 0.85);
     background-color: rgba(0, 122, 255, 0.55);
     color: #FFFFFF;
+}
+
+
+/* ---------------------------------------------------------------------------
+ *  3.5b  Setting Keymap  ·  「按键映射」页
+ * ---------------------------------------------------------------------------
+ *  · #SettingKeymapPage            页面说明 / 搜索 / 总开关
+ *  · #SettingKeymapRow             一行「动作 + QKeySequenceEdit + ↺」
+ *  · #SettingKeymapId              动作 id（小号灰字）
+ *  行内标签 / 说明 / 错误沿用 3.5 的 #SettingRowLabel 等通用选择器；
+ *  QKeySequenceEdit 内部的 QLineEdit 按行选择器补一套输入胶囊样式。
+ * --------------------------------------------------------------------------- */
+
+#SettingSetting #SettingKeymapId {
+    font-weight: normal;
+    font-size: 0.78em;
+    color: rgba(150, 150, 150, 0.75);
+}
+
+#SettingSetting #SettingKeymapSearch,
+#SettingSetting #SettingKeymapRow QLineEdit {
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0 12px;
+
+    border: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 13px;
+
+    background-color: rgba(20, 20, 20, 0.75);
+    color: rgba(240, 240, 240, 0.95);
+    font-size: 1em;
+}
+
+#SettingSetting #SettingKeymapSearch:hover,
+#SettingSetting #SettingKeymapRow QLineEdit:hover {
+    border: 1px solid rgba(160, 160, 160, 0.85);
+}
+
+#SettingSetting #SettingKeymapSearch:focus,
+#SettingSetting #SettingKeymapRow QLineEdit:focus {
+    border: 1px solid rgba(0, 122, 255, 0.85);
+    background-color: rgba(30, 30, 30, 0.78);
+}
+
+#SettingSetting #SettingKeymapRow QLineEdit:disabled {
+    color: rgba(160, 160, 160, 0.55);
+    background-color: rgba(30, 30, 30, 0.30);
+    border: 1px solid rgba(80, 80, 80, 0.40);
+}
+
+#SettingSetting #SettingKeymapPage QCheckBox {
+    background: transparent;
+    color: rgba(220, 220, 220, 0.92);
+    spacing: 8px;
+    font-size: 1em;
+    font-weight: normal;
+}
+
+#SettingSetting #SettingKeymapPage QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid rgba(160, 160, 160, 0.75);
+    border-radius: 4px;
+    background-color: rgba(30, 30, 30, 0.55);
+}
+
+#SettingSetting #SettingKeymapPage QCheckBox::indicator:hover {
+    border: 1px solid rgba(220, 220, 220, 0.95);
+}
+
+#SettingSetting #SettingKeymapPage QCheckBox::indicator:checked {
+    background-color: rgba(0, 122, 255, 0.95);
+    border: 1px solid rgba(0, 122, 255, 1.0);
 }
 
 

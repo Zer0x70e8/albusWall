@@ -8,7 +8,7 @@
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QObject, QTimer
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 
 from albuswall.configue import StateField, StatefulNamespace
 from albuswall.log import Logger, getLogger
@@ -99,6 +99,8 @@ class WindowPresenter(QObject):
         QTimer.singleShot(0, self._sync_title_bar_height)
 
         self._wire_navigation()
+        # 启动后没有焦点时把焦点给网格：键盘用户开箱即用
+        QTimer.singleShot(0, self._focus_default_region)
 
         if not self._manage_geometry:
             _logger.info(
@@ -200,6 +202,48 @@ class WindowPresenter(QObject):
                 _logger.warning(
                     "UI wire failed: %s -> %s (%s)", signal, slot, exc,
                 )
+
+        # 键盘：浮层切换时把焦点带进 / 带出对应区域，纯键盘不会「焦点掉在
+        # 已隐藏的控件上」。currentChanged 也覆盖鼠标点按钮的路径。
+        try:
+            overlay.currentChanged.connect(self._on_overlay_changed)
+        except (RuntimeError, TypeError) as exc:
+            _logger.warning("overlay focus tracking unavailable: %s", exc)
+
+    def _focus_default_region(self) -> None:
+        """窗口第一次稳定后：没有焦点就落到内容网格。"""
+        if self._target.focusWidget() is None:
+            self._target.content.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _on_overlay_changed(self, _index: int) -> None:
+        """浮层切换 → 焦点跟随到新页面的主区域（空白页则回到网格）。"""
+        w = self._target
+        overlay = w.overlay
+        current = overlay.currentWidget()
+
+        if overlay.is_blank():
+            w.content.setFocus(Qt.FocusReason.OtherFocusReason)
+            return
+
+        target = None
+        if current is w.album:
+            target = getattr(w.album, "view", None)
+        elif current is w.source:
+            target = getattr(w.source, "view", None)
+        elif current is w.setting:
+            focus_nav = getattr(w.setting, "focus_first_navigation", None)
+            if callable(focus_nav) and focus_nav():
+                return
+            target = getattr(w.setting, "close_button", None)
+        elif current is w.detail:
+            # 打开详情后焦点落在图片区：方向键直接翻页（由 keymap 分发），
+            # Tab / F6 再去导航条、标签栏、按钮。
+            detail = w.detail
+            target = getattr(detail, "image_viewer", None) \
+                or getattr(detail, "item_line_viewer", None)
+
+        if target is not None:
+            target.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _apply_style_sheet(self) -> None:
         """把 QSS 装到窗口上（路径由 ``ui.style_sheet`` 解析好）。"""

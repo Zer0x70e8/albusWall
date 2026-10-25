@@ -444,10 +444,20 @@ class FloatingSearchBar(Retranslatable, QFrame):
 
     def _handle_line_edit_key(self, event) -> bool:
         """建议列表可见时接管上下键 / 回车 / Esc；其余按键交给 QLineEdit。"""
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            # Esc 的优先级：先收建议列表，再收搜索栏本身
+            if self.has_suggestions_open():
+                self._suggestions.hide()
+                return True
+            if self.is_expanded:
+                self.collapse()
+                return True
+            return False
+
         suggestions = getattr(self, "_suggestions", None)
         if suggestions is None or not suggestions.isVisible():
             return False
-        key = event.key()
         if key in (Qt.Key.Key_Down, Qt.Key.Key_Up):
             suggestions.move_selection(
                 1 if key == Qt.Key.Key_Down else -1
@@ -455,10 +465,12 @@ class FloatingSearchBar(Retranslatable, QFrame):
             return True
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             return suggestions.activate_current()
-        if key == Qt.Key.Key_Escape:
-            suggestions.hide()
-            return True
         return False
+
+    def has_suggestions_open(self) -> bool:
+        """建议列表当前是否可见（Esc 优先收列表，再收搜索栏）。"""
+        suggestions = getattr(self, "_suggestions", None)
+        return bool(suggestions is not None and suggestions.isVisible())
 
     def _on_target_resized(self):
         if not self.is_expanded or not self.isVisible():

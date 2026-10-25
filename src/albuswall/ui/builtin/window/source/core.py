@@ -1,7 +1,7 @@
 #
 """"""
 
-from PySide6.QtCore import Qt, Signal, QModelIndex, QTimer, QPoint
+from PySide6.QtCore import QEvent, Qt, Signal, QModelIndex, QTimer, QPoint
 from PySide6.QtWidgets import (
     QHBoxLayout, QSizePolicy, QWidget,
     QPushButton, QScrollArea, QSplitter, QVBoxLayout
@@ -94,6 +94,8 @@ class IngestSource(Retranslatable, BlurLabel):
         )
 
         self.view.clicked.connect(self._on_card_clicked)
+        # 键盘：Menu / Shift+F10 打开当前卡片的右键菜单
+        self.view.installEventFilter(self)
         # if hasattr(self.view, "selectionModel"):
         #     self.view.selectionModel().currentChanged.connect(self._on_current_changed)
         # else:
@@ -218,6 +220,29 @@ class IngestSource(Retranslatable, BlurLabel):
             return  # 空白处右键不弹
         global_pos = self.view.viewport().mapToGlobal(pos)
         self.context_menu_requested.emit(index, global_pos)
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt 命名
+        """键盘上下文菜单：Menu 键 / Shift+F10（焦点卡片处弹出）。"""
+        if obj is self.view and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            mods = event.modifiers()
+            if key == Qt.Key.Key_Menu or (
+                    key == Qt.Key.Key_F10
+                    and mods & Qt.KeyboardModifier.ShiftModifier
+            ):
+                index = self.view.currentIndex()
+                if index.isValid():
+                    rect = self.view.visualRect(index)
+                    pos = (
+                        rect.center() if not rect.isEmpty()
+                        else self.view.viewport().rect().center()
+                    )
+                else:
+                    pos = self.view.viewport().rect().center()
+                self._on_view_context_menu_requested(pos)
+                event.accept()
+                return True
+        return super().eventFilter(obj, event)
 
 
 if __name__ == "__main__":

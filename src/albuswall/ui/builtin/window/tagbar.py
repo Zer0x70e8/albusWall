@@ -4,7 +4,7 @@
 import time
 from typing import Any, Sequence, Callable, Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout, QPushButton, QListView, QLineEdit,
     QWidget, QTreeView, QVBoxLayout, QSizePolicy, QFrame, QMenu
@@ -161,6 +161,12 @@ class TagBar(Retranslatable, QFrame):
 
         # 树点击透出
         self.layer_tree_popup.tree_view.clicked.connect(self._on_tree_clicked)
+        # 键盘：Enter/Return 激活当前节点；F2 重命名、Delete 删除、
+        # Insert / Ctrl+N 新建子标签、Menu / Shift+F10 打开右键菜单
+        self.layer_tree_popup.tree_view.activated.connect(
+            self._on_tree_clicked
+        )
+        self.layer_tree_popup.tree_view.installEventFilter(self)
 
         self.setFixedHeight(64)
 
@@ -186,6 +192,13 @@ class TagBar(Retranslatable, QFrame):
         if time.monotonic() - getattr(self, "_popup_closed_at", 0.0) < 0.2:
             return
         popup.show_under(self.layer_tree_button)
+        # 键盘：打开后把焦点交给标签树，方向键 + Enter 即可操作
+        tree = popup.tree_view
+        tree.setFocus(Qt.FocusReason.PopupFocusReason)
+        if not tree.currentIndex().isValid() and tree.model() is not None:
+            first = tree.model().index(0, 0)
+            if first.isValid():
+                tree.setCurrentIndex(first)
 
     def _emit_apply(self) -> None:
         text = self.tag_line_edit.text().strip()
@@ -197,6 +210,57 @@ class TagBar(Retranslatable, QFrame):
         if uuid:
             self.layer_tree_activated.emit(str(uuid.uuid))
             self.layer_tree_popup.hide()
+
+    def _tree_current_tag_uuid(self) -> str:
+        """标签树当前节点的 uuid（没有选中 / 不是标签时为空串）。"""
+        tree = self.layer_tree_popup.tree_view
+        index = tree.currentIndex()
+        if not index.isValid():
+            return ""
+        tag = index.data(Qt.ItemDataRole.UserRole + 1)
+        return str(tag.uuid) if tag else ""
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt 命名
+        """标签树的键盘快捷键（树弹窗是独立键盘抓取窗口，走本地事件）。"""
+        tree = self.layer_tree_popup.tree_view
+        if obj is tree and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            mods = event.modifiers()
+            tag_uuid = self._tree_current_tag_uuid()
+
+            if key == Qt.Key.Key_F2 and tag_uuid:
+                self.tag_rename_requested.emit(tag_uuid)
+                event.accept()
+                return True
+            if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and tag_uuid:
+                self.tag_delete_requested.emit(tag_uuid)
+                event.accept()
+                return True
+            if key == Qt.Key.Key_Insert:
+                # Insert = 在当前节点下新建；无选中 → 新建根标签
+                self.tag_create_requested.emit(tag_uuid)
+                event.accept()
+                return True
+            if (
+                    key == Qt.Key.Key_N
+                    and mods & Qt.KeyboardModifier.ControlModifier
+            ):
+                # Ctrl+N = 总是新建根标签
+                self.tag_create_requested.emit("")
+                event.accept()
+                return True
+            if key == Qt.Key.Key_Menu or (
+                    key == Qt.Key.Key_F10
+                    and mods & Qt.KeyboardModifier.ShiftModifier
+            ):
+                index = tree.currentIndex()
+                rect = tree.visualRect(index) if index.isValid() else None
+                pos = rect.center() if rect is not None and not rect.isEmpty() \
+                    else tree.viewport().rect().center()
+                self._on_tree_context_menu(pos)
+                event.accept()
+                return True
+        return super().eventFilter(obj, event)
 
     def _on_tree_context_menu(self, pos) -> None:
         """标签树右键菜单：新建子标签 / 重命名 / 删除。

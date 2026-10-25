@@ -16,6 +16,7 @@ from uuid import UUID
 
 from PySide6.QtCore import (
     Q_ARG,
+    QItemSelectionModel,
     QMetaObject,
     QModelIndex,
     QObject,
@@ -157,6 +158,8 @@ class AlbumPresenter(QObject):
         self._view.setSelectionMode(
             self._view.SelectionMode.SingleSelection)
         self._view.clicked.connect(self._on_album_clicked)
+        # 键盘：方向键移动当前项，Enter/Return 激活 → 与鼠标点击同一条出口
+        self._view.activated.connect(self._on_album_clicked)
 
     @property
     def current(self) -> Album | None:
@@ -358,6 +361,15 @@ class AlbumPresenter(QObject):
             return
         idx = self._model.index(row, 0)
         self._view.setCurrentIndex(idx)
+        # setCurrentIndex 只移动 current，不改变选择；键盘焦点下要让当前专辑
+        # 有可见高亮（delegate 用 State_Selected 画边框）
+        selection = self._view.selectionModel()
+        if selection is not None:
+            selection.select(
+                idx,
+                QItemSelectionModel.SelectionFlag.ClearAndSelect
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
         self._view.scrollTo(idx)
 
     # ---------------- 默认专辑 ----------------

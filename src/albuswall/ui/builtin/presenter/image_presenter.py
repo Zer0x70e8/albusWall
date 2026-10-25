@@ -88,6 +88,8 @@ class ThumbnailGridPresenter(QObject):
     item_loaded = Signal(str)  # asset_uuid
     item_failed = Signal(str, str)  # (asset_uuid, reason)
     item_activated = Signal(str)  # asset_uuid
+    #: 键盘 / 鼠标光标切换（纯键盘浏览时驱动 tagbar 的作用对象）
+    selection_changed = Signal(str)  # asset_uuid；空串 = 没有选中项
 
     # 跨线程投递：
     #   (index, generation, QImage|None, error_str)
@@ -166,6 +168,8 @@ class ThumbnailGridPresenter(QObject):
         view.visible_range_changed.connect(self._on_visible_range_changed)
         view.cache_cleared.connect(self._on_cache_cleared)
         view.unit_clicked.connect(self._on_unit_clicked)
+        view.unit_activated.connect(self._on_unit_activated)
+        view.cursor_changed.connect(self._on_cursor_changed)
         delegate = InfoCellDelegate(
             pixmap_getter=lambda i: self._view.pixmap_cache.get(i),
             mode=InfoMode.FAVORITE,
@@ -210,6 +214,8 @@ class ThumbnailGridPresenter(QObject):
 
         self._view.reset_source(len(self._asset_uuids) - 1)
         self._attempts.clear()
+        # 数据源换了：光标回到第一项，同步广播新的选中资产
+        self._on_cursor_changed(self._view.cursor_index())
 
     def set_spec(self, spec: ThumbSpec | str) -> None:
         """切换缩略图规格；清空缓存后按需重载。"""
@@ -285,6 +291,26 @@ class ThumbnailGridPresenter(QObject):
     def _on_unit_clicked(self, index: int) -> None:
         if 0 <= index < len(self._asset_uuids):
             self.item_activated.emit(self._asset_uuids[index])
+
+    @Slot(int)
+    def _on_unit_activated(self, index: int) -> None:
+        """键盘回车激活光标项（与鼠标单击同一条出口）。"""
+        self._on_unit_clicked(index)
+
+    @Slot(int)
+    def _on_cursor_changed(self, index: int) -> None:
+        """键盘 / 鼠标光标变化 → 广播当前资产，让 tagbar 等跟随。"""
+        if 0 <= index < len(self._asset_uuids):
+            self.selection_changed.emit(self._asset_uuids[index])
+        else:
+            self.selection_changed.emit("")
+
+    def current_asset_uuid(self) -> str | None:
+        """光标所在资产的 uuid（没有数据 / 没有光标时为 None）。"""
+        index = self._view.cursor_index()
+        if 0 <= index < len(self._asset_uuids):
+            return self._asset_uuids[index]
+        return None
 
     # ------------------------------------------------------------------ #
     # 槽：加载/生成结果（主线程）

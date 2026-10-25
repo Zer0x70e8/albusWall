@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Sequence, Mapping, Optional, Any
 
-from PySide6.QtCore import Qt, Signal, QModelIndex
+from PySide6.QtCore import QItemSelectionModel, Qt, Signal, QModelIndex
 from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
@@ -212,9 +212,12 @@ class Detail(Retranslatable, BlurLabel):
 
         # 点击走 model
         self.item_line_viewer.clicked.connect(self._on_nav_item_clicked)
+        # 键盘：方向键移动 + Enter/Return 激活（与点击同一条出口）
+        self.item_line_viewer.activated.connect(self._on_nav_item_clicked)
 
     def setup_key(self):
-        # 键盘总线尚未就绪，暂不接入；等统一键盘操作总线上线后在此挂载。
+        # 全局键位由 keymap 的 KeymapManager 统一分发（window.escape /
+        # viewer.* 等）；本视图只保留控件自身的原生键盘行为。
         pass
 
     # ------------------------------------------------------------------ #
@@ -268,6 +271,14 @@ class Detail(Retranslatable, BlurLabel):
 
         idx = self._nav_model.index(row, 0)
         self.item_line_viewer.setCurrentIndex(idx)
+        # setCurrentIndex 不改选择：键盘方向键要从当前图继续，且要有可见高亮
+        selection = self.item_line_viewer.selectionModel()
+        if selection is not None:
+            selection.select(
+                idx,
+                QItemSelectionModel.SelectionFlag.ClearAndSelect
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
         self.item_line_viewer.scrollTo(
             idx, QListView.ScrollHint.PositionAtCenter
         )
@@ -289,6 +300,16 @@ class Detail(Retranslatable, BlurLabel):
         self._nav_total = int(total)
         self._nav_prev_uuid = str(prev_uuid) if prev_uuid else None
         self._nav_next_uuid = str(next_uuid) if next_uuid else None
+
+    @property
+    def previous_asset_uuid(self) -> Optional[str]:
+        """相册里当前资产的上一个 uuid（到头 / 无数据时为 None）。"""
+        return self._nav_prev_uuid
+
+    @property
+    def next_asset_uuid(self) -> Optional[str]:
+        """相册里当前资产的下一个 uuid（到头 / 无数据时为 None）。"""
+        return self._nav_next_uuid
 
     # ------------------------------------------------------------------ #
     # 收藏 / 删除状态
@@ -357,6 +378,12 @@ class Detail(Retranslatable, BlurLabel):
             self.panel.setGeometry(self.rect())
             self.panel.raise_()  # 抬到 Detail 里其它子控件之上
         self.panel.setVisible(checked)
+        # 键盘：打开面板后把焦点交给关闭按钮，Esc 由 keymap 的
+        # window.escape 负责收起；关闭后焦点回到信息按钮
+        if checked:
+            self.panel.close_button.setFocus(Qt.FocusReason.OtherFocusReason)
+        else:
+            self.information_button.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

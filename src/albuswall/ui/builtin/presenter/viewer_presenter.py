@@ -178,6 +178,25 @@ class ViewerPresenter:
             include_deleted=self._ctx.include_deleted,
         ))
 
+    def navigate_relative(self, offset: int) -> bool:
+        """按相册顺序翻页（``-1`` 上一张 / ``+1`` 下一张）。
+
+        邻居 uuid 由视图在 ``open()`` 时缓存（``Detail.set_navigation_position``），
+        这里只做「有邻居才翻」的判断，不重新查询服务层。
+
+        Returns:
+            True: 已切换 / 已提交切换；False: 没有可翻的邻居（按键应放行）。
+        """
+        if self._ctx is None:
+            return False
+        target = (
+            self.view.next_asset_uuid if offset >= 0
+            else self.view.previous_asset_uuid
+        )
+        if not target:
+            return False
+        return self.navigate(target)
+
     def setup(self, _=None) -> None:
         self.view.panel.view.setModel(self.metadata_model)
         self.view.panel.view.setItemDelegate(self.metadata_delegate)

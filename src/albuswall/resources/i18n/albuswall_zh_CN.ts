@@ -12,32 +12,32 @@
     <context>
         <name>Detail</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="315" />
+            <location filename="src/albuswall/ui/builtin/window/detail.py" line="336" />
             <source>recover</source>
             <translation>恢复</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="315" />
+            <location filename="src/albuswall/ui/builtin/window/detail.py" line="336" />
             <source>trash</source>
             <translation>删除</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="319" />
+            <location filename="src/albuswall/ui/builtin/window/detail.py" line="340" />
             <source>choice</source>
             <translation>多选</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="320" />
+            <location filename="src/albuswall/ui/builtin/window/detail.py" line="341" />
             <source>favourite</source>
             <translation>收藏</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="321" />
+            <location filename="src/albuswall/ui/builtin/window/detail.py" line="342" />
             <source>info</source>
             <translation>信息</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="322" />
+            <location filename="src/albuswall/ui/builtin/window/detail.py" line="343" />
             <source>edit</source>
             <translation>编辑</translation>
         </message>
@@ -260,32 +260,32 @@
     <context>
         <name>IngestSourcePresenter</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="254" />
+            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="266" />
             <source>未命名导入源</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="598" />
+            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="615" />
             <source>enable</source>
             <translation>启用</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="598" />
+            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="615" />
             <source>disable</source>
             <translation>禁用</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="605" />
+            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="622" />
             <source>recover</source>
             <translation>恢复</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="606" />
+            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="623" />
             <source>ensure deleted</source>
             <translation>确认删除</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="608" />
+            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="625" />
             <source>delete</source>
             <translation>删除</translation>
         </message>
@@ -345,37 +345,37 @@
             <translation>设置</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="153" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="157" />
             <source>Reload the setting tree (setting.schema)</source>
             <translation>重新加载设置树（setting.schema）</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="300" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="325" />
             <source>{count} settings</source>
             <translation>{count} 项设置</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="304" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="329" />
             <source>{count} groups</source>
             <translation>{count} 个分组</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="308" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="333" />
             <source>writes {count} files</source>
             <translation>写入 {count} 个文件</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="310" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="335" />
             <source>same structure as albusctl setting.schema</source>
             <translation>与 albusctl setting.schema 结构相同</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="315" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="340" />
             <source>No setting tree available (the config system may not be ready yet).</source>
             <translation>没有可用的设置树（配置系统可能尚未就绪）。</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="325" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="350" />
             <source>{key} updated</source>
             <translation>{key} 已更新</translation>
         </message>
@@ -418,52 +418,52 @@
     <context>
         <name>TagBar</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="169" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="175" />
             <source>标签名，可用 / 分层</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="170" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="176" />
             <source>apply</source>
             <translation>应用</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="171" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="177" />
             <source>添加到当前图片</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="172" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="178" />
             <source>layers</source>
             <translation>层级</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="173" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="179" />
             <source>new</source>
             <translation>新建</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="174" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="180" />
             <source>新建标签</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="214" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="278" />
             <source>新建子标签</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="214" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="278" />
             <source>新建根标签</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="222" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="286" />
             <source>重命名标签</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="226" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="290" />
             <source>删除标签</source>
             <translation type="unfinished" />
         </message>
@@ -670,6 +670,253 @@
         <message>
             <source>Default: {value}</source>
             <translation>默认值：{value}</translation>
+        </message>
+    </context>
+    <context>
+        <name>KeymapPage</name>
+        <message>
+            <source>Every action of the application and the key it is bound to. Click a key field and press the new key, or clear it to unbind. Changes are saved immediately.</source>
+            <translation>应用的全部动作及其绑定的按键。点选按键输入框后直接按新键即可修改，清空则取消绑定。修改立即保存。</translation>
+        </message>
+        <message>
+            <source>Close the current layer</source>
+            <translation>关闭当前层</translation>
+        </message>
+        <message>
+            <source>Close the topmost layer: suggestion list, search bar, information panel, detail view or overlay.</source>
+            <translation>关闭最上面的一层：搜索建议、搜索栏、信息面板、详情页或浮层。</translation>
+        </message>
+        <message>
+            <source>Open settings</source>
+            <translation>打开设置</translation>
+        </message>
+        <message>
+            <source>Open the settings overlay.</source>
+            <translation>打开设置浮层。</translation>
+        </message>
+        <message>
+            <source>Open album list</source>
+            <translation>打开相册列表</translation>
+        </message>
+        <message>
+            <source>Open the album overlay and focus the album list.</source>
+            <translation>打开相册浮层并把焦点放到相册列表。</translation>
+        </message>
+        <message>
+            <source>Open import sources</source>
+            <translation>打开导入源</translation>
+        </message>
+        <message>
+            <source>Open the import source overlay.</source>
+            <translation>打开导入源浮层。</translation>
+        </message>
+        <message>
+            <source>Open the More menu</source>
+            <translation>打开「更多」菜单</translation>
+        </message>
+        <message>
+            <source>Open the title bar menu (import sources, settings, quit) and drive it with the arrow keys.</source>
+            <translation>打开标题栏菜单（导入源、设置、退出），用方向键选择。</translation>
+        </message>
+        <message>
+            <source>Back / close overlay</source>
+            <translation>返回 / 关闭浮层</translation>
+        </message>
+        <message>
+            <source>Close the current overlay and return to the album grid.</source>
+            <translation>关闭当前浮层，回到相册网格。</translation>
+        </message>
+        <message>
+            <source>Minimize window</source>
+            <translation>最小化窗口</translation>
+        </message>
+        <message>
+            <source>Minimize the main window.</source>
+            <translation>最小化主窗口。</translation>
+        </message>
+        <message>
+            <source>Toggle maximize</source>
+            <translation>最大化 / 还原窗口</translation>
+        </message>
+        <message>
+            <source>Maximize or restore the main window.</source>
+            <translation>最大化或还原主窗口。</translation>
+        </message>
+        <message>
+            <source>Quit albuswall</source>
+            <translation>退出 albuswall</translation>
+        </message>
+        <message>
+            <source>Close the application.</source>
+            <translation>关闭应用。</translation>
+        </message>
+        <message>
+            <source>Focus search</source>
+            <translation>聚焦搜索</translation>
+        </message>
+        <message>
+            <source>Expand the search bar and put the cursor in it.</source>
+            <translation>展开搜索栏并把光标放进去。</translation>
+        </message>
+        <message>
+            <source>Close detail view</source>
+            <translation>关闭详情页</translation>
+        </message>
+        <message>
+            <source>Close the detail view (Esc also works).</source>
+            <translation>关闭详情页（Esc 同样有效）。</translation>
+        </message>
+        <message>
+            <source>Previous image</source>
+            <translation>上一张</translation>
+        </message>
+        <message>
+            <source>Show the previous asset while the detail view is open.</source>
+            <translation>详情页打开时显示上一张图片。</translation>
+        </message>
+        <message>
+            <source>Next image</source>
+            <translation>下一张</translation>
+        </message>
+        <message>
+            <source>Show the next asset while the detail view is open.</source>
+            <translation>详情页打开时显示下一张图片。</translation>
+        </message>
+        <message>
+            <source>Toggle favourite</source>
+            <translation>切换收藏</translation>
+        </message>
+        <message>
+            <source>Toggle the favourite state of the current asset.</source>
+            <translation>切换当前资产的收藏状态。</translation>
+        </message>
+        <message>
+            <source>Toggle information panel</source>
+            <translation>切换信息面板</translation>
+        </message>
+        <message>
+            <source>Show or hide the metadata panel of the detail view.</source>
+            <translation>显示或隐藏详情页的元信息面板。</translation>
+        </message>
+        <message>
+            <source>Trash / restore asset</source>
+            <translation>删除 / 恢复资产</translation>
+        </message>
+        <message>
+            <source>Move the current asset to the trash, or restore it when it is already trashed.</source>
+            <translation>把当前资产移入回收站；已在回收站时则恢复。</translation>
+        </message>
+        <message>
+            <source>Activate focused control</source>
+            <translation>激活当前控件</translation>
+        </message>
+        <message>
+            <source>Press the focused button (the keyboard equivalent of clicking it).</source>
+            <translation>按下当前获得焦点的按钮（等价于鼠标点击）。</translation>
+        </message>
+        <message>
+            <source>Activate focused control (keypad Enter)</source>
+            <translation>激活当前控件（小键盘回车）</translation>
+        </message>
+        <message>
+            <source>Same as Activate focused control, for the numeric keypad Enter key.</source>
+            <translation>同「激活当前控件」，对应数字键盘的回车键。</translation>
+        </message>
+        <message>
+            <source>Focus next region</source>
+            <translation>聚焦下一个区域</translation>
+        </message>
+        <message>
+            <source>Move the keyboard focus to the next area (title bar, list, grid, tag bar…).</source>
+            <translation>把键盘焦点移到下一个区域（标题栏、列表、网格、标签栏…）。</translation>
+        </message>
+        <message>
+            <source>Focus previous region</source>
+            <translation>聚焦上一个区域</translation>
+        </message>
+        <message>
+            <source>Move the keyboard focus to the previous area.</source>
+            <translation>把键盘焦点移到上一个区域。</translation>
+        </message>
+        <message>
+            <source>Focus the image grid</source>
+            <translation>聚焦图片网格</translation>
+        </message>
+        <message>
+            <source>Put the keyboard focus on the thumbnail grid: arrow keys move the cursor, Enter opens the asset.</source>
+            <translation>把键盘焦点放到缩略图网格：方向键移动光标，回车打开图片。</translation>
+        </message>
+        <message>
+            <source>Focus tag input</source>
+            <translation>聚焦标签输入框</translation>
+        </message>
+        <message>
+            <source>Focus the tag input of the detail view.</source>
+            <translation>聚焦详情页的标签输入框。</translation>
+        </message>
+        <message>
+            <source>Enable key bindings</source>
+            <translation>启用按键映射</translation>
+        </message>
+        <message>
+            <source>When off, the configured keys are ignored (the built-in button shortcuts still work).</source>
+            <translation>关闭后不再响应这里配置的按键（按钮自带的快捷键仍然有效）。</translation>
+        </message>
+        <message>
+            <source>Search actions or keys…</source>
+            <translation>搜索动作或按键…</translation>
+        </message>
+        <message>
+            <source>Reset all</source>
+            <translation>全部恢复默认</translation>
+        </message>
+        <message>
+            <source>Unknown action (not registered anymore): {id}</source>
+            <translation>未知动作（已不再登记）：{id}</translation>
+        </message>
+        <message>
+            <source>Default: {value}</source>
+            <translation>默认值：{value}</translation>
+        </message>
+        <message>
+            <source>customized</source>
+            <translation>已自定义</translation>
+        </message>
+        <message>
+            <source>Remove</source>
+            <translation>移除</translation>
+        </message>
+        <message>
+            <source>Only single-key shortcuts are supported; {value} has more than one key.</source>
+            <translation>只支持单个按键组合；{value} 包含多个按键。</translation>
+        </message>
+        <message>
+            <source>Remove this leftover binding</source>
+            <translation>移除这条残留绑定</translation>
+        </message>
+        <message>
+            <source>Reset to default: {value}</source>
+            <translation>恢复默认：{value}</translation>
+        </message>
+        <message>
+            <source>(unbound)</source>
+            <translation>（未绑定）</translation>
+        </message>
+        <message>
+            <source>{shown} of {total} actions shown</source>
+            <translation>显示 {shown} / {total} 个动作</translation>
+        </message>
+        <message>
+            <source>Key conflicts: {details}</source>
+            <translation>按键冲突：{details}</translation>
+        </message>
+        <message>
+            <source>Saved to {path}</source>
+            <translation>保存到 {path}</translation>
+        </message>
+        <message>
+            <source>Saved in memory only (the configuration system is not ready yet).</source>
+            <translation>仅保存在内存中（配置系统尚未就绪）。</translation>
         </message>
     </context>
     <context>
@@ -943,6 +1190,14 @@
             <translation>窗口状态文件名</translation>
         </message>
         <message>
+            <source>Key bindings file name</source>
+            <translation>按键映射文件名</translation>
+        </message>
+        <message>
+            <source>JSON file holding the key bindings overrides (live in the config directory).</source>
+            <translation>保存按键映射覆盖值的 JSON 文件（位于配置目录）。</translation>
+        </message>
+        <message>
             <source>Database file name</source>
             <translation>数据库文件名</translation>
         </message>
@@ -1181,6 +1436,14 @@
         <message>
             <source>Reserved action for a future theme editor: it will open the stylesheet and the icons of the selected theme for editing.</source>
             <translation>为主题编辑器预留的操作：将来会打开所选主题的样式表与图标以便编辑。</translation>
+        </message>
+        <message>
+            <source>Key bindings</source>
+            <translation>按键映射</translation>
+        </message>
+        <message>
+            <source>Every action of the application and the key it is bound to. Click a key field and press the new key, or clear it to unbind. Changes are saved immediately.</source>
+            <translation>应用的全部动作及其绑定的按键。点选按键输入框后直接按新键即可修改，清空则取消绑定。修改立即保存。</translation>
         </message>
         <message>
             <source>About</source>

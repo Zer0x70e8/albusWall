@@ -21,6 +21,8 @@ class TagChipDelegate(QStyledItemDelegate):
     FG = QColor(40, 40, 40)
     X_COLOR = QColor(120, 120, 120)
     X_COLOR_HOVER = QColor(60, 60, 60)
+    #: 键盘选中描边（主题强调色）
+    SELECTED_BORDER = QColor(0, 122, 255)
 
     # ---- 尺寸 ----
     def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
@@ -39,14 +41,28 @@ class TagChipDelegate(QStyledItemDelegate):
     def paint(self, painter: QPainter, option, index) -> None:
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
         hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        view = option.widget
+        focused = bool(view is not None and view.hasFocus())
+        # 只有视图真正持有键盘焦点时才画选中描边，避免鼠标浏览时也常亮
+        selected = bool(
+            option.state & QStyle.StateFlag.State_Selected
+        ) and focused
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         rect = option.rect.adjusted(2, 2, -2, -2)
-        painter.setBrush(self.BG_HOVER if hover else self.BG)
+        painter.setBrush(self.BG_HOVER if (hover or selected) else self.BG)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, self.RADIUS, self.RADIUS)
+
+        # 键盘选中：蓝色描边（与主题强调色一致）
+        if selected:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(self.SELECTED_BORDER, 1.6))
+            painter.drawRoundedRect(
+                rect.adjusted(1, 1, -1, -1), self.RADIUS, self.RADIUS,
+            )
 
         # 文字
         text_rect = QRect(

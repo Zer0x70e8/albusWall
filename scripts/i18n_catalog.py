@@ -84,6 +84,79 @@ MANUAL_CONTEXTS: dict[str, list[str]] = {
         "(default / auto)",
         "Default: {value}",
     ],
+    # 按键映射页：动作名 / 说明来自 registry（运行时字符串，lupdate 提取不到）
+    "KeymapPage": [
+        "Every action of the application and the key it is bound to. Click a "
+        "key field and press the new key, or clear it to unbind. Changes are "
+        "saved immediately.",
+        "Close the current layer",
+        "Close the topmost layer: suggestion list, search bar, information "
+        "panel, detail view or overlay.",
+        "Open settings",
+        "Open the settings overlay.",
+        "Open album list",
+        "Open the album overlay and focus the album list.",
+        "Open import sources",
+        "Open the import source overlay.",
+        "Open the More menu",
+        "Open the title bar menu (import sources, settings, quit) and drive "
+        "it with the arrow keys.",
+        "Back / close overlay",
+        "Close the current overlay and return to the album grid.",
+        "Minimize window",
+        "Minimize the main window.",
+        "Toggle maximize",
+        "Maximize or restore the main window.",
+        "Quit albuswall",
+        "Close the application.",
+        "Focus search",
+        "Expand the search bar and put the cursor in it.",
+        "Close detail view",
+        "Close the detail view (Esc also works).",
+        "Previous image",
+        "Show the previous asset while the detail view is open.",
+        "Next image",
+        "Show the next asset while the detail view is open.",
+        "Toggle favourite",
+        "Toggle the favourite state of the current asset.",
+        "Toggle information panel",
+        "Show or hide the metadata panel of the detail view.",
+        "Trash / restore asset",
+        "Move the current asset to the trash, or restore it when it is "
+        "already trashed.",
+        "Activate focused control",
+        "Press the focused button (the keyboard equivalent of clicking it).",
+        "Activate focused control (keypad Enter)",
+        "Same as Activate focused control, for the numeric keypad Enter key.",
+        "Focus next region",
+        "Move the keyboard focus to the next area (title bar, list, grid, "
+        "tag bar…).",
+        "Focus previous region",
+        "Move the keyboard focus to the previous area.",
+        "Focus the image grid",
+        "Put the keyboard focus on the thumbnail grid: arrow keys move the "
+        "cursor, Enter opens the asset.",
+        "Focus tag input",
+        "Focus the tag input of the detail view.",
+        "Enable key bindings",
+        "When off, the configured keys are ignored (the built-in button "
+        "shortcuts still work).",
+        "Search actions or keys…",
+        "Reset all",
+        "Unknown action (not registered anymore): {id}",
+        "Default: {value}",
+        "customized",
+        "Remove",
+        "Only single-key shortcuts are supported; {value} has more than "
+        "one key.",
+        "Remove this leftover binding",
+        "Reset to default: {value}",
+        "(unbound)",
+        "{shown} of {total} actions shown",
+        "Key conflicts: {details}",
+        "Saved to {path}",
+        "Saved in memory only (the configuration system is not ready yet).",
+    ],
 }
 
 # ══════════════════════════════════════════════════
@@ -187,6 +260,97 @@ ZH_CN: dict[str, str] = {
     "Version": "版本",
     "Author": "作者",
     "Thanks for using it.": "感谢使用。",
+    # ---- 按键映射页 ----
+    "Key bindings": "按键映射",
+    "Every action of the application and the key it is bound to. Click a "
+    "key field and press the new key, or clear it to unbind. Changes are "
+    "saved immediately.":
+        "应用的全部动作及其绑定的按键。点选按键输入框后直接按新键即可修改，"
+        "清空则取消绑定。修改立即保存。",
+    "Close the current layer": "关闭当前层",
+    "Close the topmost layer: suggestion list, search bar, information "
+    "panel, detail view or overlay.":
+        "关闭最上面的一层：搜索建议、搜索栏、信息面板、详情页或浮层。",
+    "Open settings": "打开设置",
+    "Open the settings overlay.": "打开设置浮层。",
+    "Open album list": "打开相册列表",
+    "Open the album overlay and focus the album list.":
+        "打开相册浮层并把焦点放到相册列表。",
+    "Open import sources": "打开导入源",
+    "Open the import source overlay.": "打开导入源浮层。",
+    "Open the More menu": "打开「更多」菜单",
+    "Open the title bar menu (import sources, settings, quit) and drive "
+    "it with the arrow keys.":
+        "打开标题栏菜单（导入源、设置、退出），用方向键选择。",
+    "Back / close overlay": "返回 / 关闭浮层",
+    "Close the current overlay and return to the album grid.":
+        "关闭当前浮层，回到相册网格。",
+    "Minimize window": "最小化窗口",
+    "Minimize the main window.": "最小化主窗口。",
+    "Toggle maximize": "最大化 / 还原窗口",
+    "Maximize or restore the main window.": "最大化或还原主窗口。",
+    "Quit albuswall": "退出 albuswall",
+    "Close the application.": "关闭应用。",
+    "Focus search": "聚焦搜索",
+    "Expand the search bar and put the cursor in it.":
+        "展开搜索栏并把光标放进去。",
+    "Close detail view": "关闭详情页",
+    "Close the detail view (Esc also works).": "关闭详情页（Esc 同样有效）。",
+    "Previous image": "上一张",
+    "Show the previous asset while the detail view is open.":
+        "详情页打开时显示上一张图片。",
+    "Next image": "下一张",
+    "Show the next asset while the detail view is open.":
+        "详情页打开时显示下一张图片。",
+    "Toggle favourite": "切换收藏",
+    "Toggle the favourite state of the current asset.":
+        "切换当前资产的收藏状态。",
+    "Toggle information panel": "切换信息面板",
+    "Show or hide the metadata panel of the detail view.":
+        "显示或隐藏详情页的元信息面板。",
+    "Trash / restore asset": "删除 / 恢复资产",
+    "Move the current asset to the trash, or restore it when it is "
+    "already trashed.": "把当前资产移入回收站；已在回收站时则恢复。",
+    "Activate focused control": "激活当前控件",
+    "Press the focused button (the keyboard equivalent of clicking it).":
+        "按下当前获得焦点的按钮（等价于鼠标点击）。",
+    "Activate focused control (keypad Enter)": "激活当前控件（小键盘回车）",
+    "Same as Activate focused control, for the numeric keypad Enter key.":
+        "同「激活当前控件」，对应数字键盘的回车键。",
+    "Focus next region": "聚焦下一个区域",
+    "Move the keyboard focus to the next area (title bar, list, grid, "
+    "tag bar…).": "把键盘焦点移到下一个区域（标题栏、列表、网格、标签栏…）。",
+    "Focus previous region": "聚焦上一个区域",
+    "Move the keyboard focus to the previous area.": "把键盘焦点移到上一个区域。",
+    "Focus the image grid": "聚焦图片网格",
+    "Put the keyboard focus on the thumbnail grid: arrow keys move the "
+    "cursor, Enter opens the asset.":
+        "把键盘焦点放到缩略图网格：方向键移动光标，回车打开图片。",
+    "Focus tag input": "聚焦标签输入框",
+    "Focus the tag input of the detail view.": "聚焦详情页的标签输入框。",
+    "Enable key bindings": "启用按键映射",
+    "When off, the configured keys are ignored (the built-in button "
+    "shortcuts still work).":
+        "关闭后不再响应这里配置的按键（按钮自带的快捷键仍然有效）。",
+    "Search actions or keys…": "搜索动作或按键…",
+    "Reset all": "全部恢复默认",
+    "Unknown action (not registered anymore): {id}":
+        "未知动作（已不再登记）：{id}",
+    "customized": "已自定义",
+    "Remove": "移除",
+    "Only single-key shortcuts are supported; {value} has more than "
+    "one key.": "只支持单个按键组合；{value} 包含多个按键。",
+    "Remove this leftover binding": "移除这条残留绑定",
+    "Reset to default: {value}": "恢复默认：{value}",
+    "(unbound)": "（未绑定）",
+    "{shown} of {total} actions shown": "显示 {shown} / {total} 个动作",
+    "Key conflicts: {details}": "按键冲突：{details}",
+    "Saved to {path}": "保存到 {path}",
+    "Saved in memory only (the configuration system is not ready yet).":
+        "仅保存在内存中（配置系统尚未就绪）。",
+    "Key bindings file name": "按键映射文件名",
+    "JSON file holding the key bindings overrides (live in the config "
+    "directory).": "保存按键映射覆盖值的 JSON 文件（位于配置目录）。",
     # ==================================================
     # 设置树（context: SettingSchema）
     # ==================================================

@@ -4,7 +4,7 @@
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QRect, Property
-from PySide6.QtGui import QPainter, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from .defs import *
@@ -24,6 +24,14 @@ class VirtualScrollWidget(QWidget):
         unit_right_clicked(int):   右键单击网格项。
         cache_cleared():           LRU 缓存被清空。
         visible_range_changed(int, int, int): 可见范围变化，参数为 (start, end, request_id)。
+        cursor_changed(int):       键盘光标（当前格）变化，参数为全局索引。
+        unit_activated(int):       键盘回车 / 双击激活网格项，参数为全局索引。
+
+    键盘操作（纯键盘可用）：
+        ←/→/↑/↓      移动光标
+        Home/End      行首 / 行尾（Ctrl+Home/End 首项 / 末项）
+        PageUp/Down   翻页
+        Enter/Return  激活当前项（打开详情等）
     """
 
     scroll_changed = Signal(int)
@@ -32,6 +40,8 @@ class VirtualScrollWidget(QWidget):
     unit_right_clicked = Signal(int)
     cache_cleared = Signal()
     visible_range_changed = Signal(int, int, int)
+    cursor_changed = Signal(int)
+    unit_activated = Signal(int)
 
     def __init__(
             self,
@@ -55,6 +65,9 @@ class VirtualScrollWidget(QWidget):
         self._total_content_height = 0
         self._total_rows = 0
         self._request_counter = 0
+
+        # 键盘光标：当前高亮的网格索引（-1 = 还没有光标 / 无数据）
+        self._cursor_index = -1
 
         # cache (LRU)
         self._max_cache_size = CACHE_POOL_MAX_ITEM_NUMBER
@@ -167,6 +180,13 @@ class VirtualScrollWidget(QWidget):
             return
 
         self._max_item_index = index
+        if self._max_item_index < 0:
+            self.set_cursor_index(-1, emit=False)
+        elif self._cursor_index < 0:
+            # 先有数据后补光标：从第一项开始
+            self.set_cursor_index(0, emit=False)
+        elif self._cursor_index > self._max_item_index:
+            self.set_cursor_index(self._max_item_index, emit=False)
         self._update_total_height()
 
         if force:
@@ -181,6 +201,70 @@ class VirtualScrollWidget(QWidget):
         self._pixmap_cache.clear()
         self.update()
         self.cache_cleared.emit()
+
+    # ---- 键盘光标 --------------------------------------------------------
+
+    def cursor_index(self) -> int:
+        """当前键盘光标所在的全局索引（-1 = 无光标）。"""
+        return int(self._cursor_index)
+
+    def set_cursor_index(self, index: int, *, emit: bool = True) -> None:
+        """设置键盘光标并滚动到可见处。
+
+        Args:
+            index: 目标全局索引；``-1`` 表示清空光标（越界会收敛到合法范围）。
+            emit: 是否发射 ``cursor_changed``（数据源重置时不需要）。
+        """
+        total = self._max_item_index + 1
+        if total <= 0:
+            new_index = -1
+        else:
+            new_index = max(0, min(int(index), total - 1))
+
+        if new_index == self._cursor_index:
+            if new_index >= 0:
+                self._scroll_index_into_view(new_index)
+            return
+
+        self._cursor_index = new_index
+        if new_index >= 0:
+            self._scroll_index_into_view(new_index)
+        self.update()
+        if emit:
+            self.cursor_changed.emit(new_index)
+
+    def move_cursor(self, delta: int) -> None:
+        """按项偏移移动光标（越界时停在边界）。"""
+        base = self._cursor_index if self._cursor_index >= 0 else 0
+        self.set_cursor_index(base + int(delta))
+
+    def activate_cursor(self) -> bool:
+        """激活当前光标项；没有光标时返回 False。"""
+        if 0 <= self._cursor_index <= self._max_item_index:
+            self.unit_activated.emit(self._cursor_index)
+            return True
+        return False
+
+    def _rows_per_page(self) -> int:
+        cell = self._get_cell_size()
+        if cell <= 0:
+            return 1
+        return max(1, self.contentsRect().height() // cell)
+
+    def _scroll_index_into_view(self, index: int) -> None:
+        cell = self._get_cell_size()
+        if cell <= 0:
+            return
+        cols = max(1, self.single_row_num)
+        top = (index // cols) * cell
+        bottom = top + cell
+        viewport = self.contentsRect().height()
+        y = self._scroll_y
+        if top < y:
+            y = top
+        elif bottom > y + viewport:
+            y = bottom - viewport
+        self.set_scroll_y(y)
 
     def set_scroll_y(self, y: float) -> None:
         max_scroll = self._total_content_height - self.contentsRect().height()
@@ -204,6 +288,8 @@ class VirtualScrollWidget(QWidget):
         self._last_emitted_end = -1
         self._update_total_height()
         self.set_scroll_y(0)
+        # 数据换了：光标回到第一项（没有数据则清空），避免指向旧索引
+        self.set_cursor_index(0 if self._max_item_index >= 0 else -1, emit=False)
         self.update()
         self._emit_visible_range_if_changed()
 
@@ -332,10 +418,44 @@ class VirtualScrollWidget(QWidget):
                     index=idx,
                     rect=QRect(x, y, cell_sz, cell_sz),
                     cell_size=cell_sz,
+                    selected=(idx == self._cursor_index),
+                    focused=self.hasFocus(),
                 )
                 delegate.paint(painter, option)
 
-    # ---- 事件：尺寸 / 显示 ------------------------------------------------
+        self._paint_keyboard_focus(painter, start_row, end_row, cell_sz)
+
+    def _paint_keyboard_focus(
+            self,
+            painter: QPainter,
+            start_row: int,
+            end_row: int,
+            cell_sz: int,
+    ) -> None:
+        """键盘焦点环：只画当前光标格，且仅在本控件真正持有焦点时。"""
+        if not self.hasFocus() or self._cursor_index < 0:
+            return
+        row, col = divmod(self._cursor_index, max(1, self.single_row_num))
+        if row < start_row or row > end_row:
+            return
+        x = col * cell_sz
+        y = int(row * cell_sz - self._scroll_y)
+        rect = QRect(x + 2, y + 2, cell_sz - 4, cell_sz - 4)
+        pen = QPen(QColor(0, 122, 255, 235))
+        pen.setWidth(2)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(rect, 6, 6)
+
+    # ---- 事件：焦点 / 尺寸 / 显示 -----------------------------------------
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event) -> None:
+        super().focusOutEvent(event)
+        self.update()
 
     def resizeEvent(self, event) -> None:
         self._update_total_height()
@@ -382,6 +502,7 @@ class VirtualScrollWidget(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             idx = self._index_at_pos(event.position().toPoint())
             if idx >= 0:
+                self.set_cursor_index(idx)
                 self.unit_pressed.emit(idx)
                 self.unit_clicked.emit(idx)
 
@@ -395,24 +516,46 @@ class VirtualScrollWidget(QWidget):
         super().mousePressEvent(event)
 
     def keyPressEvent(self, event) -> None:
-        step = self._wheel_pixel_step
-        match event.key():
-            case Qt.Key.Key_Down:
-                delta_y = step
-            case Qt.Key.Key_Up:
-                delta_y = -step
-            case Qt.Key.Key_PageDown:
-                delta_y = self.contentsRect().height()
-            case Qt.Key.Key_PageUp:
-                delta_y = -self.contentsRect().height()
-            case _:
-                super().keyPressEvent(event)
-                return
+        """纯键盘操作：移动光标 / 翻页 / 激活当前项。"""
+        total = self._max_item_index + 1
+        if total <= 0:
+            super().keyPressEvent(event)
+            return
 
-        # noinspection PyUnboundLocalVariable
-        new_y = self._scroll_y + delta_y
-        self.set_scroll_y(new_y)
-        event.accept()
+        cols = max(1, self.single_row_num)
+        current = self._cursor_index if self._cursor_index >= 0 else 0
+        key = event.key()
+        target: Optional[int] = None
+
+        if key == Qt.Key.Key_Left:
+            target = current - 1
+        elif key == Qt.Key.Key_Right:
+            target = current + 1
+        elif key == Qt.Key.Key_Up:
+            target = current - cols
+        elif key == Qt.Key.Key_Down:
+            target = current + cols
+        elif key == Qt.Key.Key_Home:
+            target = 0
+        elif key == Qt.Key.Key_End:
+            target = total - 1
+        elif key == Qt.Key.Key_PageUp:
+            target = current - cols * self._rows_per_page()
+        elif key == Qt.Key.Key_PageDown:
+            target = current + cols * self._rows_per_page()
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self.activate_cursor():
+                event.accept()
+                return
+            super().keyPressEvent(event)
+            return
+        else:
+            super().keyPressEvent(event)
+            return
+
+        if target is not None:
+            self.set_cursor_index(target)
+            event.accept()
 
     def _index_at_pos(self, pos) -> int:
         cell_sz = self._get_cell_size()

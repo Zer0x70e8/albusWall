@@ -12,32 +12,32 @@
     <context>
         <name>Detail</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="315" />
+            <location filename="src/albuswall/ui/builtin/window/detail.py" line="336" />
             <source>recover</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="315" />
+            <location filename="src/albuswall/ui/builtin/window/detail.py" line="336" />
             <source>trash</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="319" />
+            <location filename="src/albuswall/ui/builtin/window/detail.py" line="340" />
             <source>choice</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="320" />
+            <location filename="src/albuswall/ui/builtin/window/detail.py" line="341" />
             <source>favourite</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="321" />
+            <location filename="src/albuswall/ui/builtin/window/detail.py" line="342" />
             <source>info</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="322" />
+            <location filename="src/albuswall/ui/builtin/window/detail.py" line="343" />
             <source>edit</source>
             <translation type="unfinished" />
         </message>
@@ -260,32 +260,32 @@
     <context>
         <name>IngestSourcePresenter</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="254" />
+            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="266" />
             <source>未命名导入源</source>
             <translation>Untitled ingest source</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="598" />
+            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="615" />
             <source>enable</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="598" />
+            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="615" />
             <source>disable</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="605" />
+            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="622" />
             <source>recover</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="606" />
+            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="623" />
             <source>ensure deleted</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="608" />
+            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="625" />
             <source>delete</source>
             <translation type="unfinished" />
         </message>
@@ -345,37 +345,37 @@
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="153" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="157" />
             <source>Reload the setting tree (setting.schema)</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="300" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="325" />
             <source>{count} settings</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="304" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="329" />
             <source>{count} groups</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="308" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="333" />
             <source>writes {count} files</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="310" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="335" />
             <source>same structure as albusctl setting.schema</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="315" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="340" />
             <source>No setting tree available (the config system may not be ready yet).</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="325" />
+            <location filename="src/albuswall/ui/builtin/setting/main.py" line="350" />
             <source>{key} updated</source>
             <translation type="unfinished" />
         </message>
@@ -418,52 +418,52 @@
     <context>
         <name>TagBar</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="169" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="175" />
             <source>标签名，可用 / 分层</source>
             <translation>Tag name; use / for hierarchy</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="170" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="176" />
             <source>apply</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="171" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="177" />
             <source>添加到当前图片</source>
             <translation>Add to the current image</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="172" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="178" />
             <source>layers</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="173" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="179" />
             <source>new</source>
             <translation type="unfinished" />
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="174" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="180" />
             <source>新建标签</source>
             <translation>New tag</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="214" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="278" />
             <source>新建子标签</source>
             <translation>New child tag</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="214" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="278" />
             <source>新建根标签</source>
             <translation>New root tag</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="222" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="286" />
             <source>重命名标签</source>
             <translation>Rename tag</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="226" />
+            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="290" />
             <source>删除标签</source>
             <translation>Delete tag</translation>
         </message>
@@ -669,6 +669,253 @@
         </message>
         <message>
             <source>Default: {value}</source>
+            <translation type="unfinished" />
+        </message>
+    </context>
+    <context>
+        <name>KeymapPage</name>
+        <message>
+            <source>Every action of the application and the key it is bound to. Click a key field and press the new key, or clear it to unbind. Changes are saved immediately.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Close the current layer</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Close the topmost layer: suggestion list, search bar, information panel, detail view or overlay.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Open settings</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Open the settings overlay.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Open album list</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Open the album overlay and focus the album list.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Open import sources</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Open the import source overlay.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Open the More menu</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Open the title bar menu (import sources, settings, quit) and drive it with the arrow keys.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Back / close overlay</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Close the current overlay and return to the album grid.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Minimize window</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Minimize the main window.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Toggle maximize</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Maximize or restore the main window.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Quit albuswall</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Close the application.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Focus search</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Expand the search bar and put the cursor in it.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Close detail view</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Close the detail view (Esc also works).</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Previous image</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Show the previous asset while the detail view is open.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Next image</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Show the next asset while the detail view is open.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Toggle favourite</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Toggle the favourite state of the current asset.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Toggle information panel</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Show or hide the metadata panel of the detail view.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Trash / restore asset</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Move the current asset to the trash, or restore it when it is already trashed.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Activate focused control</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Press the focused button (the keyboard equivalent of clicking it).</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Activate focused control (keypad Enter)</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Same as Activate focused control, for the numeric keypad Enter key.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Focus next region</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Move the keyboard focus to the next area (title bar, list, grid, tag bar…).</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Focus previous region</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Move the keyboard focus to the previous area.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Focus the image grid</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Put the keyboard focus on the thumbnail grid: arrow keys move the cursor, Enter opens the asset.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Focus tag input</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Focus the tag input of the detail view.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Enable key bindings</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>When off, the configured keys are ignored (the built-in button shortcuts still work).</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Search actions or keys…</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Reset all</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Unknown action (not registered anymore): {id}</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Default: {value}</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>customized</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Remove</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Only single-key shortcuts are supported; {value} has more than one key.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Remove this leftover binding</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Reset to default: {value}</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>(unbound)</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>{shown} of {total} actions shown</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Key conflicts: {details}</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Saved to {path}</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Saved in memory only (the configuration system is not ready yet).</source>
             <translation type="unfinished" />
         </message>
     </context>
@@ -943,6 +1190,14 @@
             <translation type="unfinished" />
         </message>
         <message>
+            <source>Key bindings file name</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>JSON file holding the key bindings overrides (live in the config directory).</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
             <source>Database file name</source>
             <translation type="unfinished" />
         </message>
@@ -1180,6 +1435,14 @@
         </message>
         <message>
             <source>Reserved action for a future theme editor: it will open the stylesheet and the icons of the selected theme for editing.</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Key bindings</source>
+            <translation type="unfinished" />
+        </message>
+        <message>
+            <source>Every action of the application and the key it is bound to. Click a key field and press the new key, or clear it to unbind. Changes are saved immediately.</source>
             <translation type="unfinished" />
         </message>
         <message>

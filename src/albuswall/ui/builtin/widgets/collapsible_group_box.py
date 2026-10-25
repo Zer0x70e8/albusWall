@@ -27,6 +27,8 @@ class CollapsibleGroupBox(QGroupBox):
 
         # 禁用内置复选框，自己维护折叠状态
         self.setCheckable(False)
+        # 键盘：标题行可获得焦点，Enter / Space 展开 / 折叠（设置页用 Tab 遍历）
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._checked = True          # 初始展开
         self._base_title = title
         self._update_title()
@@ -94,6 +96,18 @@ class CollapsibleGroupBox(QGroupBox):
             self._checked = checked
             self._update_title()
             self.toggled.emit(checked)
+
+    # ---------- 键盘：Enter / Space 切换折叠 ----------
+    def keyPressEvent(self, event):
+        if event.key() in (
+                Qt.Key.Key_Space,
+                Qt.Key.Key_Return,
+                Qt.Key.Key_Enter,
+        ):
+            self.setChecked(not self._checked)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     # ---------- 点击标题区域切换状态 ----------
     def mousePressEvent(self, event):

@@ -1,8 +1,13 @@
 #
 """关闭按钮安装辅助。
 
-只负责“造一个标准关闭按钮 + 把 Esc 和鼠标点击汇到同一个信号”，
-不决定“关闭”意味着什么 —— 那由 presenter 接线。
+只负责「造一个标准关闭按钮」，不决定「关闭」意味着什么 —— 那由 presenter
+接线。
+
+键盘：内置 UI 的 ``Esc`` 统一由键位系统（``keymap`` 的 ``window.escape``）
+分发，不再由每个关闭按钮各自安装一个 ``QShortcut`` —— 否则「Esc 到底关
+哪一层」会变成创建顺序的副产品。``shortcut`` 参数保留给外部 / 第三方 UI
+显式要求「这个按钮自己带一个快捷键」的场景。
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ def install_close_button(
         signal: "SignalInstance | None" = None,
         object_name: str = "",
         text: str = "\u2715",
-        shortcut: "Qt.Key | int | QKeySequence | None" = Qt.Key.Key_Escape,
+        shortcut: "Qt.Key | int | QKeySequence | None" = None,
 ) -> QPushButton:
     btn = QPushButton(text, host)
     if object_name:

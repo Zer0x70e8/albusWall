@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 
 from . import about as _about  # noqa: F401  导入即登记「关于」页
 from . import builtin_patches as _patches  # noqa: F401  导入即登记内置补丁
+from ..keymap.page import register_keymap_page
 from .backend import SettingBackend
 from .basic import Setting as _Setting
 from .basic import insert_before_stretch
@@ -49,6 +50,9 @@ from .groups import ANIM_TIME, build_group_details
 from .lazy import LazyGroupBox
 from .pages import PageSpec, iter_pages
 from .translation import schema_tr
+
+# 按键映射页：和「关于」页一样是一条自定义页注册项
+register_keymap_page()
 
 try:
     from ..anims.collapse_animation import HeightSlideAnimation
@@ -287,6 +291,27 @@ class Setting(_Setting):
         self.scroll_to_widget_top(box)
         # 布局在动画的第一帧之后才最终安定，再滚一次更准
         QTimer.singleShot(0, lambda target=box: self.scroll_to_widget_top(target))
+        # 键盘：跳转后把焦点交给章节标题，Enter / Space 可继续展开 / 折叠
+        box.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def first_navigation_button(self):
+        """第一个可用的导航按钮（没有可用的返回 None）。"""
+        for button in self._nav_buttons:
+            if button.isVisible() and button.isEnabled():
+                return button
+        return None
+
+    def first_section(self):
+        """第一个章节折叠框（键盘跳转 / 展开的入口）。"""
+        return self._section_boxes[0] if self._section_boxes else None
+
+    def focus_first_navigation(self) -> bool:
+        """把焦点放到第一个可用的导航按钮（供键盘 F6 / 打开设置页时使用）。"""
+        button = self.first_navigation_button()
+        if button is None:
+            return False
+        button.setFocus(Qt.FocusReason.OtherFocusReason)
+        return True
 
     def _update_summary(self, schema: dict[str, Any]) -> None:
         summary = schema.get("summary") or {}

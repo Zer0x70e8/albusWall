@@ -71,6 +71,7 @@ if TYPE_CHECKING:
     from albuswall.core import Container
 
     from ..window import Window
+    from ..keymap.manager import KeymapManager
     from .album_presenter import AlbumPresenter
     from .image_presenter import ThumbnailGridPresenter
     from .search_presenter import SearchPresenter
@@ -143,6 +144,7 @@ class PresenterManager(QObject):
         self.tagbar_presenter: Optional["TagBarPresenter"] = None
         self.tag_editor_presenter: Optional["TagEditorPresenter"] = None
         self.search_presenter: Optional["SearchPresenter"] = None
+        self.keymap_presenter: Optional["KeymapManager"] = None
 
         # 当前"标签作用于哪个资产"（详情打开 → 详情资产；否则 grid 选中）
         self._active_asset_uuid: str | None = None
@@ -170,6 +172,7 @@ class PresenterManager(QObject):
         self.tagbar_presenter = self._build_tagbar_presenter()
         self.tag_editor_presenter = self._build_tag_editor_presenter()
         self.search_presenter = self._build_search_presenter()
+        self.keymap_presenter = self._build_keymap_manager()
 
     def _build_window_presenter(self) -> Optional["WindowPresenter"]:
         from .window_presenter import WindowPresenter
@@ -280,6 +283,24 @@ class PresenterManager(QObject):
                 tag_service=self._require("tag_service"),
                 view_service=self._container.get("view_service", None),
                 current_album_provider=self._current_album,
+                parent=self,
+            ),
+        )
+
+    def _build_keymap_manager(self) -> Optional["KeymapManager"]:
+        """按键分发：最后构造，handler 可以拿到前面所有 presenter。
+
+        它不做业务，只把「按键」转发给已有按钮 / presenter 的公开接口；
+        presenter 缺失时对应动作自动不生效（handler 返回 False）。
+        """
+        from ..keymap.manager import KeymapManager
+
+        return self._try_presenter(
+            "KeymapManager",
+            lambda: KeymapManager(
+                self._window,
+                container=self._container,
+                presenters=self,
                 parent=self,
             ),
         )
