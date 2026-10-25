@@ -231,6 +231,26 @@ class Application(QApplication):
         if self.presenters is not None:
             self.presenters.setup(container)
 
+        # 5. 键位系统：把 presenter / 容器塞进动作上下文，并安装焦点守卫。
+        #    Window.__init__ 已经 attach 过自身（QShortcut 生命周期在那里）。
+        self._install_shortcuts(container)
+
+    def _install_shortcuts(self, container: Container) -> None:
+        """keymap：动作上下文 + 输入框守卫（失败只记日志）。"""
+        if self.window is None:
+            return
+        try:
+            from .keymap import install_text_input_guard, set_context
+
+            set_context(
+                window=self.window,
+                container=container,
+                presenters=self.presenters,
+            )
+            install_text_input_guard(self.window)
+        except Exception as exc:  # noqa: BLE001  键位子系统不能挡住启动
+            _logger.exception("keymap install failed: %s", exc)
+
     def teardown(self) -> None:
         if self.presenters is not None:
             try:

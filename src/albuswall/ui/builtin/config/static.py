@@ -33,7 +33,6 @@ class WindowPresenterConfs:
     preference_file_name: str = ConfigField("files", "preference", default="preference")
     preference_file: Optional[Path] = PathField("ui", "preference_file", default=None)
     window_state_file_name: str = ConfigField("files", "window_state", default="window.json")
-    keymap_file_name: str = ConfigField("files", "keymap", default="keymap.json")
 
     auto_complete: bool = ConfigField("ui", "auto_complete_theme", default=True)
     auto_complete_qss: bool = ConfigField("ui", "auto_complete_qss", default=True)
@@ -78,18 +77,4 @@ register_dynamic_state(
     ("path", "cache"),
     WindowPresenterConfs.window_state_file_name,
     autosave=False,
-)
-
-# ══════════════════════════════════════════════════
-# 动态子树登记（按键映射）
-# ══════════════════════════════════════════════════
-# 键位是「用户配置」而不是「窗口状态」，所以落点用 path.config 而不是
-# path.cache；文件名由 [files] keymap 控制（默认 keymap.json）。设置页里
-# 改一个键就会写入这份子配置文件（autosave=True）。
-register_dynamic_state(
-    "keymap",
-    "albuswall.ui.builtin.keymap.state:KeymapState",
-    ("path", "config"),
-    WindowPresenterConfs.keymap_file_name,
-    autosave=True,
 )

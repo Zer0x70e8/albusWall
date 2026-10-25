@@ -51,6 +51,9 @@ class VirtualScrollWidget(QWidget):
     ):
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # 网格自己消费方向键 / Home / End / 回车：Qt 的 ShortcutOverride 守卫
+        # 看到这个属性就不再让 QShortcut 抢走无修饰键（keymap.qt_binder）。
+        self.setProperty("keymap_passthrough", True)
 
         # conf
         self.single_row_num = DEFAULT_COLUMN_COUNT

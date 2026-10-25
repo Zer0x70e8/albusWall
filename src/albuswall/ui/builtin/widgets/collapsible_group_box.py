@@ -29,6 +29,8 @@ class CollapsibleGroupBox(QGroupBox):
         self.setCheckable(False)
         # 键盘：标题行可获得焦点，Enter / Space 展开 / 折叠（设置页用 Tab 遍历）
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Enter / Space 由本控件处理，不被全局 QShortcut 抢走
+        self.setProperty("keymap_passthrough", True)
         self._checked = True          # 初始展开
         self._base_title = title
         self._update_title()

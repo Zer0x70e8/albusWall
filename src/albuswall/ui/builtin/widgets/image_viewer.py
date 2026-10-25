@@ -48,6 +48,39 @@ class ImageViewer(QWidget):
         self._offset = QPointF(0.0, 0.0)
         self.update()
 
+    # ------------------------------------------------------------- 键盘缩放
+    def zoom_step(self, factor: float) -> bool:
+        """以视口中心为锚点缩放；返回视图是否真的变了。"""
+        if self._pixmap.isNull():
+            return False
+        before = self._scale
+        center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        self._zoom_to(self._scale * float(factor), center)
+        return abs(self._scale - before) > 1e-9
+
+    def zoom_in(self) -> bool:
+        return self.zoom_step(self.WHEEL_ZOOM_STEP)
+
+    def zoom_out(self) -> bool:
+        return self.zoom_step(1.0 / self.WHEEL_ZOOM_STEP)
+
+    def zoom_fit(self) -> bool:
+        """适应窗口（``Ctrl+0``）：恢复 fit 缩放与居中。"""
+        changed = abs(self._scale - 1.0) > 1e-9 or self._offset != QPointF()
+        self.reset_view()
+        return changed
+
+    def zoom_actual(self) -> bool:
+        """1:1（``Ctrl+1``）：按像素显示，锚点仍然是视口中心。"""
+        if self._pixmap.isNull():
+            return False
+        fit = max(self._fit_scale(), 1e-6)
+        before = self._scale
+        center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        self._offset = QPointF(0.0, 0.0)
+        self._zoom_to(1.0 / fit, center)
+        return abs(self._scale - before) > 1e-9
+
     def set_pixmap(self, pixmap: QPixmap | None) -> None:
         """同步设置图片并复位视图（保持原语义）。"""
         self._pixmap = QPixmap() if pixmap is None else QPixmap(pixmap)

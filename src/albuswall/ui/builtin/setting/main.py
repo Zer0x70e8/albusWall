@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 
 from . import about as _about  # noqa: F401  导入即登记「关于」页
 from . import builtin_patches as _patches  # noqa: F401  导入即登记内置补丁
-from ..keymap.page import register_keymap_page
+from ..keymap.ui.page import register_keymap_page
 from .backend import SettingBackend
 from .basic import Setting as _Setting
 from .basic import insert_before_stretch
@@ -106,6 +106,7 @@ class Setting(_Setting):
             self._setup_ui()
         self._controller = SettingController(SettingBackend(), self)
         self._section_boxes: list[LazyGroupBox] = []
+        self._sections: list[_Section] = []
         self._nav_buttons: list[QPushButton] = []
         self._auto_expanded = False
 
@@ -208,7 +209,8 @@ class Setting(_Setting):
     def _rebuild_sections(self, schema: dict[str, Any]) -> None:
         self._clear_sections()
 
-        for section in self._section_entries(schema):
+        self._sections = self._section_entries(schema)
+        for section in self._sections:
             box = self._make_section_box(section)
             insert_before_stretch(self.content_layout, box)
             self._section_boxes.append(box)
@@ -277,6 +279,7 @@ class Setting(_Setting):
             box.setParent(None)
             box.deleteLater()
         self._section_boxes.clear()
+        self._sections.clear()
 
     # ------------------------------------------------------------------ #
     # 导航 / 状态
@@ -304,6 +307,36 @@ class Setting(_Setting):
     def first_section(self):
         """第一个章节折叠框（键盘跳转 / 展开的入口）。"""
         return self._section_boxes[0] if self._section_boxes else None
+
+    # ------------------------------------------------------------------ #
+    # 页面导航（供全局快捷键：window.open_page / window.open_keybindings）
+    # ------------------------------------------------------------------ #
+    def page_ids(self) -> tuple[str, ...]:
+        """当前可跳转的页面 / 分组 id（按界面顺序）。"""
+        return tuple(section.id for section in self._sections if section.id)
+
+    def open_page(self, page_id: str) -> bool:
+        """展开并滚动到指定页面 / 配置分组；找不到返回 False。
+
+        匹配顺序：id → 原始标题 → 当前语言下的标题（都忽略大小写），
+        这样 ``window.open_page(page="settings:keybindings")`` 这类全局
+        快捷键既能用稳定 id，也能用用户看到的文字。
+        """
+        target = str(page_id or "").strip()
+        if not target:
+            return False
+        wanted = target.casefold()
+        for section, box in zip(self._sections, self._section_boxes,
+                               strict=False):
+            candidates = {
+                section.id.casefold(),
+                str(section.title or "").casefold(),
+                schema_tr(section.title).casefold(),
+            }
+            if wanted in candidates - {""}:
+                self.jump_to(box)
+                return True
+        return False
 
     def focus_first_navigation(self) -> bool:
         """把焦点放到第一个可用的导航按钮（供键盘 F6 / 打开设置页时使用）。"""

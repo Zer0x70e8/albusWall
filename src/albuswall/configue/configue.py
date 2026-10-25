@@ -29,7 +29,7 @@ from albuswall.log import getLogger
 from .exceptions import ConfigError, ConfigueErrorSource
 from .resolver import Resolver
 from .utils.ini_parser import _deconvert
-from .utils.ini_transform import transform
+from .utils.ini_transform import DELETE, transform
 from .utils.namespace import Namespace
 
 _logger = getLogger(f"{albuswall.__name__}.configue")
@@ -140,6 +140,81 @@ class Configue(_Configue):
         elif save == "auto":
             self._schedule_persistence()
 
+    def remove(
+            self,
+            section: str,
+            key: str,
+            *,
+            save: SaveMode = "auto",
+    ) -> None:
+        """删除一个配置项（``set`` 的对称操作），按持久化策略决定何时落盘。
+
+        Args:
+            section: 节名
+            key: 键名
+            save: 持久化时机
+                - ``"auto"``（默认）：按 ``configure_persistence`` 的策略走
+                - ``"defer"``：只标脏，等显式 ``flush()`` / autosave
+                - ``"now"``：立即 ``flush(only=[(section, key)])``
+
+        语义：值从 Resolver 中立即消失（后续读取抛 ``KeyError``），但
+        ``origin`` / ``definitions`` 被保留——``flush`` 靠它找到「用户改过的
+        那个文件」，再让 ``ini_transform`` 把那一行（连同续行）删掉。
+        删除一个从未存在的节点同样只是标脏，``flush`` 时若没有可写目标会
+        报 ``ConfigError``（与 ``set`` 一致）。
+
+        失败语义：参数非法（未知的 save mode）抛 ``ValueError``；
+        ``save="now"`` 的写盘异常与 ``set`` 一致被吞掉并记入
+        ``last_flush_error``。
+        """
+        node = (section, key)
+        if save not in ("auto", "defer", "now"):
+            raise ValueError(f"unknown save mode: {save!r}")
+
+        self.resolver.remove(section, key, persist=True)
+
+        if save == "now":
+            self.flush(only=[node])
+        elif save == "auto":
+            self._schedule_persistence()
+
+    def register_converter(
+            self,
+            type_: Any,
+            converter: Callable[[str], Any],
+            *,
+            writer: Optional[Callable[[Any], str]] = None,
+    ) -> None:
+        """注册一个自定义类型转换器（``configparser`` 的 ``converters`` 同义）。
+
+        只给「构造函数语义不对」的类型用：普通 ``Enum`` / ``Path`` 子类 /
+        带 ``X(str)`` 构造的类由 ``_convert`` 的默认回退直接构造，不需要注册。
+        典型需要注册的：``Namespace`` 子类、需要外部上下文解析的类。
+
+        **读和写要成对考虑**：不传 ``writer`` 时 ``flush`` 反解只能
+        ``str(value)``，对 ``QKeySequence`` 这类「``str()`` 不稳定」的类型
+        会把配置写坏（macOS 上写成 ``⌘S``，下次读不回来）：
+
+        .. code-block:: python
+
+            config.register_converter(
+                QKeySequence,
+                lambda raw: QKeySequence(raw),
+                writer=lambda seq: seq.toString(QKeySequence.PortableText),
+            )
+
+        另一种办法是让类型自带 ``from_ini(raw)`` 类方法 + ``to_ini()`` 方法，
+        那样读写都自动生效，完全不必注册。
+
+        已经被类型化缓存的节点会失效，下次读取按新转换器重新转换，
+        因此可以在 ``setup_static_config`` 之后随时调用。
+
+        失败语义：reader 抛异常时 ``_convert`` 抛 ``ValueError``（不是静默
+        返回 ``None``）；writer 抛异常或返回非 ``str`` 时 ``flush`` 抛
+        ``ValueError``（被包成 ``ConfigError``，节点保持 dirty）。
+        """
+        self.resolver.register_converter(type_, converter, writer=writer)
+
     def _schedule_persistence(self) -> None:
         """按当前 autosave 策略决定「标脏之后」要不要主动写盘。"""
         if self._persistence == "debounce":
@@ -232,6 +307,12 @@ class Configue(_Configue):
              没有备选则走 3
           3. origin 不存在（运行期新 key）或只读无备选 → 写 default_write_file
 
+        值的两个方向：
+          - 节点仍在 Resolver 里 → 反解成文本写入（替换 / 新增）
+          - 节点已被 ``remove()``（``node not in resolver``）→ 让
+            ``ini_transform`` 删掉那一行（含续行）；此时靠保留的 origin
+            找到「用户改过的那个文件」，所以 remove 不清理 origin
+
         Args:
             only: 只回写这些节点；``None``（默认）回写 ``resolver.dirty_nodes()``
             strict: True 时遇到写盘错误立即抛 ``ConfigError(source=FILE)``；
@@ -245,9 +326,10 @@ class Configue(_Configue):
         失败节点保持 dirty，下次 flush 会重试。整个读-改-写过程持有
         ``resolver.lock``，``set`` 不会插进中间。
 
-        参数错误语义：``only`` 里出现 Resolver 中不存在的 node 时直接抛
-        ``ConfigError(source=FILE)``（不是静默跳过），避免拼错 key 时
-        「以为写了其实没写」。``only=None``（dirty 集合）不做这项校验。
+        参数错误语义：``only`` 里出现「既不在 Resolver 里、也不是脏节点」的
+        node 时直接抛 ``ConfigError(source=FILE)``（不是静默跳过），避免拼错
+        key 时「以为写了其实没写」。``remove()`` 后的节点不在 Resolver 里但
+        仍在 dirty 集合里，因此合法。``only=None``（dirty 集合）不做这项校验。
         """
         resolver = self.resolver
         written: list[Path] = []
@@ -261,7 +343,13 @@ class Configue(_Configue):
                 return written
 
             if only is not None:
-                missing = [node for node in nodes if node not in resolver]
+                # remove() 后的节点既不在 resolver 也不在 _raw，但仍合法：
+                # 它在 dirty 集合里，说明是「待删除」而不是「拼错了」。
+                dirty = resolver.dirty_nodes()
+                missing = [
+                    node for node in nodes
+                    if node not in resolver and node not in dirty
+                ]
                 if missing:
                     raise ConfigError(
                         f"flush: unknown nodes {missing}",
@@ -269,7 +357,7 @@ class Configue(_Configue):
                         key=",".join(f"[{s}]{k}" for s, k in missing),
                     )
 
-            plans: dict[Path, dict[str, dict[str, str]]] = {}
+            plans: dict[Path, dict[str, dict[str, Any]]] = {}
             plan_nodes: dict[Path, list[tuple[str, str]]] = {}
 
             for node in nodes:
@@ -282,10 +370,22 @@ class Configue(_Configue):
                             "(set configure_persistence(default_write_file=...))",
                             source=ConfigueErrorSource.FILE,
                             key=f"[{section}]{key}",
-                            value=resolver.get_str(section, key),
+                            value=(
+                                resolver.get_str(section, key)
+                                if node in resolver else None
+                            ),
                         )
-                    value = resolver.get_typed(section, key)
-                    text = _deconvert(value, resolver.converter_of(section, key))
+                    if node in resolver:
+                        value = resolver.get_typed(section, key)
+                        text = _deconvert(
+                            value,
+                            resolver.converter_of(section, key),
+                            resolver.custom_converters(),
+                            resolver.custom_serializers(),
+                        )
+                    else:
+                        # remove() 标脏的节点 → 让 ini_transform 删掉那一行
+                        text = DELETE
                 except Exception as exc:
                     error = exc if isinstance(exc, ConfigError) else ConfigError(
                         "flush: failed to serialize node",

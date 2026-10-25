@@ -4,10 +4,17 @@
 import warnings
 from pathlib import Path
 from typing import (
-    Tuple, Sequence, TypedDict,
-    Any, Optional, Union, Dict,
-    TypeVar, Type,
-    TYPE_CHECKING, Generic,
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Generic,
+    Optional,
+    Sequence,
+    Tuple,
+    Type,
+    TypedDict,
+    TypeVar,
+    Union,
     cast,
 )
 
@@ -26,6 +33,51 @@ def get_config() -> "Configue":
     if _config is None:
         _config = Application.instance().configure
     return _config
+
+
+# ── 配置加载钩子（软件级扩展点，导入期安全）──────────────
+#: 在 ``ConfigDeclaration.load()`` 末尾依次调用 ``hook(resolver)``
+_LOAD_HOOKS: list = []
+
+
+def register_load_hook(hook) -> None:
+    """登记一个「静态配置加载完成前」的钩子 ``hook(resolver) -> None``。
+
+    用途：某些子系统的配置节点是**运行期才知道 key 的**（典型：快捷键的
+    ``[shortcuts].<action_id>``），声明期无法用 ``ConfigField`` 枚举，只能等
+    INI 读进 ``Resolver`` 之后按「段名 + 统一取值类型」批量注册：
+
+    .. code-block:: python
+
+        from albuswall.configue import register_load_hook
+
+        def _type_shortcuts(resolver):
+            for key in resolver.keys_of("shortcuts"):
+                resolver.register_type("shortcuts", key, list[str])
+
+        register_load_hook(_type_shortcuts)
+
+    时机：``ConfigDeclaration.load()`` 末尾（声明类型 + 注入默认值之后、
+    ``setup_static_config`` 的 ``check_all`` 之前），所以钩子里注册的类型
+    会被类型自检采用。钩子只写内存、不读盘，导入期登记安全；
+    重复登记同一个函数幂等。
+    """
+    if hook not in _LOAD_HOOKS:
+        _LOAD_HOOKS.append(hook)
+
+
+def unregister_load_hook(hook) -> None:
+    """取消登记（主要给测试 / 热插拔用）。"""
+    try:
+        _LOAD_HOOKS.remove(hook)
+    except ValueError:
+        pass
+
+
+def run_load_hooks(resolver) -> None:
+    """执行所有已登记的加载钩子（``ConfigDeclaration.load`` 调用）。"""
+    for hook in tuple(_LOAD_HOOKS):
+        hook(resolver)
 
 
 # ── 从 bootstrap.py 搬过来 ─────────────────────────────
@@ -118,6 +170,9 @@ class ConfigDeclaration:
                     and (section, field) not in resolver
             ):
                 resolver.inject_raw(section, field, meta["default"])
+
+        # 声明期枚举不出 key 的段（如 [shortcuts]）在这里补类型
+        run_load_hooks(resolver)
 
     @classmethod
     def register(cls, owner_cls, attr_name, config_value, annotation):

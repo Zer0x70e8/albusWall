@@ -59,6 +59,7 @@ from typing import (
 )
 
 from PySide6.QtCore import QObject
+from PySide6.QtWidgets import QApplication
 
 from albuswall.common.enums import ThumbSpec
 from albuswall.log import getLogger
@@ -71,7 +72,6 @@ if TYPE_CHECKING:
     from albuswall.core import Container
 
     from ..window import Window
-    from ..keymap.manager import KeymapManager
     from .album_presenter import AlbumPresenter
     from .image_presenter import ThumbnailGridPresenter
     from .search_presenter import SearchPresenter
@@ -84,6 +84,10 @@ if TYPE_CHECKING:
 __all__ = ["Presenter", "PresenterManager"]
 
 _logger = getLogger(__name__)
+
+#: TODO（幻灯片）：自动翻页需要「间隔」配置项 + QTimer，以及视频资产的播放器；
+#: 目前只提供显式三态壳（进入 / 暂停 / 退出），快捷键与状态查询已经可用。
+_SLIDESHOW_TODO = "auto-advance timer / interval setting / video playback"
 
 
 class _DependencyMissingError(Exception):
@@ -144,11 +148,21 @@ class PresenterManager(QObject):
         self.tagbar_presenter: Optional["TagBarPresenter"] = None
         self.tag_editor_presenter: Optional["TagEditorPresenter"] = None
         self.search_presenter: Optional["SearchPresenter"] = None
-        self.keymap_presenter: Optional["KeymapManager"] = None
 
         # 当前"标签作用于哪个资产"（详情打开 → 详情资产；否则 grid 选中）
         self._active_asset_uuid: str | None = None
         self._detail_visible: bool = False
+
+        # 显式 UI 模式（快捷键层无状态，复杂逻辑都落在这里）：
+        #   · quick preview —— 复用详情页 + 隐藏 HUD；
+        #   · slideshow     —— 建立在 quick preview 之上的自动播放壳。
+        self._quick_preview: bool = False
+        self._slideshow: bool = False
+        self._slideshow_playing: bool = False
+        #: 进入快速预览前所在的浮层（None = 空白页 / 网格）
+        self._preview_source_view: object | None = None
+        #: 进入快速预览前的焦点控件（退出时尽量还回去）
+        self._preview_focus: object | None = None
 
         # 网格的标签过滤条件（None = 不过滤）；随相册切换自动清除。
         self._tag_filter_uuid: str | None = None
@@ -172,7 +186,6 @@ class PresenterManager(QObject):
         self.tagbar_presenter = self._build_tagbar_presenter()
         self.tag_editor_presenter = self._build_tag_editor_presenter()
         self.search_presenter = self._build_search_presenter()
-        self.keymap_presenter = self._build_keymap_manager()
 
     def _build_window_presenter(self) -> Optional["WindowPresenter"]:
         from .window_presenter import WindowPresenter
@@ -283,24 +296,6 @@ class PresenterManager(QObject):
                 tag_service=self._require("tag_service"),
                 view_service=self._container.get("view_service", None),
                 current_album_provider=self._current_album,
-                parent=self,
-            ),
-        )
-
-    def _build_keymap_manager(self) -> Optional["KeymapManager"]:
-        """按键分发：最后构造，handler 可以拿到前面所有 presenter。
-
-        它不做业务，只把「按键」转发给已有按钮 / presenter 的公开接口；
-        presenter 缺失时对应动作自动不生效（handler 返回 False）。
-        """
-        from ..keymap.manager import KeymapManager
-
-        return self._try_presenter(
-            "KeymapManager",
-            lambda: KeymapManager(
-                self._window,
-                container=self._container,
-                presenters=self,
                 parent=self,
             ),
         )
@@ -616,12 +611,21 @@ class PresenterManager(QObject):
     # ---- viewer ----
 
     def _on_item_activated(self, asset_uuid: str) -> None:
+        self.open_asset(asset_uuid)
+
+    def open_asset(self, asset_uuid: str) -> bool:
+        """在详情页里打开资产（网格激活 / 快速预览共用唯一出口）。
+
+        Returns:
+            True: 视图已打开（大图可能仍在异步加载）。
+            False: 没有可用的当前相册 / 打开过程异常。
+        """
         if self.album_presenter is None or self.viewer_presenter is None:
-            return
+            return False
         album = self.album_presenter.current
         if album is None:
             _logger.warning("item activated with no current album, ignored")
-            return
+            return False
 
         from .viewer_presenter import ViewerContext
 
@@ -634,7 +638,7 @@ class PresenterManager(QObject):
             ok = self.viewer_presenter.open(ctx)
         except Exception:
             _logger.exception("viewer open failed for asset=%s", asset_uuid)
-            return
+            return False
         if self.window_presenter is not None:
             self.window_presenter.show_detail()
         self._active_asset_uuid = str(asset_uuid)
@@ -644,6 +648,234 @@ class PresenterManager(QObject):
             _logger.info(
                 "viewer opened with placeholder (asset=%s)", asset_uuid,
             )
+        return True
+
+    # ---- explicit modes: quick preview / slideshow ----
+
+    @property
+    def is_quick_preview(self) -> bool:
+        """是否处于快速预览模式（HUD 隐藏、Space 退出）。"""
+        return self._quick_preview
+
+    @property
+    def is_slideshow(self) -> bool:
+        """是否处于幻灯片模式。"""
+        return self._slideshow
+
+    @property
+    def is_slideshow_playing(self) -> bool:
+        return self._slideshow_playing
+
+    @property
+    def detail_visible(self) -> bool:
+        return self._detail_visible
+
+    def enter_quick_preview(self, asset_uuid: str | None = None) -> bool:
+        """进入快速预览：复用详情页，隐藏 HUD，记录来源视图 / 焦点。
+
+        `asset_uuid` 为空时取网格当前光标项（``QuickPreview.open(current)``）。
+        """
+        detail = getattr(self._window, "detail", None)
+        if detail is None:
+            return False
+        target = str(asset_uuid) if asset_uuid else self._grid_selected_uuid()
+        if not target:
+            return False
+        if self._quick_preview:
+            if self._active_asset_uuid != target:
+                self._on_detail_navigate(target)
+            return True
+
+        overlay = getattr(self._window, "overlay", None)
+        self._preview_source_view = (
+            overlay.currentWidget() if overlay is not None else None)
+        self._preview_focus = QApplication.focusWidget()
+        if not self.open_asset(target):
+            self._preview_source_view = None
+            self._preview_focus = None
+            return False
+        setter = getattr(detail, "set_preview_mode", None)
+        if callable(setter):
+            setter(True)
+        self._quick_preview = True
+        return True
+
+    def clear_quick_preview(self) -> bool:
+        """退出快速预览**模式**但保留详情页（用于 ``E`` 进入编辑）。
+
+        只恢复 HUD，不关闭查看层，也不改变当前选择。
+        """
+        if not self._quick_preview:
+            return False
+        self._quick_preview = False
+        self._slideshow = False
+        self._slideshow_playing = False
+        setter = getattr(getattr(self._window, "detail", None),
+                         "set_preview_mode", None)
+        if callable(setter):
+            setter(False)
+        return True
+
+    def exit_quick_preview(self) -> bool:
+        """关闭快速预览：恢复 HUD、收起查看层、焦点还给来源区域。"""
+        if not self._quick_preview:
+            return False
+        self._quick_preview = False
+        self._slideshow = False
+        self._slideshow_playing = False
+        setter = getattr(getattr(self._window, "detail", None),
+                         "set_preview_mode", None)
+        if callable(setter):
+            setter(False)
+        self._close_viewer(restore_preview_focus=True)
+        return True
+
+    def toggle_quick_preview(self, asset_uuid: str | None = None) -> bool:
+        """`Space` 的上下文入口：预览中 → 退出；否则 → 打开当前资产。"""
+        if self._quick_preview:
+            return self.exit_quick_preview()
+        return self.enter_quick_preview(asset_uuid)
+
+    def enter_slideshow(self) -> bool:
+        """进入幻灯片（显式模式）：自动建立快速预览会话。
+
+        自动翻页本身尚未实现（见 ``_SLIDESHOW_TODO``），这里先把
+        “进入 / 暂停 / 退出”三态跑通，快捷键可绑定、状态可查询。
+        """
+        if self._slideshow:
+            self._slideshow_playing = True
+            self._update_slideshow_hint()
+            return True
+        if not self._quick_preview and not self.enter_quick_preview():
+            return False
+        self._slideshow = True
+        self._slideshow_playing = True
+        self._update_slideshow_hint()
+        return True
+
+    def pause_slideshow(self) -> bool:
+        if not self._slideshow:
+            return False
+        self._slideshow_playing = False
+        self._update_slideshow_hint()
+        return True
+
+    def exit_slideshow(self, *, keep_preview: bool = True) -> bool:
+        """退出幻灯片；默认保留快速预览（Esc 的第一层）。"""
+        if not self._slideshow:
+            return False
+        self._slideshow = False
+        self._slideshow_playing = False
+        if not keep_preview:
+            self.exit_quick_preview()
+            return True
+        self._update_slideshow_hint()
+        return True
+
+    def toggle_playback(self) -> bool:
+        """K / 点击视频区域：播放 / 暂停。
+
+        目前只有图片浏览，视频解码尚未接入（TODO），因此：
+          · 幻灯片中的 K = 暂停 / 继续（真实生效）；
+          · 普通详情页返回 False（“否则无操作”）。
+        """
+        if self._slideshow:
+            if self._slideshow_playing:
+                return self.pause_slideshow()
+            self._slideshow_playing = True
+            self._update_slideshow_hint()
+            return True
+        return False
+
+    def _update_slideshow_hint(self) -> None:
+        detail = getattr(self._window, "detail", None)
+        setter = getattr(detail, "set_preview_hint", None)
+        if not callable(setter):
+            return
+        if not self._slideshow:
+            setter(self.tr("Space to exit · K to play / pause"))
+            return
+        state = "playing" if self._slideshow_playing else "paused"
+        setter(f"Slideshow {state} · S pause / resume · Esc exit")
+
+    def escape_layer(self) -> bool:
+        """Esc 的显式模式层：幻灯片 → 快速预览（再往下才是详情 / 浮层）。"""
+        if self._slideshow:
+            return self.exit_slideshow()
+        if self._quick_preview:
+            return self.exit_quick_preview()
+        return False
+
+    # ---- 选择 / 过滤（供快捷键动作读取） ----
+
+    def current_album(self):
+        """当前相册（无则 ``None``）。"""
+        return None if self.album_presenter is None else self.album_presenter.current
+
+    def selected_asset_uuids(self) -> tuple[str, ...]:
+        """快捷键作用对象：优先当前激活资产，其次网格光标项。"""
+        active = self._active_asset_uuid or self._grid_selected_uuid()
+        return (str(active),) if active else ()
+
+    def selected_asset_uuid(self) -> str | None:
+        uuids = self.selected_asset_uuids()
+        return uuids[0] if uuids else None
+
+    @property
+    def has_active_filter(self) -> bool:
+        """当前网格是否有标签过滤 / 搜索条件在生效。"""
+        return self._tag_filter_uuid is not None
+
+    def clear_filter(self) -> bool:
+        """清除标签过滤（``Ctrl+Shift+L``）。"""
+        if self._tag_filter_uuid is None:
+            return False
+        self._clear_tag_filter_state()
+        self._refresh_grid()
+        return True
+
+    def refresh_assets(self, asset_uuids=None) -> None:
+        """写操作后从库里追平：刷网格 + 相册封面 + 标签栏。"""
+        self._on_assets_changed(asset_uuids or ())
+
+    def close_detail(self) -> None:
+        """关闭查看层（含快速预览 / 幻灯片状态复位）。"""
+        self._close_viewer()
+
+    def _restore_preview_focus(self) -> None:
+        """退出快速预览：先回到来源浮层，再把焦点还给来源控件。"""
+        source = self._preview_source_view
+        focus_widget = self._preview_focus
+        self._preview_source_view = None
+        self._preview_focus = None
+
+        overlay = getattr(self._window, "overlay", None)
+        if overlay is not None and self._is_restorable_page(source):
+            try:
+                overlay.setCurrentWidget(source)
+            except (RuntimeError, TypeError):
+                _logger.exception("restore preview source layer failed")
+
+        for candidate in (focus_widget, source):
+            widget = candidate if hasattr(candidate, "setFocus") else None
+            if widget is None:
+                continue
+            try:
+                if widget.isVisible():
+                    widget.setFocus()
+                    return
+            except RuntimeError:
+                continue
+        content = getattr(self._window, "content", None)
+        if content is not None:
+            content.setFocus()
+
+    def _is_restorable_page(self, source: object | None) -> bool:
+        """来源是否是主窗口的浮层页（相册 / 来源 / 设置）。"""
+        if source is None:
+            return False
+        return any(source is getattr(self._window, name, None)
+                   for name in ("album", "source", "setting"))
 
     def _on_detail_navigate(self, asset_uuid: str) -> None:
         self._active_asset_uuid = str(asset_uuid)
@@ -654,17 +886,27 @@ class PresenterManager(QObject):
     def _on_detail_close_requested(self) -> None:
         self._close_viewer()
 
-    def _close_viewer(self) -> None:
+    def _close_viewer(self, *, restore_preview_focus: bool = False) -> None:
         if self.window_presenter is not None:
             self.window_presenter.hide_detail()
         if self.viewer_presenter is not None:
             self.viewer_presenter.teardown()
-        self._window.detail.refresh()
+        detail = self._window.detail
+        # 快速预览会话可能被其它路径关闭（Esc / 相册切换）：顺手复位模式
+        setter = getattr(detail, "set_preview_mode", None)
+        if callable(setter):
+            setter(False)
+        self._quick_preview = False
+        self._slideshow = False
+        self._slideshow_playing = False
+        detail.refresh()
         self._refresh_grid()
         self._detail_visible = False
         # 关详情后由 grid 选中决定标签作用域
         self._active_asset_uuid = self._grid_selected_uuid()
         self._refresh_tagbar()
+        if restore_preview_focus:
+            self._restore_preview_focus()
 
     def _grid_selected_uuid(self) -> str | None:
         """grid 当前选中的资产 uuid（没有 grid / 没选中时为 None）。"""

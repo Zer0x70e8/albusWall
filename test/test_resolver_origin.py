@@ -213,6 +213,72 @@ def test_interpolation_still_works_under_lock() -> None:
 
 
 # ══════════════════════════════════════════════════════════════
+# remove：只删 _raw，保留 origin / definitions
+# ══════════════════════════════════════════════════════════════
+def test_remove_drops_value_but_keeps_origin() -> None:
+    resolver = Resolver()
+    origin = Path("/tmp/configue/main.ini")
+    resolver.inject_raw("ui", "width", "100", origin=origin)
+
+    resolver.remove("ui", "width")
+
+    assert ("ui", "width") not in resolver
+    assert resolver.origin_of("ui", "width") == origin
+    assert resolver.nodes_of_file(origin) == {("ui", "width")}
+    assert resolver.definitions_of("ui", "width") == (origin,)
+    assert resolver.dirty_nodes() == frozenset({("ui", "width")})
+
+
+def test_remove_with_persist_false_does_not_mark_dirty() -> None:
+    resolver = Resolver()
+    resolver.inject_raw("ui", "width", "100")
+
+    resolver.remove("ui", "width", persist=False)
+
+    assert ("ui", "width") not in resolver
+    assert resolver.dirty_nodes() == frozenset()
+
+
+def test_remove_is_idempotent() -> None:
+    resolver = Resolver()
+    resolver.inject_raw("ui", "width", "100")
+
+    resolver.remove("ui", "width")
+    resolver.remove("ui", "width")  # 再删一次不炸
+
+    assert ("ui", "width") not in resolver
+    assert resolver.dirty_nodes() == frozenset({("ui", "width")})
+
+
+def test_remove_invalidates_dependents() -> None:
+    resolver = Resolver()
+    resolver.inject_raw("path", "base", "/data")
+    resolver.inject_raw("path", "cache", "${base}/cache")
+    assert resolver.get_str("path", "cache") == "/data/cache"
+
+    resolver.remove("path", "base")
+
+    try:
+        resolver.get_str("path", "cache")  # 依赖被删节点 → 重新展开时 KeyError
+    except KeyError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("删除被引用节点后展开应失败")
+
+
+def test_remove_then_set_returns_value() -> None:
+    resolver = Resolver()
+    origin = Path("/tmp/configue/main.ini")
+    resolver.inject_raw("ui", "width", "100", origin=origin)
+
+    resolver.remove("ui", "width", persist=False)
+    resolver.set("ui", "width", 42)
+
+    assert resolver.get_typed("ui", "width") == 42
+    assert resolver.origin_of("ui", "width") == origin
+
+
+# ══════════════════════════════════════════════════════════════
 # 入口
 # ══════════════════════════════════════════════════════════════
 def main() -> int:

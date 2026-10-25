@@ -413,6 +413,175 @@ def test_configure_persistence_validates() -> None:
 
 
 # ══════════════════════════════════════════════════════════════
+# remove：set 的对称操作
+# ══════════════════════════════════════════════════════════════
+def test_remove_deletes_line_from_origin_file() -> None:
+    d = _tmpdir()
+    main = _write(d / "main.ini", """
+        # header
+        [ui]
+        width = 100
+        height = 200
+
+        ; tail
+        [other]
+        a = 1
+    """)
+    config = _load(main)
+
+    config.remove("ui", "width")
+    assert "width" not in config.resolver
+    try:
+        config.resolver.get_typed("ui", "width")
+    except KeyError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("expected KeyError after remove")
+
+    written = config.flush()
+
+    assert written == [main]
+    assert _text(main) == dedent("""
+        # header
+        [ui]
+        height = 200
+
+        ; tail
+        [other]
+        a = 1
+    """).lstrip("\n")
+    assert config.resolver.dirty_nodes() == frozenset()
+
+
+def test_remove_keeps_origin_after_flush() -> None:
+    """删掉之后 origin 仍保留：再次 set 同一个 key 会写回同一文件。"""
+    d = _tmpdir()
+    main = _write(d / "main.ini", "[ui]\nwidth = 100\n")
+    config = _load(main)
+
+    config.remove("ui", "width", save="now")
+    assert config.resolver.origin_of("ui", "width") == main
+
+    config.set("ui", "width", 42)
+    config.flush()
+
+    assert _text(main) == "[ui]\nwidth = 42\n"
+
+
+def test_remove_only_affects_its_own_origin_file() -> None:
+    d = _tmpdir()
+    machine = _write(d / "machine.ini", "[ui]\nwidth = 100\n")
+    main = _write(d / "main.ini", """
+        [configue]
+        include = ./machine.ini
+
+        [ui]
+        height = 200
+    """)
+    config = _load(main)
+
+    config.remove("ui", "width")  # origin = machine.ini
+    written = config.flush()
+
+    assert written == [machine]
+    assert "width" not in _text(machine)
+    assert "height = 200" in _text(main)
+
+
+def test_remove_drops_continuation_lines() -> None:
+    d = _tmpdir()
+    main = _write(d / "main.ini", """
+        [ui]
+        width = 100
+        long = a
+          b
+          c
+        height = 200
+    """)
+    config = _load(main)
+
+    config.remove("ui", "long")
+    config.flush()
+
+    assert _text(main) == "[ui]\nwidth = 100\nheight = 200\n"
+
+
+def test_remove_save_now_writes_immediately() -> None:
+    d = _tmpdir()
+    main = _write(d / "main.ini", "[ui]\nwidth = 100\n")
+    config = _load(main)
+    config.configure_persistence(autosave="manual")
+
+    config.remove("ui", "width", save="now")
+
+    assert _text(main) == "[ui]\n"
+    assert config.resolver.dirty_nodes() == frozenset()
+
+
+def test_remove_save_defer_waits_for_explicit_flush() -> None:
+    d = _tmpdir()
+    main = _write(d / "main.ini", "[ui]\nwidth = 100\n")
+    config = _load(main)
+
+    config.remove("ui", "width", save="defer")
+
+    assert _text(main) == "[ui]\nwidth = 100\n"
+    assert config.resolver.dirty_nodes() == frozenset({("ui", "width")})
+
+    config.flush()
+    assert _text(main) == "[ui]\n"
+
+
+def test_flush_only_accepts_removed_dirty_node() -> None:
+    d = _tmpdir()
+    main = _write(d / "main.ini", "[ui]\nwidth = 100\n")
+    config = _load(main)
+
+    config.remove("ui", "width", save="defer")
+    written = config.flush(only=[("ui", "width")])
+
+    assert written == [main]
+    assert _text(main) == "[ui]\n"
+
+
+def test_flush_only_still_rejects_unknown_node() -> None:
+    d = _tmpdir()
+    config = _load(_write(d / "main.ini", "[ui]\nwidth = 100\n"))
+
+    try:
+        config.flush(only=[("ui", "typo")])
+    except ConfigError as exc:
+        assert exc.source is ConfigueErrorSource.FILE
+    else:  # pragma: no cover
+        raise AssertionError("expected ConfigError for unknown node")
+
+
+def test_remove_of_never_existing_node_is_clean_noop() -> None:
+    """从未存在的节点 remove 后 flush 无目标文件 → 记 last_flush_error，不崩。"""
+    d = _tmpdir()
+    main = _write(d / "main.ini", "[ui]\nwidth = 100\n")
+    config = _load(main)
+    config._default_write_file = None
+
+    config.remove("ui", "ghost", save="defer")
+    config.flush()  # 不抛异常
+
+    assert _text(main) == "[ui]\nwidth = 100\n"
+
+
+def test_unknown_save_mode_raises_on_remove() -> None:
+    d = _tmpdir()
+    config = _load(_write(d / "main.ini", "[ui]\na = 1\n"))
+
+    try:
+        config.remove("ui", "a", save="eventually")  # type: ignore[arg-type]
+    except ValueError as exc:
+        assert "save mode" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected ValueError")
+
+
+# ══════════════════════════════════════════════════════════════
 # 入口
 # ══════════════════════════════════════════════════════════════
 def main() -> int:

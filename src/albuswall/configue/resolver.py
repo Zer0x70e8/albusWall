@@ -15,7 +15,7 @@
 import re
 import threading
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 from configparser import InterpolationError
 
 # noinspection protected-member
@@ -32,7 +32,8 @@ class Resolver:
     def __init__(self):
         self._raw: dict[Node, Any] = {}
         self._types: dict[Node, Any] = {}
-        self._custom_converters: dict = {}
+        self._custom_converters: dict = {}   # 类型 -> str -> 值（读）
+        self._custom_serializers: dict = {}  # 类型 -> 值 -> str（写）
 
         self._str_cache: dict[Node, Any] = {}  # 展开后的字符串 / 原始值
         self._typed_cache: dict[Node, Any] = {}  # 类型化值
@@ -118,6 +119,24 @@ class Resolver:
         node = (section, key)
         with self._lock:
             self._raw[node] = value
+            if persist:
+                self._dirty.add(node)
+            self._invalidate(node)
+
+    def remove(self, section: str, key: str, *, persist: bool = True) -> None:
+        """删除运行期值（``set`` 的对称操作）。
+
+        只弹出 ``_raw`` 里的值并失效缓存；**故意不动** ``_origins`` /
+        ``_definitions`` / ``_by_file``——``flush`` 要靠 origin 找到
+        「用户改过的那个文件」，才能把它里面那一行删掉。
+
+        Args:
+            persist: True（默认）时把节点标脏，等 ``flush`` 落盘删除；
+                False 时只从内存消失，不参与回写。
+        """
+        node = (section, key)
+        with self._lock:
+            self._raw.pop(node, None)
             if persist:
                 self._dirty.add(node)
             self._invalidate(node)
@@ -245,10 +264,75 @@ class Resolver:
     def register_type(self, section, key, converter):
         with self._lock:
             self._types[(section, key)] = converter
+            self._invalidate((section, key))  # 注册类型后旧缓存必须失效
 
-    def register_custom_converters(self, mapping):
+    def register_custom_converters(self, mapping, *, serializers=None):
+        """整体替换自定义转换器表（``{类型: str -> 值}``）。
+
+        Args:
+            mapping: 读侧转换器
+            serializers: 写侧转换器 ``{类型: 值 -> str}``；不给则写回只能
+                ``str(value)``（见 ``ini_parser._deconvert`` 的说明）
+        """
         with self._lock:
             self._custom_converters = dict(mapping)
+            if serializers is not None:
+                self._custom_serializers = dict(serializers)
+
+    def register_converter(
+            self,
+            type_: Any,
+            converter: Callable[[str], Any],
+            *,
+            writer: Optional[Callable[[Any], str]] = None,
+    ) -> None:
+        """增量注册一个自定义转换器（与 ``configparser`` 的 ``converters`` 同义）。
+
+        只有在「构造函数语义不对」时才需要注册——普通 ``Enum`` / ``Path``
+        子类 / 带 ``X(str)`` 构造的类会被 ``_convert`` 默认回退直接构造，
+        不必登记。典型需要注册的场景：``Namespace`` 子类（``X("raw")`` 不是
+        你想要的）、需要外部上下文解析的类。
+
+        **写回同样重要**：不注册 ``writer`` 时 ``flush`` 只能 ``str(value)``。
+        ``QKeySequence`` 就是反例（``str()`` 在部分版本返回 NativeText，
+        macOS 上是 ``⌘S``），必须成对注册：
+
+        .. code-block:: python
+
+            register_converter(
+                QKeySequence,
+                lambda raw: QKeySequence(raw),
+                writer=lambda seq: seq.toString(QKeySequence.PortableText),
+            )
+
+        Args:
+            type_: 声明在 ``ConfigField`` / ``SettingItem.value_type`` 里的类型
+            converter: ``str -> 该类型实例``；抛异常会变成 ``ValueError``
+                （不再静默返回 ``None``）
+            writer: ``实例 -> INI 文本``；抛异常同样是 ``ValueError``，且必须
+                返回 ``str``。另一个选择是让类型自己实现 ``to_ini()``
+                （与 ``from_ini(raw)`` 类方法配对），那样完全不必注册
+        """
+        with self._lock:
+            self._custom_converters[type_] = converter
+            if writer is not None:
+                self._custom_serializers[type_] = writer
+            # 已按旧规则类型化过的节点要重转，注册即时生效
+            affected = [
+                node for node, conv in self._types.items() if conv is type_
+            ]
+            for node in affected:
+                self._invalidate(node)
+
+    def custom_converters(self) -> dict[Any, Callable[[str], Any]]:
+        """返回已注册的自定义转换器（读侧，副本）。"""
+        with self._lock:
+            return dict(self._custom_converters)
+
+    def custom_serializers(self) -> dict[Any, Callable[[Any], str]]:
+        """返回已注册的自定义写回函数（写侧，副本）。``flush`` 用它反解。"""
+        with self._lock:
+            return dict(self._custom_serializers)
 
     # ---------- 查询 ----------
     def has_section(self, section: str) -> bool:

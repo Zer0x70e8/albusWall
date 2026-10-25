@@ -449,11 +449,19 @@ class SettingItem:
             if self.value_type is bool and isinstance(value, int):
                 return bool(value)
             return value
-        # 复用配置文件那套转换语义（bool / int / Optional / list ...）
+        # 复用配置文件那套转换语义（bool / int / Optional / list / Enum ...），
+        # 并沿用运行期注册的自定义转换器，保证「UI 写回」与「读配置」一致
         from .utils.ini_parser import _convert
 
         try:
-            return _convert(value, self.value_type, None)
+            from .declaration import get_config
+
+            custom = get_config().resolver.custom_converters()
+        except Exception:  # noqa: BLE001  配置尚未就绪时退回内置语义
+            custom = None
+
+        try:
+            return _convert(value, self.value_type, custom)
         except Exception as exc:  # noqa: BLE001
             raise ValueError(
                 f"setting item {self.name!r}: cannot convert {value!r} "
@@ -1400,7 +1408,10 @@ def _describe_change(
     text: Optional[str]
     try:
         text = _deconvert(
-            coerced, config.resolver.converter_of(item.section, item.key),
+            coerced,
+            config.resolver.converter_of(item.section, item.key),
+            config.resolver.custom_converters(),
+            config.resolver.custom_serializers(),
         )
     except Exception:  # noqa: BLE001  反解失败只影响预览文本
         text = None

@@ -42,6 +42,72 @@
 - ``[configue] disable_type_check = false``（默认）时 ``check_all`` 会对所有
   节点做类型转换，任一节点转换失败会让启动直接抛出（不是警告）。
 
+类型转换
+========
+配置项声明的类型（``ConfigField`` / ``SettingItem.value_type``）由
+``_convert`` 负责把 INI 字符串转成 Python 值，规则：
+
+- 内置：``bool`` / ``int`` / ``float`` / ``str`` / ``Path`` / ``dict``（JSON 对象）
+- 泛型递归：``Optional[X]`` / ``Union[...]`` / ``list[X]`` / ``tuple[X, ...]`` /
+  ``dict[str, X]``，内层的 ``X`` 同样按下面的规则转换；``dict[str, list[X]]``
+  这类嵌套容器的 value 也会递归
+- **默认回退**：其余任何类型只要 ``X(raw)`` 能构造成功就直接可用，
+  ``Enum`` / ``Path`` 子类 / ``str`` 子类 / 带 ``X(str)`` 构造的类**都不需要
+  注册**；构造失败抛 ``ValueError``（带 raw 与 cause）
+- **读写配对**：类型自带 ``from_ini(raw)`` 类方法 + ``to_ini()`` 方法时，
+  读写两个方向都自动生效，完全不必注册
+- 只有「构造函数语义不对」的类型才需要注册（``Namespace`` 子类、需要外部
+  上下文的类），注册即等价于 ``configparser`` 的 ``converters``：
+
+  .. code-block:: python
+
+      from albuswall.configue import register_converter
+
+      # reader 必需，writer 强烈建议成对给出
+      register_converter(
+          QKeySequence,
+          lambda raw: QKeySequence(raw),
+          writer=lambda seq: seq.toString(QKeySequence.PortableText),
+      )
+      # 或 config.register_converter(...)
+
+  **只注册 reader 时写回只能 ``str(value)``**——``QKeySequence`` 就是反例：
+  ``str()`` 在部分版本返回 NativeText（macOS 上是 ``⌘S``），写出去下次读不
+  回来。所以这类类型必须给 ``writer``，或者实现 ``to_ini()``，或者干脆别
+  直接当 ``value_type``。若 ``str(value)`` 只是默认 repr
+  （``<... object at 0x...>``），``flush`` 直接抛 ``ValueError`` 而不是把
+  坏值写进去。reader 抛异常变成 ``ValueError``（不再静默返回 ``None``）；
+  writer 抛异常或返回非 ``str`` 同样抛 ``ValueError``（``flush`` 会包成
+  ``ConfigError`` 并保留 dirty）。
+
+写回时（``flush``）按同一套规则反解：``Enum`` 写 ``value``；序列默认写成
+``", "`` 连接，但元素本身是容器（``list[list[int]]``）、或元素文本含逗号 /
+首尾空白 / 是空串 / 以 ``[`` 开头时改写成 JSON 数组——否则
+``["Ctrl+S", "Ctrl+,"]`` 会被逗号拆成三项，``Ctrl+,`` 直接丢数据。
+读取侧与之对称：先试 JSON 数组，失败再按逗号分隔。
+
+加载钩子
+========
+``ConfigField`` 只能声明「导入期就知道 key」的节点。像 ``[shortcuts]`` 这种
+key（action_id）要到运行期才确定的段，用 ``register_load_hook`` 登记一个
+``hook(resolver) -> None``：它在 ``ConfigDeclaration.load()`` 末尾执行
+（类型声明之后、``check_all`` 之前），可以按段名批量补类型：
+
+.. code-block:: python
+
+    from albuswall.configue import register_load_hook
+
+    register_load_hook(
+        lambda resolver: [
+            resolver.register_type("shortcuts", key, list[str])
+            for key in resolver.keys_of("shortcuts")
+        ]
+    )
+
+钩子只写内存、不读盘，导入期登记安全；宜在插件 ``setup()``（配置加载之前）
+登记。配合 ``register_dynamic_state`` 的「先登记、后访问」模型，整个配置
+phase 不需要 import 任何 UI / Qt。
+
 回写
 ====
 ``config.set(section, key, value)`` 改内存并标脏，按持久化策略决定何时落盘：
@@ -50,6 +116,11 @@
 - ``autosave="debounce"``：set 后重置定时器，到期统一 flush（高频字段必用）
 - ``autosave="off"`` / ``"manual"``：只标脏，全靠显式 ``flush()``
 - ``save="now"`` 单次调用立即写
+
+``config.remove(section, key)`` 是 ``set`` 的对称操作（同样的 ``save`` 时机）：
+值立刻从内存消失（后续读取抛 ``KeyError``），但 origin 被保留——``flush()``
+靠它找到「用户改过的那个文件」，让 ``ini_transform`` 删掉那一行（连同缩进
+续行），不会留下残行。
 
 ``flush()`` 按 origin 分组，逐文件用 ``ini_transform.transform`` 生成编辑，
 经 ``atomic_write`` 原子落盘，保留注释 / 格式 / 换行符。写盘失败不抛给业务：
@@ -207,7 +278,43 @@ __all__ = [
     "format_setting_schema_dump",
     "dump_registered_groups", "format_registered_groups",
     "save_setting_group", "save_setting_schema",
+    # 自定义类型转换器（configparser 的 converters 同义）
+    "register_converter",
+    # 静态配置加载钩子（声明期枚举不出 key 的段用）
+    "register_load_hook", "unregister_load_hook",
 ]
+
+
+def register_converter(type_, converter, *, writer=None) -> None:
+    """给静态配置注册一个自定义类型转换器（``configparser`` 的 ``converters``）。
+
+    只有「构造函数语义不对」的类型才需要注册：普通 ``Enum`` / ``Path`` 子类 /
+    ``int``、``str`` 子类 / 带 ``X(str)`` 构造的自定义类会被 ``_convert`` 的
+    默认回退直接构造。典型需要注册的场景：``Namespace`` 子类（``X("raw")``
+    不是你想要的）、需要外部上下文解析的类。
+
+    ``writer`` 是写回方向（``实例 -> INI 文本``）。不传就只能 ``str(value)``，
+    对 ``QKeySequence`` 这类 ``str()`` 不稳定的类型会把配置写坏，因此读写要
+    成对注册：
+
+    .. code-block:: python
+
+        from albuswall.configue import register_converter
+
+        register_converter(
+            QKeySequence,
+            lambda raw: QKeySequence(raw),
+            writer=lambda seq: seq.toString(QKeySequence.PortableText),
+        )
+
+    或者让类型自带 ``from_ini`` / ``to_ini`` 方法，读写都无需注册。
+
+    等价于 ``get_config().register_converter(...)``；注册后已缓存的节点会失效
+    重转，因此可以在 ``setup_static_config`` 之后随时调用。
+    """
+    from .declaration import get_config
+
+    get_config().register_converter(type_, converter, writer=writer)
 
 
 def __getattr__(name):
@@ -242,6 +349,9 @@ def __getattr__(name):
     if name == "get_config":
         from .declaration import get_config
         return get_config
+    if name in ("register_load_hook", "unregister_load_hook"):
+        from . import declaration
+        return getattr(declaration, name)
 
     # ── typed dict 视图 ───────────────────────────
     if name == "load_typed":

@@ -20,6 +20,7 @@ from albuswall.log import getLogger
 from albuswall.services.view import SCOPE_DELETED
 
 from ..delegate.metadata_delegate import MetadataDelegate
+from ..library import record_undo
 from ..model.metadata_model import MetadataModel
 from ..utils.signal_adapter import SignalAdapter
 from ..widgets.image_loader import (
@@ -462,6 +463,8 @@ class ViewerPresenter:
             _logger.exception("soft_delete failed: uuid=%s", asset_uuid)
             return
 
+        # 与快捷键路径共用一个撤销栈：Ctrl+Z 可以把按钮删除的资产恢复回来
+        record_undo("trash", (asset_uuid,))
         self.view.notify_assets_changed([asset_uuid])
 
         if next_uuid is not None:
@@ -481,6 +484,8 @@ class ViewerPresenter:
             _logger.exception("restore failed: uuid=%s", asset_uuid)
             return
 
+        # 恢复也进撤销栈（Ctrl+Z = 重新软删，Ctrl+Shift+Z = 再恢复）
+        record_undo("restore", (asset_uuid,))
         # 资产未被移出当前上下文（在 Trash 里原位恢复，仍在同一相册视图），
         # 直接 refresh 更新 is_deleted / deleted_at 与按钮语义。
         self.refresh()

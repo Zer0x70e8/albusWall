@@ -5,8 +5,9 @@ from __future__ import annotations
 
 from typing import Sequence, Mapping, Optional, Any
 
-from PySide6.QtCore import QItemSelectionModel, Qt, Signal, QModelIndex
+from PySide6.QtCore import QItemSelectionModel, Qt, QTimer, Signal, QModelIndex
 from PySide6.QtWidgets import (
+    QLabel,
     QPushButton,
     QVBoxLayout,
     QListView,
@@ -80,6 +81,11 @@ class Detail(Retranslatable, BlurLabel):
 
         # 当前资产是否已软删；决定 trash 按钮语义为 删除 / 恢复
         self._is_deleted: bool = False
+
+        # 快速预览模式：隐藏 HUD（overlay + 顶部关闭按钮），只在底部留一条提示。
+        # 记录进入前各 HUD 控件的可见性，退出时原样恢复。
+        self._preview_mode: bool = False
+        self._hud_visible_before_preview: tuple[bool, bool] = (True, True)
 
         self.setup_ui()
         self.setup_key()
@@ -203,6 +209,20 @@ class Detail(Retranslatable, BlurLabel):
         self.panel.setVisible(False)
         self.panel.setGeometry(self.rect())  # 与 Detail 完全重合
 
+        # 快速预览模式的底部提示（不进 layout、不抢焦点）
+        self.preview_hint = QLabel("", self)
+        self.preview_hint.setObjectName("DetailPreviewHint")
+        self.preview_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_hint.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.preview_hint.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.preview_hint.hide()
+        # 「底部短暂提示」：显示几秒后自动淡出（不打断沉浸）
+        self._preview_hint_timer = QTimer(self)
+        self._preview_hint_timer.setSingleShot(True)
+        self._preview_hint_timer.setInterval(4000)
+        self._preview_hint_timer.timeout.connect(self.preview_hint.hide)
+
         self.information_button.setCheckable(True)
         self.information_button.toggled.connect(self._on_information_toggled)
 
@@ -216,7 +236,7 @@ class Detail(Retranslatable, BlurLabel):
         self.item_line_viewer.activated.connect(self._on_nav_item_clicked)
 
     def setup_key(self):
-        # 全局键位由 keymap 的 KeymapManager 统一分发（window.escape /
+        # 全局键位由 keymap 的 QShortcut 统一分发（window.escape /
         # viewer.* 等）；本视图只保留控件自身的原生键盘行为。
         pass
 
@@ -342,6 +362,7 @@ class Detail(Retranslatable, BlurLabel):
         self.information_button.setText(self.tr("info"))
         self.edit_button.setText(self.tr("edit"))
         self.trash_button.setText(self._trash_button_text())
+        self._update_preview_hint_text()
 
     def notify_assets_changed(self, asset_uuids: Sequence[str]) -> None:
         """写操作完成后由 presenter 调用，把受影响的资产 uuid 广播出去。
@@ -354,6 +375,68 @@ class Detail(Retranslatable, BlurLabel):
     def show_information(self, visible: bool = True) -> None:
         """由 presenter 主动控制信息面板显隐（比如切换资产后重置）。"""
         self.information_button.setChecked(visible)
+
+    # ------------------------------------------------------------------ #
+    # 快速预览模式（显式模式，不是宏）
+    # ------------------------------------------------------------------ #
+    @property
+    def is_preview_mode(self) -> bool:
+        """当前是否处于快速预览模式（HUD 已隐藏）。"""
+        return self._preview_mode
+
+    def set_preview_mode(self, active: bool) -> None:
+        """进入 / 退出快速预览模式：隐藏或恢复 HUD，并显示底部提示。
+
+        HUD = 详情页底部的 overlay（导航条 + 标签栏 + 操作按钮）。
+        进入前记录它的可见性，退出时**原样恢复**，不假设它一定可见。
+        """
+        active = bool(active)
+        if active == self._preview_mode:
+            if active:
+                self._place_preview_hint()
+            return
+        if active:
+            self._hud_visible_before_preview = (
+                self.overlay.isVisible(), self.close_button.isVisible())
+            self.overlay.setVisible(False)
+            self.close_button.setVisible(False)
+            self._preview_mode = True
+            self._update_preview_hint_text()
+            self.preview_hint.show()
+            self.preview_hint.raise_()
+            self._place_preview_hint()
+            self._preview_hint_timer.start()
+            return
+        self._preview_mode = False
+        self._preview_hint_timer.stop()
+        self.preview_hint.hide()
+        hud_visible, close_visible = self._hud_visible_before_preview
+        self.overlay.setVisible(hud_visible)
+        self.close_button.setVisible(close_visible)
+
+    def set_preview_hint(self, text: str) -> None:
+        """覆盖快速预览底部提示（短时提示 / 幻灯片状态都走这里）。"""
+        self.preview_hint.setText(str(text))
+        if self._preview_mode:
+            self.preview_hint.adjustSize()
+            self._place_preview_hint()
+            self.preview_hint.show()
+            self.preview_hint.raise_()
+            self._preview_hint_timer.start()
+
+    def _update_preview_hint_text(self) -> None:
+        self.preview_hint.setText(
+            self.tr("Space to exit · K to play / pause"))
+
+    def _place_preview_hint(self) -> None:
+        """提示条贴在底部居中；不参与 layout，随 resize 重算。"""
+        hint = self.preview_hint
+        hint.adjustSize()
+        size = hint.sizeHint()
+        hint.resize(size)
+        x = max(0, (self.width() - size.width()) // 2)
+        y = max(0, self.height() - size.height() - 16)
+        hint.move(x, y)
 
     # ------------------------------------------------------------------ #
     # 槽
@@ -390,3 +473,6 @@ class Detail(Retranslatable, BlurLabel):
         # Detail 尺寸变化时，面板要跟着铺满（前提是已经创建）
         if hasattr(self, "panel"):
             self.panel.setGeometry(self.rect())
+        # 快速预览提示条贴底居中
+        if getattr(self, "preview_hint", None) is not None:
+            self._place_preview_hint()

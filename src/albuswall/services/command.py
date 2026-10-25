@@ -769,12 +769,6 @@ def _build_setting_groups() -> list[Any]:
             "window_state", WindowPresenterConfs.window_state_file_name,
             label="Window state file name",
         ),
-        setting_item(
-            "keymap", WindowPresenterConfs.keymap_file_name,
-            label="Key bindings file name",
-            description="JSON file holding the key bindings overrides "
-                        "(live in the config directory).",
-        ),
         setting_item("db", DbConfig.db_file, label="Database file name"),
         setting_item(
             "log", LogConf.log_file, label="Log config file name",

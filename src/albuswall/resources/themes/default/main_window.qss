@@ -1499,11 +1499,18 @@ QPushButton#DetailCloseButton:focus,
 
 
 /* ---------------------------------------------------------------------------
- *  3.5b  Setting Keymap  ·  「按键映射」页
+ *  3.5b  Setting Keymap  ·  「按键映射」页（按键 → 一个或多个操作）
  * ---------------------------------------------------------------------------
  *  · #SettingKeymapPage            页面说明 / 搜索 / 总开关
- *  · #SettingKeymapRow             一行「动作 + QKeySequenceEdit + ↺」
- *  · #SettingKeymapId              动作 id（小号灰字）
+ *  · #SettingKeymapAdd             新增绑定表单（按键 + 操作 + 参数 + Add）
+ *  · #SettingKeymapRow             一个按键：QKeySequenceEdit + 操作列表 + ↺
+ *  · #SettingKeymapEntry           一个操作：序号 + 动作 + 参数 + ×
+ *  · #SettingKeymapEntryOrder      执行顺序序号（登记顺序）
+ *  · #SettingKeymapBadge           `default` 徽标（来自代码里的默认键位）
+ *  · #SettingKeymapId              动作 id / 组件路径（小号灰字）
+ *  · #SettingKeymapArgLabel        参数名
+ *  · #SettingKeymapArgEditor       参数输入框 / 下拉框
+ *  · #SettingKeymapPicker*         动作选择器（组件树 + 搜索 + 预览）
  *  行内标签 / 说明 / 错误沿用 3.5 的 #SettingRowLabel 等通用选择器；
  *  QKeySequenceEdit 内部的 QLineEdit 按行选择器补一套输入胶囊样式。
  * --------------------------------------------------------------------------- */
@@ -1568,6 +1575,76 @@ QPushButton#DetailCloseButton:focus,
 #SettingSetting #SettingKeymapPage QCheckBox::indicator:checked {
     background-color: rgba(0, 122, 255, 0.95);
     border: 1px solid rgba(0, 122, 255, 1.0);
+}
+
+/* 新增绑定表单：一整块略亮的卡片，和下面的按键行区分开 */
+#SettingSetting #SettingKeymapAdd {
+    border: 1px solid rgba(90, 90, 90, 0.60);
+    border-radius: 10px;
+    background-color: rgba(28, 28, 28, 0.55);
+}
+
+/* 一个按键一段：底部细分割线 */
+#SettingSetting #SettingKeymapRow {
+    border-bottom: 1px solid rgba(90, 90, 90, 0.25);
+}
+
+/* 一个操作：左侧细竖条 + 序号 */
+#SettingSetting #SettingKeymapEntry {
+    border-left: 2px solid rgba(0, 122, 255, 0.35);
+    padding-left: 8px;
+}
+
+#SettingSetting #SettingKeymapEntryOrder {
+    font-weight: normal;
+    font-size: 0.78em;
+    color: rgba(0, 122, 255, 0.85);
+    min-width: 1.4em;
+}
+
+#SettingSetting #SettingKeymapBadge {
+    font-weight: normal;
+    font-size: 0.72em;
+    color: rgba(220, 220, 220, 0.75);
+    border: 1px solid rgba(140, 140, 140, 0.55);
+    border-radius: 6px;
+    padding: 0 6px;
+}
+
+#SettingSetting #SettingKeymapArgLabel {
+    font-weight: normal;
+    font-size: 0.82em;
+    color: rgba(190, 190, 190, 0.90);
+}
+
+#SettingSetting #SettingKeymapArgEditor {
+    min-height: 24px;
+    padding: 0 10px;
+    border: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 12px;
+    background-color: rgba(20, 20, 20, 0.75);
+    color: rgba(240, 240, 240, 0.95);
+}
+
+#SettingSetting #SettingKeymapArgEditor:focus,
+#SettingSetting #SettingKeymapArgEditor:hover {
+    border: 1px solid rgba(0, 122, 255, 0.85);
+}
+
+/* 动作选择器 */
+#SettingSetting #SettingKeymapPickerTree {
+    border: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 10px;
+    background-color: rgba(20, 20, 20, 0.80);
+    color: rgba(235, 235, 235, 0.95);
+}
+
+#SettingSetting #SettingKeymapPickerTree::item:selected {
+    background-color: rgba(0, 122, 255, 0.45);
+}
+
+#SettingSetting #SettingKeymapPickerTree::item:hover {
+    background-color: rgba(70, 70, 70, 0.55);
 }
 
 
