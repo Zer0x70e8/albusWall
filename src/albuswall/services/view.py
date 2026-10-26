@@ -5,6 +5,10 @@ from logging import getLogger
 from typing import TYPE_CHECKING, NamedTuple, Optional, Union
 from uuid import UUID
 
+from albuswall.common.constants.albums import (
+    VIRTUAL_ALBUM_ALL_UUID,
+    VIRTUAL_ALBUM_TRASH_UUID,
+)
 from albuswall.log import TRACE, Logger
 from albuswall.dto.album import Album, Asset
 from albuswall.utils.time import now_str
@@ -23,8 +27,9 @@ _MODULE_STARTED_AT: str = now_str()
 # 公开常量
 # ======================================================================
 
-VIRTUAL_ALBUM_ALL_UUID: UUID = UUID("00000000-0000-0000-0000-000000000001")
-VIRTUAL_ALBUM_TRASH_UUID: UUID = UUID("00000000-0000-0000-0000-000000000002")
+# 系统相册哨兵 uuid 的唯一真源在 ``common/constants/albums.py``（A1 下沉），
+# 这里 import 后按原名再导出：``services.view.VIRTUAL_ALBUM_*`` 旧路径不变。
+# 判定函数见 ``ViewRepository.is_system_album`` / ``is_trash_album``。
 
 SCOPE_ACTIVE: str = "active"
 SCOPE_DELETED: str = "deleted"

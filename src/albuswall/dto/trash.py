@@ -6,8 +6,11 @@
 
 * Query         —— ``TrashState``（单例行状态）/ ``TrashedAsset``（列表项 / 详情）；
 * 命令侧写前读   —— ``PurgeCandidate``（``find_expired``/``find_any_deleted`` → ``purge_batch``）；
-* 事件与结果     —— ``RestoreReport`` / ``PurgeReport`` / ``CleanupReport`` 及其子结构
-  （``RestoreConflict`` / ``ThumbFailure`` / ``ClockJump``）。
+* 事件与结果     —— ``RestoreReport`` / ``CleanupReport`` 及其子结构
+  （``RestoreConflict`` / ``ThumbFailure`` / ``ClockJump``）；
+* ``PurgeReport`` —— **不在本模块定义**：唯一版本在 ``dto/asset/events.py``
+  （uuid 面，七字段）。本模块只做**惰性再导出**，保证旧 import 路径
+  ``from albuswall.dto.trash import PurgeReport`` 继续可用（D3）。
 
 边界契约
 --------
@@ -188,25 +191,32 @@ class RestoreReport:
 
 
 @dataclass(frozen=True, slots=True)
-class PurgeReport:
-    """物理清除结果。
-
-    * ``purged``：实际删除的 id 列表（Service 需要它定位缩略图目录）。
-    * ``thumb_failures``：缩略图清理失败的 ``(asset_id, error)`` 列表。
-      DB 层已删，文件残留不会回滚——这条信息用于上层记录告警。
-    """
-    purged: List[int]
-    thumb_failures: List[ThumbFailure]
-
-
-@dataclass(frozen=True, slots=True)
 class CleanupReport:
     """一轮清理周期的完整结果。
 
-    * ``purged``：本轮物理删除的 id 列表。
+    * ``purged``：本轮物理删除的资产 uuid 列表（与 ``PurgeReport.purged``
+      同源——物理清除报告已收敛为 uuid 面，见 ``dto/asset/events.py``）。
     * ``clock_jump``：本轮对系统时钟的诊断结论，见 ``ClockJump``。
     * ``state``：更新后的水位状态，方便上层直接展示。
     """
-    purged: List[int]
+    purged: List[UUID]
     clock_jump: ClockJump
     state: TrashState
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 兼容再导出（D3）：PurgeReport 的唯一版本在 dto/asset/events.py
+# ──────────────────────────────────────────────────────────────────────
+# 为什么用模块级 ``__getattr__`` 而不是顶部 import：
+#   ``dto/asset/events.py`` 需要 ``from albuswall.dto.trash import ThumbFailure``，
+#   顶部 import 会形成 ``dto.trash ↔ dto.asset.events`` 的循环，且哪个模块先被
+#   import 决定谁 ImportError。惰性再导出把依赖推到"真正有人取 PurgeReport 时"，
+#   两个方向的 import 顺序都成立。
+def __getattr__(name: str):
+    """惰性再导出 ``PurgeReport``（PEP 562）。"""
+    if name == "PurgeReport":
+        from albuswall.dto.asset.events import PurgeReport
+
+        globals()["PurgeReport"] = PurgeReport
+        return PurgeReport
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

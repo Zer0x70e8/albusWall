@@ -7,6 +7,7 @@ from albuswall.log import getLogger
 from albuswall.core import Container, Application
 from albuswall.utils.registry import register_all, build_getters
 from albuswall.utils.signals import Signal
+from .asset_ops import AssetOpsService
 from .asset_tag import AssetTagService
 
 from .source import SourceService
@@ -59,6 +60,7 @@ class Services(TypedDict):
     source_trash_service: SourceTrashService
     tag_service: TagService
     asset_tag_service: AssetTagService
+    asset_ops_service: AssetOpsService
 
 
 # ---------- 构建表：声明每个服务"怎么造" ----------
@@ -115,6 +117,15 @@ _ARG_MAP: Dict[str, Callable[[Any, Container], Any]] = {
         c.get("asset_repo"),
         c.get("tag_repo"),
         c.get("view_repo"),
+    ),
+    # 构造顺序：asset_repo / view_repo / trash_service 由容器懒加载，
+    # 本 lambda 只是声明依赖边；asset_ops_service 放在表尾，保证
+    # Services 的声明顺序与"依赖在前"一致（读起来即可核对依赖图）。
+    "asset_ops_service": lambda t, c: t(
+        c.get("asset_repo"),
+        c.get("view_repo"),
+        c.get("trash_service"),
+        c.get("asset_tag_service"),
     ),
 }
 

@@ -13,8 +13,10 @@
 （微秒 + 时区后缀会让比较静默失准）。
 """
 
-from typing import List, Optional
+from typing import List, Optional, Sequence, Union
+from uuid import UUID
 
+from albuswall.dto.utils import to_uuid
 from albuswall.dto.trash import (
     PurgeCandidate,
     TrashedAsset,
@@ -23,7 +25,7 @@ from albuswall.dto.trash import (
 from albuswall.repositories.base import BaseRepository
 from albuswall.utils.time import now_str
 
-from .utils.sql_helpers import placeholders
+from .utils.sql_helpers import as_uuid_str, chunked, placeholders
 
 
 class TrashRepository(BaseRepository):
@@ -68,6 +70,79 @@ class TrashRepository(BaseRepository):
             """,
             (asset_id,),
         )
+
+    def get_deleted_by_uuid(
+            self, asset_uuid: Union[UUID, str]
+    ) -> Optional[TrashedAsset]:
+        """按 uuid 取回收站里的单行（只在 ``is_deleted = 1`` 时命中）。
+
+        做什么：``SELECT ... FROM assets WHERE uuid = ? AND is_deleted = 1``。
+        返回：``TrashedAsset``（含内部 ``id``，仅供 ``TrashService`` 做
+        uuid→id 桥接使用，不对外暴露）；不在回收站 / uuid 不存在 → ``None``。
+        抛：不抛（非法 uuid → ``None``）。
+        前置条件：无。
+        原子性：单条只读查询，非事务；与后续 ``restore_batch`` 之间非原子
+        （并发恢复会让 UPDATE 变成 0 行，由调用链按"实际恢复"记账）。
+        关系：``get_deleted(asset_id)`` 的 uuid 版；前者保留给既有 id 面
+        调用点，两者不互相替代。
+        """
+        try:
+            uuid = as_uuid_str(to_uuid(asset_uuid))
+        except (ValueError, AttributeError, TypeError):
+            return None
+        return self._fetch_one_dto(
+            TrashedAsset,
+            f"""
+            SELECT {self._LIST_COLUMNS}
+              FROM assets
+             WHERE uuid = ? AND is_deleted = 1
+            """,
+            (uuid,),
+        )
+
+    def list_deleted_by_uuids(
+            self, asset_uuids: Sequence[Union[UUID, str]]
+    ) -> List[TrashedAsset]:
+        """按 uuid 批量取回收站里的行（G-R3 的批量桥接查询）。
+
+        做什么：``WHERE is_deleted = 1 AND uuid IN (...)``，超过
+        ``IN_CLAUSE_CHUNK`` 自动分片。
+        返回：命中的 ``TrashedAsset`` 列表（顺序不保证与入参一致）；
+        不在回收站 / uuid 不存在的**不会**出现在结果里——调用方用"缺失"
+        表达 not_found。
+        抛：不抛（非法 uuid 被跳过）。
+        前置条件：无。
+        原子性：只读快照；多分片之间不保证同一快照。
+        关系：``list_deleted(limit, offset)`` 的 uuid 定向版本（不分页、
+        不排序），不替代后者。
+        """
+        wanted: list[str] = []
+        seen: set[str] = set()
+        for value in asset_uuids:
+            try:
+                key = as_uuid_str(to_uuid(value))
+            except (ValueError, AttributeError, TypeError):
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            wanted.append(key)
+        if not wanted:
+            return []
+
+        rows: List[TrashedAsset] = []
+        for chunk in chunked(wanted):
+            rows.extend(self._fetch_all_dtos(
+                TrashedAsset,
+                f"""
+                SELECT {self._LIST_COLUMNS}
+                  FROM assets
+                 WHERE is_deleted = 1
+                   AND uuid IN ({placeholders(len(chunk))})
+                """,
+                tuple(chunk),
+            ))
+        return rows
 
     # ---------- 恢复 ----------
 

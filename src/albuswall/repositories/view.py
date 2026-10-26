@@ -19,18 +19,34 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 from uuid import UUID
 
+from albuswall.common.constants.albums import (
+    TRASH_ALBUM_UUIDS,
+    VIRTUAL_ALBUM_UUIDS,
+)
 from albuswall.dto.album import Album, Asset
 from albuswall.dto.utils import to_uuid
 
 from .base import BaseRepository
 from .utils.asset_order import order_by
-from .utils.sql_helpers import as_uuid_str
+from .utils.sql_helpers import as_uuid_str, chunked, placeholders
 from .utils.visibility import active_asset_where
 
 _UUIDLike = UUID | str
+
+
+def _safe_uuid(value: _UUIDLike) -> Optional[UUID]:
+    """把 uuid / 字符串安全解析成 ``UUID``；非法输入返回 ``None``（不抛）。
+
+    系统相册判定 / 相册存在性判定都宁愿回答 ``False`` 也不抛——传入
+    垃圾 uuid 是调用方的输入问题，不该让一个布尔判定炸掉整条写路径。
+    """
+    try:
+        return to_uuid(value)
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 # noinspection SpellCheckingInspection
@@ -178,6 +194,85 @@ class ViewRepository(BaseRepository):
         )
         return [to_uuid(row["uuid"]) for row in rows]
 
+    # ---------------- 系统相册判定 / 相册可见性 ----------------
+    # 语义唯一真源：``ui/builtin/library.py`` 的 is_system_album /
+    # is_trash_album（经 ViewService.get_scope + 哨兵 uuid 判定）与
+    # ``common/constants/albums.py``。本次下沉到仓储，供写服务直接守卫，
+    # 服务层不必 import UI 层。
+
+    def is_system_album(self, album_uuid: _UUIDLike) -> bool:
+        """该 uuid 是否为**系统相册**（虚拟相册 All / Trash）。
+
+        做什么：纯常量判定，与 ``ui/builtin/library.py::is_system_album``
+        （``view_service.get_scope(uuid) is not None``）等义——虚拟相册
+        有固定哨兵 uuid，且不落 ``albums`` 表。
+        返回：bool。未知 / 非法 / 不存在的 uuid 一律 ``False``。
+        抛：不抛。非法 uuid 字符串按"不是系统相册"处理（与 UI 现有实现
+        吞掉解析异常的行为一致）。
+        前置条件：无。**不查库**（虚拟相册没有对应的库行）。
+        原子性：不适用（纯内存判定）。
+        """
+        album = _safe_uuid(album_uuid)
+        return album is not None and album in VIRTUAL_ALBUM_UUIDS
+
+    def is_trash_album(self, album_uuid: _UUIDLike) -> bool:
+        """该 uuid 是否为**回收站相册**（scope = ``deleted`` 的虚拟相册）。
+
+        做什么：同 :meth:`is_system_album`，只是比较回收站哨兵集合。
+        返回：bool，未知 uuid → ``False``。
+        抛：不抛。
+        前置条件：无。不查库。
+        原子性：不适用。
+
+        说明：回收站**也是**系统相册，两个判定都返回 True。调用方要区分
+        原因时必须**先判 trash 再判 system**，否则 ``reason`` 会被
+        ``"system"`` 吞掉。
+        """
+        album = _safe_uuid(album_uuid)
+        return album is not None and album in TRASH_ALBUM_UUIDS
+
+    def album_exists(self, album_uuid: _UUIDLike) -> bool:
+        """相册行是否存在（**含已软删**）。
+
+        做什么：``SELECT 1 FROM albums WHERE uuid = ?``，不加
+        ``is_deleted`` 过滤——本方法回答"有没有这一行"，可见性由
+        :meth:`album_is_visible` 回答。
+        返回：bool。
+        抛：不抛（非法 uuid → False）。
+        前置条件：无。
+        原子性：单条只读查询，非事务。
+        关系：替代 ``get_album(...) is not None`` 的存在性用法——后者
+        带 ``is_deleted = 0`` 过滤，无法区分"不存在"与"已软删"。
+        """
+        album = _safe_uuid(album_uuid)
+        if album is None:
+            return False
+        row = self._fetchone(
+            "SELECT 1 FROM albums WHERE uuid = ?",
+            (as_uuid_str(album),),
+        )
+        return row is not None
+
+    def album_is_visible(self, album_uuid: _UUIDLike) -> bool:
+        """相册是否存在**且未软删**（可作写入目标 / 可列出）。
+
+        做什么：``SELECT 1 FROM albums WHERE uuid = ? AND is_deleted = 0``。
+        返回：bool。
+        抛：不抛（非法 uuid → False）。
+        前置条件：无。
+        原子性：单条只读查询，非事务。
+        关系：等价于 ``get_album(...) is not None`` 的存在性部分（不含封面
+        联表开销）；语义保持一致（``get_album`` 同样过滤 ``is_deleted``）。
+        """
+        album = _safe_uuid(album_uuid)
+        if album is None:
+            return False
+        row = self._fetchone(
+            "SELECT 1 FROM albums WHERE uuid = ? AND is_deleted = 0",
+            (as_uuid_str(album),),
+        )
+        return row is not None
+
     def count_assets(self, album_uuid: _UUIDLike) -> int:
         row = self._fetchone(
             f"""
@@ -269,6 +364,59 @@ class ViewRepository(BaseRepository):
             f"SELECT * FROM assets WHERE {where}",
             (as_uuid_str(asset_uuid),),
         )
+
+    def classify_by_uuids(
+            self, asset_uuids: Sequence[_UUIDLike]
+    ) -> dict[str, str]:
+        """一次批量查出每个 uuid 的可见性状态（G11）。
+
+        做什么：``SELECT uuid, CASE WHEN <active 条件> THEN 'active' ELSE
+        'deleted' END``，一次 ``IN (...)`` 查询（超过
+        ``IN_CLAUSE_CHUNK`` 自动分片，每片一条语句）。
+        active 条件与 ``get_asset(include_deleted=False)`` **同源**：
+        ``assets.is_deleted = 0`` 且所属 ``ingest_source.is_deleted = 0``。
+
+        返回：``{canonical uuid str: "active" | "deleted"}``。
+        键按项目批量查询约定是 ``str(UUID)``（见
+        ``repositories/utils/types.UuidKeyed``），**不含**不存在的 uuid
+        ——调用方用 "键缺失" 表达 missing，不要喂 ``None``。
+        抛：不抛（非法 uuid 被跳过，等价于"不存在"）。
+        前置条件：无。
+        原子性：只读快照（多分片之间不保证同一快照）。单条语句内一致。
+
+        关系：新语义接口，替代"逐条 ``get_asset(include_deleted=True/False)``
+        两次查询"的 N+1 分类法（服务层 ``AssetOpsService.classify_assets``
+        依赖它）。
+        """
+        wanted: list[str] = []
+        seen: set[str] = set()
+        for value in asset_uuids:
+            parsed = _safe_uuid(value)
+            if parsed is None:
+                continue
+            key = str(parsed)
+            if key in seen:
+                continue
+            seen.add(key)
+            wanted.append(key)
+        if not wanted:
+            return {}
+
+        result: dict[str, str] = {}
+        for chunk in chunked(wanted):
+            rows = self._fetchall(
+                f"""
+                SELECT uuid,
+                       CASE WHEN {self._ACTIVE_WHERE} THEN 'active'
+                            ELSE 'deleted' END AS state
+                  FROM assets
+                 WHERE uuid IN ({placeholders(len(chunk))})
+                """,
+                tuple(chunk),
+            )
+            for row in rows:
+                result[row["uuid"]] = row["state"]
+        return result
 
     # ==================================================================
     # 上/下一张定位（P2）——入参出参全是 uuid

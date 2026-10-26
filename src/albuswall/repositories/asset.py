@@ -22,9 +22,11 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from dataclasses import dataclass
+from typing import Optional, Sequence
 from uuid import UUID
 
+from albuswall.dto.utils import to_uuid
 from albuswall.utils.time import now_str
 
 from .base import BaseRepository
@@ -35,6 +37,106 @@ _UUIDLike = UUID | str
 
 # 「可见资产」条件（含 source 可见性）；成员增删的写入前置共用。
 _ACTIVE_ASSET_WHERE_A = active_asset_where("a")
+
+# 「相册-资产成员关系可写」条件：相册未软删 + 资产可见（含 source 可见）。
+#
+# 这是成员写入（``add_to_album`` / ``move_between_albums`` 的
+# ``INSERT OR IGNORE ... SELECT``）与成员判定（``memberships``）的**唯一
+# 条件来源**。复制一份的后果是"判定为不在相册 → 写入被 IGNORE 掉"这类
+# 静默漂移，因此禁止就地重写。
+_ALBUM_VISIBLE_WHERE = "al.is_deleted = 0"
+_MEMBERSHIP_VISIBLE_WHERE = f"{_ALBUM_VISIBLE_WHERE} AND {_ACTIVE_ASSET_WHERE_A}"
+
+# 成员写入语句（``add_to_album`` 与 ``move_between_albums`` 共用同一份 SQL）。
+# 绑定参数顺序固定：``(asset_uuid, album_uuid)``。
+#   · 表：``album_assets``（写）/ ``albums``（定位 album_id）/ ``assets``（定位 asset_id）
+#   · 条件：``al.is_deleted = 0`` 且资产可见（见 ``_MEMBERSHIP_VISIBLE_WHERE``）
+#   · ``asset_taken_at`` 冗余列从 ``assets.taken_at`` 同步
+_ADD_MEMBER_SQL = f"""
+    INSERT OR IGNORE INTO album_assets (album_id, asset_id, asset_taken_at)
+    SELECT al.id, a.id, a.taken_at
+      FROM albums AS al
+      JOIN assets AS a ON a.uuid = ?
+     WHERE al.uuid = ?
+       AND {_MEMBERSHIP_VISIBLE_WHERE}
+"""
+
+# 成员判定语句：``(album_uuid, *asset_uuids)``。
+# 命中即"该资产已经是该相册的成员，且满足成员可写条件"。
+_MEMBERSHIP_QUERY_SQL = f"""
+    SELECT a.uuid
+      FROM albums AS al
+      JOIN album_assets AS aa ON aa.album_id = al.id
+      JOIN assets AS a ON a.id = aa.asset_id
+     WHERE al.uuid = ?
+       AND a.uuid IN ({{ph}})
+       AND {_MEMBERSHIP_VISIBLE_WHERE}
+"""
+
+
+# ---------------------------------------------------------------------------
+# move_between_albums 的跳过原因（repo 层词汇，**不依赖 dto 层**）
+# ---------------------------------------------------------------------------
+class MoveSkipReason:
+    """``AssetRepository.move_between_albums`` 的单条跳过原因。
+
+    取值与 ``AssetOpsService`` 的 ``SkipReason`` 是两套词汇：repo 层只描述
+    "数据库视角发生了什么"，翻成领域/UI 语义由服务层负责（D4：repo 不
+    import ``dto.asset``）。``AssetOpsService`` 里的映射表与这里一一对应。
+    """
+
+    ASSET_MISSING: str = "asset_missing"
+    """资产 uuid 不存在。"""
+
+    ASSET_INVISIBLE: str = "asset_invisible"
+    """资产不可见（``assets.is_deleted = 1`` 或所属 source 已软删）。"""
+
+    SOURCE_INVISIBLE: str = "source_invisible"
+    """源相册不存在或已软删（源侧整体不可用，含源相册行缺失）。"""
+
+    DST_ALBUM_MISSING: str = "dst_album_missing"
+    """目标相册行不存在。"""
+
+    DST_ALBUM_DELETED: str = "dst_album_deleted"
+    """目标相册存在但已软删。"""
+
+    SRC_EQUALS_DST: str = "src_equals_dst"
+    """源相册与目标相册相同（纯 no-op，未写任何行）。"""
+
+    NOT_IN_SOURCE: str = "not_in_source"
+    """资产可见，但本来就不在源相册里。"""
+
+
+@dataclass(frozen=True, slots=True)
+class MoveSkip:
+    """repo 层的单条跳过记录（``asset_uuid`` + ``reason``）。
+
+    故意不复用 ``dto/asset/events.SkippedAsset``：repo 层不依赖 dto 层（D4），
+    由 ``AssetOpsService`` 翻译成对外 DTO。
+    """
+
+    asset_uuid: UUID
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class MoveOutcome:
+    """``move_between_albums`` 的 repo 层结果。
+
+    * ``moved``：**从源相册移除**（并按可写条件补进目标相册）的资产。
+      含"本来就在目标相册"的那些——它们只被从源相册摘掉，因此
+      ``already_in_target`` ⊆ ``moved``（服务层 docstring 同口径）。
+    * ``already_in_target``：``moved`` 中在移动前就已属于目标相册的子集，
+      仅供上层区分"这次真的加了新成员"与"只是从源侧摘掉"。
+    * ``skipped``：未处理的资产 + 原因（见 ``MoveSkipReason``）。
+    * ``noop_reason``：整批 no-op 的原因（目前只有 ``src_equals_dst``），
+      非 no-op 时为 ``None``。
+    """
+
+    moved: tuple[UUID, ...] = ()
+    already_in_target: tuple[UUID, ...] = ()
+    skipped: tuple[MoveSkip, ...] = ()
+    noop_reason: Optional[str] = None
 
 
 def _dedupe_uuids(values: Sequence[_UUIDLike]) -> list[str]:
@@ -119,6 +221,58 @@ class AssetRepository(BaseRepository):
             prefix=(now_str(),),
         )
 
+    def soft_delete_by_uuids(
+            self, asset_uuids: Sequence[_UUIDLike]
+    ) -> set[UUID]:
+        """批量软删，返回**实际被软删**的 uuid 集合（G2）。
+
+        做什么：按 ``IN (...)`` 分批，在**同一个事务**里先读"当前未软删的
+        行"，再对这些行写 ``is_deleted = 1, deleted_at = now``。返回值只
+        包含真的从 0 改成 1 的那些 uuid。
+        返回：``set[UUID]``。不存在的、已经软删的、以及事务内并发被改走
+        的 uuid 都**不在**集合里（调用方据此区分 changed / already_deleted）。
+        抛：底层 sqlite 异常直接穿透（事务已回滚，无部分生效）。
+        前置条件：无。
+        原子性：**单事务**；涉及表仅 ``assets``（``is_deleted`` /
+        ``deleted_at``）。``deleted_at`` 由 Python 侧 ``now_str()`` 生成，
+        与 ``soft_delete`` / ``soft_delete_many`` 同一时间口径。
+        ``trg_assets_modified_at`` 触发器会顺带刷新 ``modified_at``。
+
+        关系：语义同 ``soft_delete_many``，差别只在返回值——后者返回
+        rowcount，无法回答"哪几条真的变了"；本方法是 ``trash.changed``
+        的唯一可信来源。
+        """
+        uuids = _dedupe_uuids(asset_uuids)
+        if not uuids:
+            return set()
+
+        changed: set[UUID] = set()
+        with self._transaction() as conn:
+            for chunk in chunked(uuids):
+                rows = conn.execute(
+                    f"""
+                    SELECT uuid FROM assets
+                     WHERE is_deleted = 0
+                       AND uuid IN ({placeholders(len(chunk))})
+                    """,
+                    tuple(chunk),
+                ).fetchall()
+                confirmed = [row["uuid"] for row in rows]
+                if not confirmed:
+                    continue
+                conn.execute(
+                    f"""
+                    UPDATE assets
+                       SET is_deleted = 1,
+                           deleted_at = ?
+                     WHERE uuid IN ({placeholders(len(confirmed))})
+                       AND is_deleted = 0
+                    """,
+                    (now_str(), *confirmed),
+                )
+                changed.update(to_uuid(value) for value in confirmed)
+        return changed
+
     def restore(self, asset_uuid: _UUIDLike) -> int:
         """恢复单个软删资产（幂等：未删除返回 0 行）。"""
         cursor = self._execute(
@@ -193,16 +347,10 @@ class AssetRepository(BaseRepository):
         - 已存在的关系通过 INSERT OR IGNORE 跳过（天然幂等）；
         - ``asset_taken_at`` 冗余列从 ``assets.taken_at`` 同步。
         """
+        # 语句与条件来自模块级 ``_ADD_MEMBER_SQL``（与 ``memberships`` /
+        # ``move_between_albums`` 共用同一份，见文件头常量注释）。
         cursor = self._execute(
-            f"""
-            INSERT OR IGNORE INTO album_assets (album_id, asset_id, asset_taken_at)
-            SELECT al.id, a.id, a.taken_at
-              FROM albums AS al
-              JOIN assets AS a ON a.uuid = ?
-             WHERE al.uuid = ?
-               AND al.is_deleted = 0
-               AND {_ACTIVE_ASSET_WHERE_A}
-            """,
+            _ADD_MEMBER_SQL,
             (as_uuid_str(asset_uuid), as_uuid_str(album_uuid)),
         )
         return cursor.rowcount
@@ -226,6 +374,262 @@ class AssetRepository(BaseRepository):
             (as_uuid_str(album_uuid), as_uuid_str(asset_uuid)),
         )
         return cursor.rowcount
+
+    def memberships(
+            self,
+            album_uuid: _UUIDLike,
+            asset_uuids: Sequence[_UUIDLike],
+    ) -> dict[UUID, bool]:
+        """批量判定"这些资产是否**已经是该相册的成员**"（A2 / 原 G5）。
+
+        做什么：一次 ``IN (...)`` 批量查询（超过 ``IN_CLAUSE_CHUNK`` 自动
+        分片），条件与 ``add_to_album`` 的 ``INSERT ... SELECT``
+        **完全同源**（模块级 ``_MEMBERSHIP_VISIBLE_WHERE``）：
+        ``albums.is_deleted = 0`` 且资产可见（``assets.is_deleted = 0`` 且
+        所属 ``ingest_source.is_deleted = 0``）。
+        返回：``{UUID: bool}``，键是**归一化后的 UUID**（不是 str），
+        入参里的每个 uuid 都会出现在结果里。
+        语义边界：uuid 不存在 → ``False``（不抛、不区分"不存在"与"不可见"；
+        需要区分的调用方先用 ``ViewRepository.classify_by_uuids``）；
+        相册不存在 / 已软删 → 全部 ``False``。
+        抛：不抛（非法 uuid 字符串按"不是成员"处理）。
+        前置条件：无。
+        原子性：只读快照；多分片之间不保证同一快照。
+        关系：替代 ``ViewRepository.get_album_uuids_of_asset`` 的批量用法
+        （后者是逐资产 N+1，且不表达"可写成员关系"）。不影响
+        ``add_to_album`` / ``remove_from_album`` 的既有行为。
+        """
+        requested: list[UUID] = []
+        seen: set[UUID] = set()
+        for value in asset_uuids:
+            try:
+                parsed = to_uuid(value)
+            except (ValueError, AttributeError, TypeError):
+                continue
+            if parsed in seen:
+                continue
+            seen.add(parsed)
+            requested.append(parsed)
+        if not requested:
+            return {}
+
+        result: dict[UUID, bool] = {uuid: False for uuid in requested}
+        album = as_uuid_str(album_uuid)
+        for chunk in chunked([str(u) for u in requested]):
+            rows = self._fetchall(
+                _MEMBERSHIP_QUERY_SQL.replace(
+                    "{ph}", placeholders(len(chunk)),
+                ),
+                (album, *chunk),
+            )
+            for row in rows:
+                result[to_uuid(row["uuid"])] = True
+        return result
+
+    def move_between_albums(
+            self,
+            src_album_uuid: _UUIDLike,
+            dst_album_uuid: _UUIDLike,
+            asset_uuids: Sequence[_UUIDLike],
+    ) -> MoveOutcome:
+        """把一批资产从源相册移动到目标相册（A3 / 原 G9，**真原子**）。
+
+        做什么：在**一个事务**里完成"预读 → 从源相册删成员 → 按可写条件
+        补进目标相册"，返回 repo 层结果 ``MoveOutcome``。
+
+        事务范围（单事务 / 失败回滚范围）
+        ---------------------------------
+        ``with self._transaction()``：块内所有语句共用同一连接与同一事务；
+        任何一条抛异常（含 ``sqlite3.IntegrityError``）→ **整批回滚**，
+        数据回到调用前状态，异常原样穿透（本方法不吞、不翻译）。
+        涉及表：``albums``（只读：id / is_deleted）、``assets``（只读：
+        id / 可见性）、``album_assets``（读 + INSERT OR IGNORE + DELETE）。
+
+        判定全部基于**事务内预读**，不看 ``rowcount``：
+        ``moved`` / ``already_in_target`` / ``skipped`` 由预读结果决定。
+
+        与其它方法的关系
+        ----------------
+        * 新语义接口：替代"循环调用 ``remove_from_album`` + ``add_to_album``"
+          （那会拆成两条语句、两个事务，产生"删了没加"的中间态）；
+        * ``src == dst`` 早退：**不写任何行**，``noop_reason`` =
+          ``src_equals_dst``，``moved`` 为空；
+        * 不动 ``add_to_album`` / ``remove_from_album`` 的既有行为。
+
+        不碰 ``assets.modified_at``：只写 ``album_assets``。``album_assets``
+        没有触发器，若补写 ``modified_at`` 会被缩略图补齐队列当成"资产变了"
+        而重算缩略图——那是副作用，不是本方法该有的行为。
+        ``album_assets.added_at`` 也不改（本轮约定，见执行报告"默认处理"）。
+
+        磁盘文件契约：同文件头——不碰任何磁盘文件。
+
+        Args:
+            src_album_uuid: 源相册 uuid。
+            dst_album_uuid: 目标相册 uuid。
+            asset_uuids: 待移动资产 uuid；自动去重保序。
+
+        Returns:
+            ``MoveOutcome``。``already_in_target`` 是 ``moved`` 的子集
+            （既在源又在目标的资产只从源侧摘掉）。
+
+        抛：底层 sqlite 异常穿透（``IntegrityError`` 等，事务已回滚）。
+
+        前置条件：无（相册不存在 / 不可见都不抛，转成
+        ``skipped(dst_album_missing | dst_album_deleted | source_invisible)``；
+        目标侧原因优先于源侧，与服务层 skip 语义一致）。
+        """
+        uuids = _dedupe_uuids(asset_uuids)
+        if not uuids:
+            return MoveOutcome()
+
+        src = as_uuid_str(src_album_uuid)
+        dst = as_uuid_str(dst_album_uuid)
+        ordered = [to_uuid(value) for value in uuids]
+
+        with self._transaction() as conn:
+            # ---- 1. 预读相册：id + 是否软删（albums） ----
+            album_rows = conn.execute(
+                """
+                SELECT id, uuid, is_deleted
+                  FROM albums
+                 WHERE uuid IN (?, ?)
+                """,
+                (src, dst),
+            ).fetchall()
+            albums = {row["uuid"]: (row["id"], bool(row["is_deleted"]))
+                      for row in album_rows}
+            src_row = albums.get(src)
+            dst_row = albums.get(dst)
+
+            # ---- 2. 相册级不可用：目标优先（与 Service 的 skip 语义一致） ----
+            if dst_row is None:
+                return self._skip_all_move(
+                    ordered, MoveSkipReason.DST_ALBUM_MISSING,
+                )
+            if dst_row[1]:
+                return self._skip_all_move(
+                    ordered, MoveSkipReason.DST_ALBUM_DELETED,
+                )
+            if src_row is None or src_row[1]:
+                return self._skip_all_move(
+                    ordered, MoveSkipReason.SOURCE_INVISIBLE,
+                )
+
+            src_id, dst_id = src_row[0], dst_row[0]
+
+            # ---- 3. 预读资产：id + 可见性（assets + ingest_source） ----
+            by_uuid: dict[UUID, tuple[int, bool]] = {}
+            for chunk in chunked(uuids):
+                rows = conn.execute(
+                    f"""
+                    SELECT a.id, a.uuid,
+                           CASE WHEN {_ACTIVE_ASSET_WHERE_A}
+                                THEN 1 ELSE 0 END AS is_visible
+                      FROM assets AS a
+                     WHERE a.uuid IN ({placeholders(len(chunk))})
+                    """,
+                    tuple(chunk),
+                ).fetchall()
+                for row in rows:
+                    by_uuid[to_uuid(row["uuid"])] = (
+                        row["id"], bool(row["is_visible"]),
+                    )
+
+            # ---- 4. 预读成员关系（album_assets，两个相册一次查） ----
+            asset_ids = [by_uuid[u][0] for u in ordered if u in by_uuid]
+            in_src: set[UUID] = set()
+            in_dst: set[UUID] = set()
+            id_to_uuid = {
+                by_uuid[u][0]: u for u in ordered if u in by_uuid
+            }
+            for chunk in chunked(asset_ids):
+                rows = conn.execute(
+                    f"""
+                    SELECT album_id, asset_id
+                      FROM album_assets
+                     WHERE album_id IN (?, ?)
+                       AND asset_id IN ({placeholders(len(chunk))})
+                    """,
+                    (src_id, dst_id, *chunk),
+                ).fetchall()
+                for row in rows:
+                    uuid = id_to_uuid.get(row["asset_id"])
+                    if uuid is None:
+                        continue
+                    if row["album_id"] == src_id:
+                        in_src.add(uuid)
+                    if row["album_id"] == dst_id:
+                        in_dst.add(uuid)
+
+            # ---- 5. 逐条分类（全部基于预读） ----
+            skipped: list[MoveSkip] = []
+            already_in_target: list[UUID] = []
+            to_move: list[UUID] = []
+            for uuid in ordered:
+                info = by_uuid.get(uuid)
+                if info is None:
+                    skipped.append(MoveSkip(uuid, MoveSkipReason.ASSET_MISSING))
+                elif not info[1]:
+                    skipped.append(
+                        MoveSkip(uuid, MoveSkipReason.ASSET_INVISIBLE),
+                    )
+                elif uuid not in in_src:
+                    skipped.append(
+                        MoveSkip(uuid, MoveSkipReason.NOT_IN_SOURCE),
+                    )
+                else:
+                    to_move.append(uuid)
+                    if uuid in in_dst:
+                        already_in_target.append(uuid)
+
+            # ---- 6. src == dst 早退：不写任何行 ----
+            if src_id == dst_id:
+                return MoveOutcome(
+                    moved=(),
+                    already_in_target=tuple(already_in_target),
+                    skipped=tuple(skipped),
+                    noop_reason=MoveSkipReason.SRC_EQUALS_DST,
+                )
+
+            if not to_move:
+                return MoveOutcome(
+                    moved=(),
+                    already_in_target=(),
+                    skipped=tuple(skipped),
+                )
+
+            # ---- 7. 写入：先补目标（INSERT OR IGNORE，条件同 add_to_album），
+            #         再按预读的 (album_id, asset_id) 精确摘掉源侧 ----
+            for uuid in to_move:
+                conn.execute(
+                    _ADD_MEMBER_SQL, (str(uuid), dst),
+                )
+            remove_ids = [by_uuid[uuid][0] for uuid in to_move]
+            for chunk in chunked(remove_ids):
+                conn.execute(
+                    f"""
+                    DELETE FROM album_assets
+                     WHERE album_id = ?
+                       AND asset_id IN ({placeholders(len(chunk))})
+                    """,
+                    (src_id, *chunk),
+                )
+
+        return MoveOutcome(
+            moved=tuple(to_move),
+            already_in_target=tuple(already_in_target),
+            skipped=tuple(skipped),
+        )
+
+    @staticmethod
+    def _skip_all_move(
+            ordered: Sequence[UUID],
+            reason: str,
+    ) -> MoveOutcome:
+        """相册级不可用时，把整批输入统一标成该原因（内部小工具）。"""
+        return MoveOutcome(
+            skipped=tuple(MoveSkip(uuid, reason) for uuid in ordered),
+        )
 
     # ==================================================================
     # 标签成员

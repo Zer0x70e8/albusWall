@@ -22,21 +22,20 @@ from albuswall.repositories.asset import AssetRepository
 from albuswall.repositories.tag import TagRepository
 from albuswall.repositories.utils.types import UuidKeyed
 from albuswall.repositories.view import ViewRepository
+from albuswall.services.errors import AssetNotFound, AssetOpsError
 
 _UUIDLike = UUID | str
 
 
 # ============================== 错误 ==============================
 
-
-class AssetTagError(Exception):
-    """Asset × Tag 绑定错误基类。"""
-
-
-class AssetNotFound(AssetTagError):
-    def __init__(self, uuid: str):
-        super().__init__(f"asset not found: {uuid}")
-        self.uuid = uuid
+# ``AssetNotFound`` 全项目只保留一份定义（``services/errors.py``），本服务与
+# ``AssetOpsService`` 共用；此处按原名再导出，旧 import 路径
+# （``from albuswall.services.asset_tag import AssetNotFound``）不破坏。
+#
+# ``AssetTagError`` 保留为服务层异常基类的别名，既有 ``except AssetTagError``
+# 继续有效（``AssetNotFound`` 是 ``AssetOpsError`` 的子类，因此也被捕获）。
+AssetTagError = AssetOpsError
 
 
 # ============================== 结果 DTO ==============================
