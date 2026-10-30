@@ -1,7 +1,7 @@
 #
-"""``configue1`` —— 声明式配置系统（第二版）。
+"""``configue`` —— 声明式配置系统。
 
-和旧 ``albuswall.configue`` 相比，这一版把「声明」「加载」「访问」三层彻底
+和已删除的旧配置包相比，这一版把「声明」「加载」「访问」三层彻底
 分开，去掉了全局 ``configure_persistence``，并且把文件格式降级成可插拔后端：
 
 ==================  ============================================================
@@ -18,7 +18,7 @@
 
 典型用法::
 
-    from albuswall.configue1 import (
+    from albuswall.configue import (
         ConfigFile, Configue, configclass, field, reg,
     )
 
@@ -135,7 +135,7 @@ def register_load_hook(hook: Callable[[Any], None]) -> None:
 
     .. code-block:: python
 
-        from albuswall.configue1 import register_load_hook
+        from albuswall.configue import register_load_hook
 
         def _type_shortcuts(resolver):
             for key in resolver.keys_of("shortcuts"):
@@ -182,7 +182,7 @@ def register_converter(
 
     .. code-block:: python
 
-        from albuswall.configue1 import register_converter
+        from albuswall.configue import register_converter
 
         register_converter(
             QKeySequence,

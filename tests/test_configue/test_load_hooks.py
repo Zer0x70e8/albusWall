@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from albuswall.configue1 import (
+from albuswall.configue import (
     _LOAD_HOOKS,
     ConfigError,
     ConfigFile,
@@ -21,7 +21,7 @@ from albuswall.configue1 import (
     register_load_hook,
     unregister_load_hook,
 )
-from albuswall.configue1.registry import _FILES
+from albuswall.configue.registry import _FILES
 
 from .conftest import write_ini
 

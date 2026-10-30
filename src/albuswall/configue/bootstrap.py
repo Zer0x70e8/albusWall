@@ -91,7 +91,7 @@ def _declare_app_sections(
 
     两个类**定义在函数里**，因此：
 
-    - 导入 ``configue1`` 不会往全局登记表里塞节点，也不会因为
+    - 导入 ``configue`` 不会往全局登记表里塞节点，也不会因为
       ``get_temp_dir()`` 的 ``mkdir`` 产生导入期副作用；
     - 每次 ``setup_config`` 都重跑，``configclass`` 对同一 ``(file, path)``
       是幂等覆盖，测试清空全局表之后仍能重建。

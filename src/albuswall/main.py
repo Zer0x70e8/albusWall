@@ -7,8 +7,8 @@ import logging
 
 import albuswall
 from albuswall.command import registry_command_registry
-from albuswall.configue1.bootstrap import setup_config
-from albuswall.configue1.utils.platform_dir import (
+from albuswall.configue.bootstrap import setup_config
+from albuswall.configue.utils.platform_dir import (
     get_user_config_dir,
     get_user_data_dir,
 )

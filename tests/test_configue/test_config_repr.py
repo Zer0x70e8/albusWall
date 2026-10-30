@@ -15,7 +15,7 @@ from typing import Optional
 
 import pytest
 
-from albuswall.configue1 import (
+from albuswall.configue import (
     ConfigFile,
     Configue,
     configclass,

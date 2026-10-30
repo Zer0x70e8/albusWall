@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from albuswall.configue1 import (
+from albuswall.configue import (
     ConfigError,
     ConfigFile,
     Configue,
@@ -24,7 +24,7 @@ from albuswall.configue1 import (
     field,
     reg,
 )
-from albuswall.configue1.registry import _FILES
+from albuswall.configue.registry import _FILES
 
 from .conftest import read_json, write_ini, write_json
 

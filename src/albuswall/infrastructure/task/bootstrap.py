@@ -1,7 +1,7 @@
 #
 """"""
 
-from albuswall.configue1 import configclass
+from albuswall.configue import configclass
 from albuswall.core import Application, Container
 from albuswall.infrastructure.task.protocol import TaskServiceProtocol
 from albuswall.infrastructure.task.service import TaskService

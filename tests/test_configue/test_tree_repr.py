@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from albuswall.configue1 import ConfigFile, Configue, configclass, reg
+from albuswall.configue import ConfigFile, Configue, configclass, reg
 
 from .conftest import write_ini
 
@@ -71,7 +71,7 @@ def test_file_view_repr_not_loaded(tmp_path):
 def test_file_view_repr_unregistered(loaded):
     c = loaded
     # 直接构造一个指向未登记文件名的视图（模拟「reg 被覆盖/清理」的边界）
-    from albuswall.configue1.tree import _FileView
+    from albuswall.configue.tree import _FileView
 
     text = repr(_FileView(c, "ghost"))
     assert text == "_FileView(name='ghost', <unregistered>)"

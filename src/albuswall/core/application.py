@@ -37,7 +37,7 @@ class CoreApplication:
     _loop: Lazy[MainLoop] = Lazy(HeadlessMainLoop)
     # 配置单例不再挂在这里：旧包的 ``configure = Lazy(Configue)`` 是无参构造，
     # 新包 ``Configue(base_dir)`` 必须显式给根目录，于是由
-    # ``configue1.bootstrap.setup_config(container)`` 装配后注册进容器。
+    # ``configue.bootstrap.setup_config(container)`` 装配后注册进容器。
     # 取用方式：``container.require("config")`` / ``container.require("configue")``。
 
     def __init__(self, main_loop: MainLoop | None = None) -> None:

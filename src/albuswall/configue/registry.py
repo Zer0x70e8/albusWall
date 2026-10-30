@@ -361,7 +361,7 @@ def _resolve_base_dir() -> Path | None:
 
     仅在 ``exists_check=True`` 时调用。默认路径（``False``）下导入期零 IO。
     """
-    pkg = __name__.rsplit(".", 1)[0]  # "albuswall.configue1"
+    pkg = __name__.rsplit(".", 1)[0]  # "albuswall.configue"
     for modname in (pkg, pkg + ".configue"):
         try:
             mod = importlib.import_module(modname)

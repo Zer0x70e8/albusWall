@@ -1,7 +1,7 @@
 #
-"""``albuswall.configue1`` 的测试隔离。
+"""``albuswall.configue`` 的测试隔离。
 
-``configue1`` 的登记表是**进程全局**的（这是设计：导入期注册、运行期只读），
+``configue`` 的登记表是**进程全局**的（这是设计：导入期注册、运行期只读），
 所以每个用例前后都必须：
 
 1. 关掉上一个单例（顺带 flush + 注销 atexit）；
@@ -22,8 +22,8 @@ from typing import Any
 
 import pytest
 
-from albuswall.configue1 import _LOAD_HOOKS, _PENDING_CONVERTERS, Configue
-from albuswall.configue1.registry import _CLASSES, _FIELD_OWNER, _FILES, _PATHS
+from albuswall.configue import _LOAD_HOOKS, _PENDING_CONVERTERS, Configue
+from albuswall.configue.registry import _CLASSES, _FIELD_OWNER, _FILES, _PATHS
 
 
 def _teardown_singleton() -> None:
@@ -41,7 +41,7 @@ def _teardown_singleton() -> None:
 
 
 @pytest.fixture(autouse=True)
-def isolated_configue1():
+def isolated_configue():
     """每个用例一张全新的登记表 + 全新单例。"""
     _teardown_singleton()
     try:

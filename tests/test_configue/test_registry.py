@@ -1,5 +1,5 @@
 #
-"""``configue1.registry``：数据结构、reg()、@configclass 与前置修复回归。
+"""``configue.registry``：数据结构、reg()、@configclass 与前置修复回归。
 
 对应上一轮 review 的 5 项修复，逐条有用例：
 
@@ -19,7 +19,7 @@ from typing import Any, ClassVar, Optional
 
 import pytest
 
-from albuswall.configue1 import (
+from albuswall.configue import (
     ConfigError,
     ConfigFile,
     ConfigFileNotFound,
@@ -29,7 +29,7 @@ from albuswall.configue1 import (
     field,
     reg,
 )
-from albuswall.configue1.registry import (
+from albuswall.configue.registry import (
     _CLASSES,
     _FILES,
     MISSING,

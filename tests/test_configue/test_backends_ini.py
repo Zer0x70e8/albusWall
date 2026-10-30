@@ -1,5 +1,5 @@
 #
-"""``configue1.backends.ini``：read / write / resolve / serialize 单个后端。"""
+"""``configue.backends.ini``：read / write / resolve / serialize 单个后端。"""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from albuswall.configue1 import ConfigError, ConfigFile, get_backend
-from albuswall.configue1.backends import resolve_candidates
-from albuswall.configue1.backends.ini import DELETE, INIBackend
-from albuswall.configue1.registry import ConfigFileNotFound
+from albuswall.configue import ConfigError, ConfigFile, get_backend
+from albuswall.configue.backends import resolve_candidates
+from albuswall.configue.backends.ini import DELETE, INIBackend
+from albuswall.configue.registry import ConfigFileNotFound
 
 from .conftest import write_ini
 

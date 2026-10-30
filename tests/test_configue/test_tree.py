@@ -1,5 +1,5 @@
 #
-"""``configue1.tree``：``_ConfigTree`` / ``_FileView`` / ``_SectionView``。"""
+"""``configue.tree``：``_ConfigTree`` / ``_FileView`` / ``_SectionView``。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from albuswall.configue1 import (
+from albuswall.configue import (
     ConfigFile,
     Configue,
     configclass,
@@ -114,7 +114,7 @@ def test_section_view_write_requires_loaded(tmp_path):
 
     # 未加载时连 _FileView -> _SectionView 都拿不到（AttributeError），
     # 这里直接构造 section view 验证写入守卫。
-    from albuswall.configue1.tree import _SectionView
+    from albuswall.configue.tree import _SectionView
 
     view = _SectionView(c, "main", ("core",))
     with pytest.raises(RuntimeError, match="not loaded"):

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from albuswall.configue1 import (
+from albuswall.configue import (
     _PENDING_CONVERTERS,
     ConfigFile,
     Configue,
@@ -22,7 +22,7 @@ from albuswall.configue1 import (
     reg,
     register_converter,
 )
-from albuswall.configue1.registry import _FILES
+from albuswall.configue.registry import _FILES
 
 from .conftest import write_ini
 

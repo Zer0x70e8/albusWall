@@ -33,7 +33,7 @@ from configparser import (
     NoOptionError,
     NoSectionError,
 )
-from enum import Enum  # configue1: _deconvert 的 Enum 分支需要，原本是注释掉的
+from enum import Enum  # configue: _deconvert 的 Enum 分支需要，原本是注释掉的
 from pathlib import Path
 from pprint import pformat
 from typing import Any, Callable, Dict, Optional, Union, get_args, get_origin

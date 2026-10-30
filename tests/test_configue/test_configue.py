@@ -1,9 +1,9 @@
 #
-"""``configue1.Configue``：单例、check()、load()、unload()、flush()、close()。
+"""``configue.Configue``：单例、check()、load()、unload()、flush()、close()。
 
 覆盖范围对照实现 prompt 的「边界行为表」。
 
-注意：``configue1`` 的登记表是进程全局的，而 conftest 的 autouse fixture 每个
+注意：``configue`` 的登记表是进程全局的，而 conftest 的 autouse fixture 每个
 用例都会清空它，因此配置类必须**在 fixture 里声明**，不能在模块顶层定义。
 """
 
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from albuswall.configue1 import (
+from albuswall.configue import (
     ConfigError,
     ConfigFile,
     ConfigMissingError,
@@ -24,7 +24,7 @@ from albuswall.configue1 import (
     field,
     reg,
 )
-from albuswall.configue1.registry import _CLASSES, _FILES
+from albuswall.configue.registry import _CLASSES, _FILES
 
 from .conftest import write_ini
 

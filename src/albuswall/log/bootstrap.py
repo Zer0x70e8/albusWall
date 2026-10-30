@@ -8,8 +8,8 @@ from pathlib import Path
 from pprint import pformat
 
 import albuswall
-from albuswall.configue1 import Configue, configclass
-from albuswall.configue1.utils.platform_dir import get_user_config_dir
+from albuswall.configue import Configue, configclass
+from albuswall.configue.utils.platform_dir import get_user_config_dir
 from albuswall.core import Container
 
 from .common import to_levelno

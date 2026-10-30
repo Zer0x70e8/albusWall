@@ -1,10 +1,13 @@
 # albuswall.configue → albuswall.configue1 升级指南
 
 > 面向：本项目的使用者（改 `config.ini` 的人）与未来的维护者（读/改配置层的人）。
-> 状态：迁移已完成。旧包 `albuswall.configue` **已从代码库删除**，
-> `import albuswall.configue` 现在抛 `ModuleNotFoundError`。本次删除没有打 tag：
-> 删除前最后一个仍含旧包的提交是 `55b1b173d4394203fda9f2760ea5688cb3050d71`
-> （下文简称 `55b1b17`），需要翻阅旧实现时用这个哈希追溯。
+> 状态（历史）：本次迁移把旧包拆成新包 `albuswall.configue1`；迁移完成后旧包已删除
+> （commit `bab0ed2`，删除前最后一个仍含旧包的提交是
+> `55b1b173d4394203fda9f2760ea5688cb3050d71`，下文简称 `55b1b17`）。
+> 状态（当前）：紧随其后的一轮已把 `configue1` **改名回 `configue`**，仓库里现在只有
+> 一个配置包 `albuswall.configue`（即本文所说的「新包」），`import albuswall.configue1`
+> 会抛 `ModuleNotFoundError`。**下文凡写 `configue1` 的地方都是历史叙述**，阅读时理解为
+> 「现在的 `albuswall.configue`」即可。
 
 ---
 
@@ -153,6 +156,9 @@
 
 ## 5. 装配方式（维护者视角）
 
+> 本节代码片段里的 `albuswall.configue1` 是历史名；当前可直接照抄，只需把
+> `configue1` 换成 `configue`。
+
 ### 5.1 `setup_config`
 
 ```python
@@ -195,55 +201,62 @@ TaskConfig().max_concurrency = 4  # 写：严格 isinstance；按文件 autosave
 
 ---
 
-## 6. 旧包状态：已移除
+## 6. 旧包状态：已移除（包名后来被复用）
 
-- `src/albuswall/configue/` 已随本轮提交删除，`import albuswall.configue` 现在抛
-  `ModuleNotFoundError`；业务链路只走 `albuswall.configue1`。
+- 旧实现 `src/albuswall/configue/` 已随 commit `bab0ed2` 删除；旧包唯一的回归防线
+  `tests/test_configue_legacy_smoke.py` 一并删除。
 - **没有打 tag**。删除前最后一个包含旧包的提交是
   `55b1b173d4394203fda9f2760ea5688cb3050d71`；要看旧实现用
   `git show 55b1b17:src/albuswall/configue/configue.py` 之类的方式追溯。
+- **包名已被复用，验证方式要跟着反过来**：紧随其后的一轮把 `src/albuswall/configue1/`
+  改名回 `src/albuswall/configue/`，所以 `import albuswall.configue` 现在导入的是**新实现**
+  （成功是正常的），要确认旧包确实不在，断言应改为
+  `python -c "import albuswall.configue1"` → `ModuleNotFoundError`。
 - 迁移期间旧包 `utils/ini_parser.py::_convert` 修过 3 个 bug，这些修复只对旧包有意义，
-  随包一并消失（`configue1` 的转换实现是独立重写的）：
+  随包一并消失（新包的转换实现是独立重写的）：
   1. 容器分支（`dict/list/tuple/set`）被缩进在 Union 分支里 → 非 Union 泛型永远走不到
      （`list[str]` 退化成逐字符）；
   2. `origin is Union` 不认 `types.UnionType` → Python 3.10–3.13 上 `int | None` 抛
      `TypeError`（3.14 里两者同一对象，测不出来）；
   3. `dict[str, Path]` 是第 1 条的连带受害者。
-- 旧包唯一的回归防线 `tests/test_configue_legacy_smoke.py` 已随之删除。
 
 ---
 
 ## 7. 验证清单
 
 ```bash
-python -m pytest -q                      # 全量
-python -m pytest tests/test_configue1 -q # 新包
+python -m pytest -q                     # 全量
+python -m pytest tests/test_configue -q # 配置包
 ```
 
-旧包已删除，两项强断言：
+旧包已删除，按顺序做三项强断言（顺序有意义：第 1 项没做，第 2 项会假绿）：
 
-```bash
-# 1) 旧包不可导入，且异常类型必须是 ModuleNotFoundError
-python -c "import albuswall.configue"    # 期望：ModuleNotFoundError: No module named 'albuswall.configue'
-
-# 2) 业务链路能 bootstrap 起来（无头：QT_QPA_PLATFORM=offscreen；把 XDG 各目录
-#    指到可写位置即可，例如临时目录）
-QT_QPA_PLATFORM=offscreen python -m albuswall
-# 期望日志中出现：Program boot registry finished. / Program bootstrap completed.
-# 该进程是常驻主循环，确认上述两行后 Ctrl-C 即可
-```
+1. **清字节码残留。** 残留的 `__pycache__` 会让一个只剩空目录的包路径变成 PEP 420
+   namespace package，`import` 会**静默成功**而非报错。验证前先执行
+   `find src/albuswall tests -name '__pycache__' -type d -prune -exec rm -rf {} +`
+   （或 `git clean -fdx src/`），并确认 `find src/albuswall -name configue1 -type d`
+   无输出，再跑下面第 2 项。
+2. **旧包的名字不可导入，且异常类型必须是 `ModuleNotFoundError`。**
+   `python -c "import albuswall.configue1"`
+   → 期望 `ModuleNotFoundError: No module named 'albuswall.configue1'`。
+   （注意不是 `import albuswall.configue`：那个名字现在属于改名后的新包。）
+3. **业务链路能 bootstrap 起来。**
+   `QT_QPA_PLATFORM=offscreen python -m albuswall`（无头；把 `XDG_CONFIG_HOME` /
+   `XDG_DATA_HOME` / `XDG_CACHE_HOME` / `XDG_STATE_HOME` / `XDG_RUNTIME_DIR` 指到可写
+   位置，例如临时目录）→ 期望日志中出现 `Program boot registry finished.` 与
+   `Program bootstrap completed.`。该进程是常驻主循环，确认这两行后 Ctrl-C 即可。
 
 关键测试文件：
 
 | 文件 | 覆盖点 |
 |---|---|
-| `tests/test_configue1/test_configue.py` | 单例 / check / load / unload / flush / close / autosave 策略 |
-| `tests/test_configue1/test_optional_files.py` | `optional` / `ignore_missing` / 不隐藏 read 错误 |
-| `tests/test_configue1/test_app_bootstrap.py` | `setup_config`、`portable` 布局、log/task/db 读取 |
-| `tests/test_configue1/test_load_hooks.py` | 加载钩子、hook 失败语义 |
-| `tests/test_configue1/test_backends_*.py` | INI / JSON 后端 |
-| `tests/test_configue1/test_mixed_backends.py` | 两种格式混用、跨格式覆盖 |
-| `tests/test_configue1/test_registry.py`、`test_slots.py`、`test_registry` 等 | 声明层 / 描述符 / repr |
+| `tests/test_configue/test_configue.py` | 单例 / check / load / unload / flush / close / autosave 策略 |
+| `tests/test_configue/test_optional_files.py` | `optional` / `ignore_missing` / 不隐藏 read 错误 |
+| `tests/test_configue/test_app_bootstrap.py` | `setup_config`、`portable` 布局、log/task/db 读取 |
+| `tests/test_configue/test_load_hooks.py` | 加载钩子、hook 失败语义 |
+| `tests/test_configue/test_backends_*.py` | INI / JSON 后端 |
+| `tests/test_configue/test_mixed_backends.py` | 两种格式混用、跨格式覆盖 |
+| `tests/test_configue/test_registry.py`、`test_slots.py`、`test_registry` 等 | 声明层 / 描述符 / repr |
 
 ---
 
@@ -262,13 +275,21 @@ QT_QPA_PLATFORM=offscreen python -m albuswall
   `main`；`tree.machine.x` 读到的还是 `v`。视图隔离的是写回落点，不是值。
 - **`unload()` 只回退内存**：写过盘之后再 `unload()`，磁盘上的值不会回滚。
 - **`declared_keys()` / `as_typed_dict()`**：尚未提供。
-- **`configue1` 的 logger 名是混合状态（有意保留的已知遗留）**：
-  `configue1/configue.py`、`configue1/registry.py` 用 `logging.getLogger(__name__)`，
-  logger 名是 `albuswall.configue1.*`；但 `configue1/utils/ini_parser.py` **硬编码**
-  `logging.getLogger(f"{albuswall.__name__}.configue")`，所以 ini_parser 的日志落在
-  `albuswall.configue` 这个 logger 上。因此 `resources/config/log_config.ini` 里的
-  `[logger_albuswall.configue]`（以及 `keys=`、`qualname=` 行）**当前是活配置，不是死配置**，
-  本轮刻意不动它。等后续把 `configue1` 目录改名回 `configue` 后，其余模块的
-  `__name__` 自动变成 `albuswall.configue.*`，会一并汇入同一个 logger，届时这段遗留自然消解。
+- **`configue/utils/ini_parser.py` 硬编码 `albuswall.configue` 作 logger 名**（这是
+  复制旧代码带来的，本轮改名时刻意没动），故 `resources/config/log_config.ini` 的
+  `[logger_albuswall.configue]`（以及 `keys=`、`qualname=` 行）**是活配置，不是死配置**。
+  实测证据（改名后）：
+  - `configue/utils/ini_parser.py` 的 `logger.name == "albuswall.configue"`
+    —— 与 ini 里的 `qualname` 精确匹配；
+  - `configue/configue.py` / `configue/registry.py` 走 `logging.getLogger(__name__)`，
+    名字随改名为 `albuswall.configue.configue` / `albuswall.configue.registry`，
+    作为 `albuswall.configue` 的子 logger 传播到 ini 配置的那套 handler（全量生效）。
+  - 注意 ini 里 `[logger_albuswall.configue]` 的 `handlers=` 是**空的**，这是原设计：
+    该条目只负责给这一族 logger 定级别和 `qualname`，handler 挂在 `[logger_root]`
+    （即 `logging.getLogger("")`）上，靠 propagate 落盘/打屏。所以「
+    `logging.getLogger("albuswall.configue").handlers` 非空」**不是**这条配置的正确
+    断言，正确的断言是：这条 logger 的 `level` 被 ini 设上了，且子 logger 的日志能
+    从 ini 的 handler 出来。
+  **不要因为「看起来像旧包遗留」就删掉 `log_config.ini` 里的这一段。**
 - **首次启动不复制默认 `conf.ini`**：README 里「defaults copied to ~/.config」这句在代码
   中没有对应实现；当前行为是「没有文件就按默认值跑，首次保存时才创建」。

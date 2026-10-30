@@ -1,11 +1,11 @@
 #
-"""``configue1.resolver``：origin / definitions / dirty / forget_file。"""
+"""``configue.resolver``：origin / definitions / dirty / forget_file。"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from albuswall.configue1.resolver import Resolver
+from albuswall.configue.resolver import Resolver
 
 LOW = Path("/tmp/low.ini")
 HIGH = Path("/tmp/high.ini")

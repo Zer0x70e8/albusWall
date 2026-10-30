@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from albuswall.configue1 import (
+from albuswall.configue import (
     ConfigError,
     ConfigFile,
     ConfigMissingError,
@@ -24,8 +24,8 @@ from albuswall.configue1 import (
     field,
     reg,
 )
-from albuswall.configue1.bootstrap import setup_config
-from albuswall.configue1.registry import _FILES
+from albuswall.configue.bootstrap import setup_config
+from albuswall.configue.registry import _FILES
 from albuswall.core import Container
 
 

@@ -1,7 +1,7 @@
 #
 """"""
 
-from albuswall.configue1 import configclass
+from albuswall.configue import configclass
 from albuswall.core import Application, Container
 
 from .connector import Connector
@@ -13,7 +13,7 @@ class Config:
     """``[db]`` 段。
 
     ``db_file`` 在旧包里是 ``ConfigField("files", "db")``（挂在 ``[files]`` 段），
-    迁移后由 ``configue1.bootstrap`` 的 ``[files]`` 声明统一提供
+    迁移后由 ``configue.bootstrap`` 的 ``[files]`` 声明统一提供
     （``tree.files.db``），这里只留 ``[db]`` 自己的键。
 
     ``root = ConfigField("db", default={})`` 的「确保段存在」不再需要：

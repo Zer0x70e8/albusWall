@@ -1,5 +1,5 @@
 #
-"""应用装配：``configue1.bootstrap.setup_config`` + 三个依赖点的读值路径。
+"""应用装配：``configue.bootstrap.setup_config`` + 三个依赖点的读值路径。
 
 覆盖这次迁移的「胶水」部分：
 
@@ -17,9 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from albuswall.configue1 import ConfigError, Configue, configclass
-from albuswall.configue1.bootstrap import setup_config
-from albuswall.configue1.registry import _FILES
+from albuswall.configue import ConfigError, Configue, configclass
+from albuswall.configue.bootstrap import setup_config
+from albuswall.configue.registry import _FILES
 from albuswall.core import Container
 from albuswall.core.errors import MissingDependencyError
 from albuswall.infrastructure.database import bootstrap as db_bootstrap
@@ -134,7 +134,7 @@ def test_setup_config_is_repeatable_after_registry_reset(tmp_path, container):
 
     # conftest 的 fixture 会在用例之间清表，这里模拟同一用例内的重建
     Configue._instance = None
-    from albuswall.configue1.registry import _CLASSES, _FIELD_OWNER, _PATHS
+    from albuswall.configue.registry import _CLASSES, _FIELD_OWNER, _PATHS
     _CLASSES.clear()
     _PATHS.clear()
     _FIELD_OWNER.clear()
@@ -246,11 +246,11 @@ def test_register_database_computes_path_from_tree(
 def test_portable_false_uses_user_dirs(monkeypatch, tmp_path, container):
     """portable=False（默认）时 [path] 走 platform_dir 的四个函数，与 base_dir 无关。
 
-    直接 mock ``configue1.bootstrap`` 上的四个函数，而不是设 XDG 环境变量：
+    直接 mock ``configue.bootstrap`` 上的四个函数，而不是设 XDG 环境变量：
     ``get_user_config_dir`` / ``get_cache_dir`` 在不同平台读不同变量（甚至可能走
     platformdirs），用环境变量做断言会在 macOS / Windows 上误报。
     """
-    from albuswall.configue1 import bootstrap as cfg_bootstrap
+    from albuswall.configue import bootstrap as cfg_bootstrap
 
     dirs = {
         "config": tmp_path / "user_config",

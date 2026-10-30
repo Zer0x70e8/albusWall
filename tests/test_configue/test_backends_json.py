@@ -1,5 +1,5 @@
 #
-"""``configue1.backends.json``：read / write / resolve / serialize。
+"""``configue.backends.json``：read / write / resolve / serialize。
 
 JSON 后端的三个坑（都有用例）：
 
@@ -16,10 +16,10 @@ from pathlib import Path
 
 import pytest
 
-from albuswall.configue1 import ConfigError, ConfigFile, get_backend
-from albuswall.configue1.backends.ini import DELETE
-from albuswall.configue1.backends.json import JSONBackend
-from albuswall.configue1.errors import AmbiguousConfigFile, ConfigFileNotFound
+from albuswall.configue import ConfigError, ConfigFile, get_backend
+from albuswall.configue.backends.ini import DELETE
+from albuswall.configue.backends.json import JSONBackend
+from albuswall.configue.errors import AmbiguousConfigFile, ConfigFileNotFound
 
 from .conftest import read_json, write_json
 

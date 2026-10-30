@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from albuswall.configue1 import (
+from albuswall.configue import (
     ConfigError,
     ConfigFile,
     Configue,
@@ -16,9 +16,9 @@ from albuswall.configue1 import (
     get_backend,
     reg,
 )
-from albuswall.configue1.backends.ini import INIBackend
-from albuswall.configue1.backends.json import JSONBackend
-from albuswall.configue1.registry import _FIELD_OWNER, _FILES
+from albuswall.configue.backends.ini import INIBackend
+from albuswall.configue.backends.json import JSONBackend
+from albuswall.configue.registry import _FIELD_OWNER, _FILES
 
 from .conftest import write_ini, write_json
 

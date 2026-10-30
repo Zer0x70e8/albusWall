@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 import pytest
 
-from albuswall.configue1 import (
+from albuswall.configue import (
     ConfigFile,
     ConfigMissingError,
     Configue,
@@ -15,7 +15,7 @@ from albuswall.configue1 import (
     field,
     reg,
 )
-from albuswall.configue1.registry import _CLASSES
+from albuswall.configue.registry import _CLASSES
 
 from .conftest import write_ini
 

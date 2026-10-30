@@ -59,7 +59,7 @@ _ATEXIT_POLICIES: frozenset[str] = frozenset({"atexit", "debounce", "now"})
 def _load_hooks() -> tuple[Any, ...]:
     """当前登记的全部加载钩子（快照）。
 
-    延迟 import：``configue1/__init__.py`` 顶层 import 了本模块，本模块只能在
+    延迟 import：``configue/__init__.py`` 顶层 import 了本模块，本模块只能在
     函数体里反向取 ``_LOAD_HOOKS``（否则循环 import）。
     """
     from . import _LOAD_HOOKS
@@ -397,7 +397,7 @@ class Configue:
     def _apply_pending_converters(self) -> None:
         """应用「``Configue`` 构造前登记的转换器」，然后清空队列。
 
-        队列在 ``configue1/__init__.py``（模块级），因为 ``register_converter``
+        队列在 ``configue/__init__.py``（模块级），因为 ``register_converter``
         可能在导入期被调用，早于任何 ``Configue`` 实例。
         """
         from . import _PENDING_CONVERTERS
