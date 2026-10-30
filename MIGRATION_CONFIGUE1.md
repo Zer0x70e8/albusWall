@@ -1,8 +1,10 @@
 # albuswall.configue → albuswall.configue1 升级指南
 
 > 面向：本项目的使用者（改 `config.ini` 的人）与未来的维护者（读/改配置层的人）。
-> 状态：迁移已完成，业务代码不再 `import albuswall.configue`；旧包保留并标记
-> `DeprecationWarning`，等 1–2 个版本后删除。
+> 状态：迁移已完成。旧包 `albuswall.configue` **已从代码库删除**，
+> `import albuswall.configue` 现在抛 `ModuleNotFoundError`。本次删除没有打 tag：
+> 删除前最后一个仍含旧包的提交是 `55b1b173d4394203fda9f2760ea5688cb3050d71`
+> （下文简称 `55b1b17`），需要翻阅旧实现时用这个哈希追溯。
 
 ---
 
@@ -193,18 +195,21 @@ TaskConfig().max_concurrency = 4  # 写：严格 isinstance；按文件 autosave
 
 ---
 
-## 6. 旧包状态
+## 6. 旧包状态：已移除
 
-- `albuswall.configue` 仍然可用，但**导入即 `DeprecationWarning`**（每进程一次）：
-  `albuswall.configue is deprecated and will be removed; migrate to albuswall.configue1`
-- 旧包在本次迁移中修了 3 个 bug（`utils/ini_parser.py::_convert`）：
+- `src/albuswall/configue/` 已随本轮提交删除，`import albuswall.configue` 现在抛
+  `ModuleNotFoundError`；业务链路只走 `albuswall.configue1`。
+- **没有打 tag**。删除前最后一个包含旧包的提交是
+  `55b1b173d4394203fda9f2760ea5688cb3050d71`；要看旧实现用
+  `git show 55b1b17:src/albuswall/configue/configue.py` 之类的方式追溯。
+- 迁移期间旧包 `utils/ini_parser.py::_convert` 修过 3 个 bug，这些修复只对旧包有意义，
+  随包一并消失（`configue1` 的转换实现是独立重写的）：
   1. 容器分支（`dict/list/tuple/set`）被缩进在 Union 分支里 → 非 Union 泛型永远走不到
      （`list[str]` 退化成逐字符）；
   2. `origin is Union` 不认 `types.UnionType` → Python 3.10–3.13 上 `int | None` 抛
      `TypeError`（3.14 里两者同一对象，测不出来）；
   3. `dict[str, Path]` 是第 1 条的连带受害者。
-  这些补丁让迁移前后的旧包行为一致；`tests/test_configue_legacy_smoke.py` 是唯一防线，
-  **删除旧包时一并删除该测试**。
+- 旧包唯一的回归防线 `tests/test_configue_legacy_smoke.py` 已随之删除。
 
 ---
 
@@ -213,7 +218,19 @@ TaskConfig().max_concurrency = 4  # 写：严格 isinstance；按文件 autosave
 ```bash
 python -m pytest -q                      # 全量
 python -m pytest tests/test_configue1 -q # 新包
-python -m pytest tests/test_configue_legacy_smoke.py -q  # 旧包补丁基线
+```
+
+旧包已删除，两项强断言：
+
+```bash
+# 1) 旧包不可导入，且异常类型必须是 ModuleNotFoundError
+python -c "import albuswall.configue"    # 期望：ModuleNotFoundError: No module named 'albuswall.configue'
+
+# 2) 业务链路能 bootstrap 起来（无头：QT_QPA_PLATFORM=offscreen；把 XDG 各目录
+#    指到可写位置即可，例如临时目录）
+QT_QPA_PLATFORM=offscreen python -m albuswall
+# 期望日志中出现：Program boot registry finished. / Program bootstrap completed.
+# 该进程是常驻主循环，确认上述两行后 Ctrl-C 即可
 ```
 
 关键测试文件：
@@ -226,7 +243,6 @@ python -m pytest tests/test_configue_legacy_smoke.py -q  # 旧包补丁基线
 | `tests/test_configue1/test_load_hooks.py` | 加载钩子、hook 失败语义 |
 | `tests/test_configue1/test_backends_*.py` | INI / JSON 后端 |
 | `tests/test_configue1/test_mixed_backends.py` | 两种格式混用、跨格式覆盖 |
-| `tests/test_configue_legacy_smoke.py` | 旧包 `_convert` 三个 bug 的回归 |
 | `tests/test_configue1/test_registry.py`、`test_slots.py`、`test_registry` 等 | 声明层 / 描述符 / repr |
 
 ---
@@ -246,5 +262,13 @@ python -m pytest tests/test_configue_legacy_smoke.py -q  # 旧包补丁基线
   `main`；`tree.machine.x` 读到的还是 `v`。视图隔离的是写回落点，不是值。
 - **`unload()` 只回退内存**：写过盘之后再 `unload()`，磁盘上的值不会回滚。
 - **`declared_keys()` / `as_typed_dict()`**：尚未提供。
+- **`configue1` 的 logger 名是混合状态（有意保留的已知遗留）**：
+  `configue1/configue.py`、`configue1/registry.py` 用 `logging.getLogger(__name__)`，
+  logger 名是 `albuswall.configue1.*`；但 `configue1/utils/ini_parser.py` **硬编码**
+  `logging.getLogger(f"{albuswall.__name__}.configue")`，所以 ini_parser 的日志落在
+  `albuswall.configue` 这个 logger 上。因此 `resources/config/log_config.ini` 里的
+  `[logger_albuswall.configue]`（以及 `keys=`、`qualname=` 行）**当前是活配置，不是死配置**，
+  本轮刻意不动它。等后续把 `configue1` 目录改名回 `configue` 后，其余模块的
+  `__name__` 自动变成 `albuswall.configue.*`，会一并汇入同一个 logger，届时这段遗留自然消解。
 - **首次启动不复制默认 `conf.ini`**：README 里「defaults copied to ~/.config」这句在代码
   中没有对应实现；当前行为是「没有文件就按默认值跑，首次保存时才创建」。
