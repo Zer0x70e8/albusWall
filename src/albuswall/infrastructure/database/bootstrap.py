@@ -1,35 +1,45 @@
 #
 """"""
 
-from albuswall.core import Container, Application
-from albuswall.configue import ConfigField
+from albuswall.configue1 import configclass
+from albuswall.core import Application, Container
 
 from .connector import Connector
 
 
 # noinspection bad-assignment
+@configclass("db", "main")
 class Config:
-    root = ConfigField("db", default={})  # Ensure section.
-    must_exist: bool = ConfigField("db", "must_exist", default=False)
-    db_file: str = ConfigField("files", "db", default="db.db")
+    """``[db]`` 段。
 
+    ``db_file`` 在旧包里是 ``ConfigField("files", "db")``（挂在 ``[files]`` 段），
+    迁移后由 ``configue1.bootstrap`` 的 ``[files]`` 声明统一提供
+    （``tree.files.db``），这里只留 ``[db]`` 自己的键。
 
-config = Config()
-app = Application.instance()
+    ``root = ConfigField("db", default={})`` 的「确保段存在」不再需要：
+    新包只支持 2 层 path，空段由第一次写入时自然产生。
+    """
+
+    must_exist: bool = False
 
 
 def register_database(
-        container  # type: Container
+        container: Container
 ):
-    container.register("db", lambda: Connector(
-        container.get("configue").static.path.data / config.db_file,
-        must_exist=config.must_exist
-    ), returns=Connector)
+    def _make_connector() -> Connector:
+        config = container.require("configue")
+        tree = config.tree.main
+        return Connector(
+            tree.path.data / tree.files.db,
+            must_exist=Config().must_exist,
+        )
 
-    @app.on_boot
+    container.register("db", _make_connector, returns=Connector)
+
+    @Application.on_init
     def _keep_db_alive():
         container.get("db").keep_alive()  # 主线程持锚
 
-    @app.on_final
+    @Application.on_exit
     def _release_db_alive():
         container.get("db").release_keep_alive()

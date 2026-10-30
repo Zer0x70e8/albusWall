@@ -11,7 +11,9 @@ import traceback
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
-logger = logging.getLogger(__name__)
+from .exit_codes import ExitCode
+
+logger = logging.getLogger(__package__)
 
 _Soon = Callable[[], None]
 
@@ -26,18 +28,24 @@ class MainLoop(ABC):
     的调用方（IPC / CLI）拿到请求后，必须经它回到属主线程再碰服务状态，
     否则会违反 state 的单线程属主约定。
 
+    当前边界：headless 模式下 handler 在 ``ipc-conn`` 工作线程里直接执行
+    是**预期行为**——服务层没有主线程属主状态（见
+    ``service/command/handlers/_protocol.py`` 契约第 8 条）。Qt 接入时由
+    UI 层负责把结果投递回主循环，投递点应在 ``IpcRequestService.__call__``，
+    而**不在** ``Dispatcher``：业务层不该感知线程模型。
+
     默认实现抛 NotImplementedError，因为第三方自定义 MainLoop 可能在
     本方法出现之前就已经存在：缺了它只应让 IPC 这类可选能力降级，
     而不该让整个应用起不来。内置的两个实现都已覆盖。
     """
 
-    code: int | str = -1
+    code: int = -1
 
     @abstractmethod
-    def run(self) -> int | str: ...
+    def run(self) -> int | ExitCode: ...
 
     @abstractmethod
-    def quit(self, code: int | str | None = None) -> None: ...
+    def quit(self, code: int | ExitCode | None = None) -> None: ...
 
     def call_soon(self, fn: _Soon) -> None:
         """线程安全：把 ``fn`` 排到主循环所属线程执行。"""
@@ -63,7 +71,7 @@ class HeadlessMainLoop(MainLoop):
         self._calls: queue.Queue[_Soon] = queue.Queue()
         self._signals_installed = False
         # 实例级 code，覆盖基类默认 -1；正常退出为 0
-        self.code: int | str = 0
+        self.code: int = 0
 
     def _install_signals(self) -> None:
         if self._signals_installed:
@@ -87,7 +95,8 @@ class HeadlessMainLoop(MainLoop):
     def call_soon(self, fn: _Soon) -> None:
         self._calls.put(fn)
 
-    def run(self) -> int | str:
+    # noinspection PyBroadException
+    def run(self) -> int:
         self._install_signals()
         logger.debug("HeadlessMainLoop entering wait().")
         while not self._stop.is_set():
@@ -97,13 +106,17 @@ class HeadlessMainLoop(MainLoop):
                 continue
             try:
                 fn()
-            except Exception:  # noinspection PyBroadException
+            except SystemExit as e:
+                # 回调里 raise SystemExit 等价于请求退出；转成正常的 quit(code)
+                code = e.code if isinstance(e.code, int) else 0
+                self.quit(code)
+            except Exception:
                 traceback.print_exc()
         logger.debug("HeadlessMainLoop exited.")
         # 唯一真值来源：Runtime 设置过就是 Runtime 的，否则是信号/默认 0
         return self.code
 
-    def quit(self, code: int | str | None = None) -> None:
+    def quit(self, code: int | None = None) -> None:
         if code is not None:
             self.code = code
         self._stop.set()

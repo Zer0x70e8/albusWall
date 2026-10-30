@@ -250,9 +250,10 @@ class ConfigField(Generic[T]):
             raise exc
 
     def __set__(self, instance, value):
-        resolver = get_config().resolver
+        # resolver = get_config().resolver
         section, key = self._split_path()
-        resolver.set(section, key, value)
+        # resolver.set(section, key, value)
+        get_config().set(section, key, value)
         self._cached_value = _Missing
         self._cached_exception = None
 

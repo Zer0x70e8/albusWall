@@ -26,9 +26,3 @@ class BackpressureReason(str, Enum):
     QUEUE_FULL = "queue_full"
     PUT_BACK_FAILED = "put_back_failed"
     PERMIT_WAIT = "permit_wait"
-
-
-class PermitKind(str, Enum):
-    """permit 种类，用于 ``PERMIT_WAIT`` 事件的细分。"""
-    GLOBAL = "global"
-    PROCESS = "process"

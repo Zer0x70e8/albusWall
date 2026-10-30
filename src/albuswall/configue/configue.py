@@ -544,7 +544,10 @@ class _SectionView:
         object.__setattr__(self, "_section", section)
 
     def __getattr__(self, key):
-        return self._resolver.get_typed(self._section, key)
+        try:
+            return self._resolver.get_typed(self._section, key)
+        except KeyError:
+            raise AttributeError(key) from None
 
     def __getitem__(self, key):
         return self._resolver.get_typed(self._section, key)

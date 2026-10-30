@@ -24,7 +24,6 @@ import uuid
 from pathlib import Path
 from typing import Optional, Set
 
-import albuswall
 from albuswall.log import getLogger
 from albuswall.resources import schema
 
@@ -38,11 +37,9 @@ PRAGMA_BUSY_TIMEOUT = "PRAGMA busy_timeout = 5000"
 PRAGMA_RESOURCE_TRIGGERS = "PRAGMA recursive_triggers = OFF"
 
 # 当前 schema 版本；每次结构变化时 +1，并在 _run_migrations 里补一段
-SCHEMA_VERSION = 0  # NOTE: 在第一个可用版本发布之前都不改
+SCHEMA_VERSION = 0  # NOTE: 记得变更版本
 
-_package_name = __name__.split('.', 2)[-1] if '.' in __name__ else __name__
-
-logger = getLogger(f"{albuswall.__name__}.{_package_name}")
+logger = getLogger(__package__)
 
 
 class Connector:

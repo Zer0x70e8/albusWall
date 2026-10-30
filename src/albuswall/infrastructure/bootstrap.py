@@ -7,12 +7,14 @@ from .database import register_database
 from .task import register_task_service
 from .trigger import register_trigger_service
 from .reconcile import register_reconciler
+from .ipc import register_ipc
 
 _REG_MAP = {
     "database": register_database,
     "task": register_task_service,
     "trigger": register_trigger_service,
     "reconcile": register_reconciler,
+    "ipc": register_ipc,
 }
 
 

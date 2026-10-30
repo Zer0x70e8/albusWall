@@ -35,7 +35,7 @@ from typing import Any, Callable, Optional
 import psutil
 
 from albuswall.log import getLogger, Logger
-from albuswall.common.enums import BackpressureReason, ExecutorType, PermitKind
+from albuswall.common.enums import BackpressureReason, ExecutorType
 from albuswall.common.exceptions import (
     BackpressureError,
     TaskServiceShutdownError,
@@ -48,6 +48,7 @@ from albuswall.dto.task import (
     TaskSpec,
 )
 
+from .protocol import PermitKind
 from ._semaphore import DynamicSemaphore
 from ._task import _Task
 

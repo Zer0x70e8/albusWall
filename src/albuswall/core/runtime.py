@@ -1,125 +1,165 @@
 #
-"""顶层异常 → 退出码映射；SIGINT 优雅退出。"""
+"""Top-level runtime: exception → exit-code mapping and logger lifecycle."""
+
+from __future__ import annotations
 
 import logging
-import signal
-from traceback import format_exception, format_exc
-from typing import Callable
+import threading
+import traceback
+from traceback import format_exception
+from typing import TYPE_CHECKING, Callable
 
 import albuswall
-from albuswall.core import Application
-from albuswall.log.handlers import MemoryCacheHandler
 
-_logger = logging.getLogger(albuswall.__name__)
+from .exit_codes import ExitCode
+from .application import Application, CoreApplication
+
+if TYPE_CHECKING:
+    from albuswall.log.handlers import MemoryCacheHandler
+    from .main_loop import MainLoop
+
+logger = logging.getLogger(albuswall.__name__)
+
+__all__ = ["Runtime"]
 
 
 class Runtime:
-    def __init__(self, memory_handler: MemoryCacheHandler) -> None:
-        self._old_sigint = None
+    """顶层运行时协调器。
+
+    职责：
+    * 顶层异常 → 规范退出码（统一为 ``ExitCode``）；
+    * 安装 ``threading.excepthook``；
+    * 管理 ``MemoryCacheHandler`` 的生命周期（移除 + 兜底重放）。
+
+    不负责：
+    * SIGINT/SIGTERM —— ``HeadlessMainLoop._install_signals``；
+    * ``sys.excepthook`` —— ``albuswall.core.application`` 导入期的
+      ``install_excepthook()``；
+    * 主循环 —— ``Application._loop``。
+
+    边界：``__main__.py`` 的 import 语句本身失败时，Runtime 还没被
+    构造，异常只能走 Python 默认 ``sys.excepthook`` 到 stderr。
+    """
+
+    def __init__(self, memory_handler: "MemoryCacheHandler") -> None:
         self._memory_handler = memory_handler
-        self._app = Application.instance()
+        self._app: CoreApplication | None = None
+        self._installed = False
+        self._prev_thread_excepthook = None
 
-    # ---------------- 退出码映射 ----------------
-    @staticmethod
-    def _control_flow_code(et, ev) -> int | str | None:
-        if issubclass(et, KeyboardInterrupt):
-            return 130
-        if issubclass(et, SystemExit):
-            code = getattr(ev, "code", 0)
-            return 0 if code in (0, "0", None) else code
-        return None
-
-    # ---------------- 安装 ----------------
+    # ---------------- install ----------------
     def install(self) -> None:
-        self._app.handle_exception = self._on_exception
-        self._app.thread_exception = self._on_thread_exception
-        self._old_sigint = signal.signal(signal.SIGINT, self._on_sigint)
+        if self._installed:
+            return
+        self._app = Application.instance()
+        self._prev_thread_excepthook = threading.excepthook
+        threading.excepthook = self._thread_excepthook
+        self._installed = True
 
-    def _on_sigint(self, signum, frame) -> None:
-        _logger.info("SIGINT received, requesting graceful exit")
-        self._request_quit(130)
+    def _thread_excepthook(self, args: threading.ExceptHookArgs) -> None:
+        thread = args.thread
+        name = thread.name if thread is not None else "<unknown>"
+        logger.critical("Unhandled exception in thread %r", name)
+        exc_type = args.exc_type
+        exc_value = args.exc_value
+        exc_traceback = args.exc_traceback
+        if exc_type is not None and exc_value is not None:
+            for line in format_exception(exc_type, exc_value, exc_traceback):
+                logger.critical(line.rstrip())
+        self._request_quit(ExitCode.ERROR)
 
-    def _on_exception(self, et, ev, tb) -> bool:
-        code = self._control_flow_code(et, ev)
-        if code is not None:
-            _logger.info(
-                "Control-flow exception %s received, exiting with code=%r",
-                et.__name__, code,
-            )
-            self._request_quit(code)
-            return True
-
-        _logger.critical("".join(format_exception(et, ev, tb)))
-        self._request_quit(1)
-        return True
-
-    def _on_thread_exception(self, args) -> bool:
-        return self._on_exception(
-            args.exc_type, args.exc_value, args.exc_traceback
-        )
-
-    # ---------------- 退出请求 ----------------
-    # noinspection broad-exception
-    def _request_quit(self, code: int | str) -> None:
-        # 用 _main_loop 实例属性；不要触发惰性创建
-        loop = getattr(self._app, "_main_loop", None)
+    # ---------------- quit dispatch ----------------
+    def _request_quit(self, code: ExitCode | int) -> None:
+        app = self._app
+        if app is None:
+            return
+        loop: "MainLoop | None" = getattr(app, "_loop", None)
         if loop is None:
-            _logger.debug("request_quit(%r): no main loop yet", code)
+            logger.debug("request_quit(%r): no main loop yet", code)
             return
         try:
             loop.quit(code)
         except TypeError:
-            # 兼容未升级签名的自定义 MainLoop
+            # 兼容自定义 MainLoop 没升级签名
             try:
                 loop.code = code
-            except Exception:
-                pass
-            try:
                 loop.quit()
-            except Exception:
-                _logger.exception("Failed to quit main loop")
-        except Exception:
-            _logger.exception("Failed to quit main loop")
+            except Exception:  # noqa: BLE001  # noinspection PyBroadException
+                logger.exception("Failed to quit main loop")
+        except Exception:  # noqa: BLE001  # noinspection PyBroadException
+            logger.exception("Failed to quit main loop")
 
-    # ---------------- handlers 收尾 ----------------
+    # ---------------- handlers ----------------
     def _close_handlers(self) -> None:
+        """移除并关闭启动期缓存 handler；幂等。"""
         try:
-            _logger.removeHandler(self._memory_handler)
-        except Exception:
+            logger.removeHandler(self._memory_handler)
+        except Exception:  # noqa: BLE001  # noinspection PyBroadException
             pass
+
+        buffer = getattr(self._memory_handler, "buffer", None)
+        if isinstance(buffer, list) and buffer:
+            try:
+                fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+                fallback = logging.StreamHandler(getattr(
+                    self._memory_handler, "stream", None
+                ))
+                fallback.setFormatter(logging.Formatter(fmt))
+                for record in buffer:
+                    fallback.handle(record)
+                buffer.clear()
+            except Exception:  # noqa: BLE001  # noinspection PyBroadException
+                pass
+
         try:
             self._memory_handler.close()
-        except Exception:
-            _logger.exception("Error while closing memory_handler")
+        except Exception:  # noqa: BLE001  # noinspection PyBroadException
+            logger.exception("Error while closing memory_handler")
 
-    # ---------------- 顶层入口 ----------------
-    def run(self, body: Callable[[], int | str]) -> int | str:
+    # ---------------- entry ----------------
+    def run(self, body: Callable[[], ExitCode | int]) -> ExitCode:
+        """运行 ``body`` 并把顶层异常统一映射为 ``ExitCode``。"""
         try:
-            return body()
-        except SystemExit as e:
-            if e.code not in (0, "0", None):
-                self._close_handlers()
-                _logger.error("Program exited with error code %s", e.code)
-                _logger.error(format_exc())
-                return e.code
-            return 0
-        except NotImplementedError:
+            result = body()
+            return result if isinstance(result, ExitCode) else ExitCode(result)
+        except SystemExit as exc:
+            code = self._system_exit_code(exc)
             self._close_handlers()
-            _logger.error(format_exc())
-            _logger.warning("Not supported by the current platform.")
-            return 95
+            if code != ExitCode.OK:
+                logger.error("Program exited with error code %r", code)
+            return code
         except KeyboardInterrupt:
             self._close_handlers()
-            old = signal.signal(signal.SIGINT, signal.SIG_IGN)
-            try:
-                Application.request_quit(reason="KeyboardInterrupt")
-            except Exception:
-                _logger.exception("Error while finalizing after KeyboardInterrupt")
-            finally:
-                signal.signal(signal.SIGINT, old)
-            _logger.debug("KeyboardInterrupt received, exiting.")
-            return 130
+            logger.info("KeyboardInterrupt received, exiting.")
+            return ExitCode.INTERRUPTED
+        except NotImplementedError:
+            self._close_handlers()
+            logger.error(traceback.format_exc())
+            logger.warning("Not supported by the current platform.")
+            return ExitCode.NOT_IMPLEMENTED
+        except OSError:
+            self._close_handlers()
+            logger.exception("OS error")
+            return ExitCode.OS_ERROR
         except BaseException:
             self._close_handlers()
-            _logger.critical(format_exc())
-            return 1
+            logger.critical(traceback.format_exc())
+            return ExitCode.ERROR
+
+    @staticmethod
+    def _system_exit_code(exc: SystemExit) -> ExitCode:
+        code = exc.code
+        if code is None or code == 0 or code == "0":
+            return ExitCode.OK
+        if isinstance(code, int) and not isinstance(code, bool):
+            return ExitCode(code)
+        logger.error("SystemExit: %r", code)
+        return ExitCode.ERROR
+
+    def run_app(self, main: Callable[[Application], ExitCode | int]) -> ExitCode:
+        def body() -> ExitCode | int:
+            app = Application()
+            self.install()
+            return main(app)
+
+        return self.run(body)

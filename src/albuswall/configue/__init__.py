@@ -199,6 +199,8 @@ import；显式传 ``modules=[...]`` 时以显式为准。注意这跟 ② 的 `
 ``Item.file`` → ``Group.file`` → ``target_file_of`` 推出的归属文件回写。
 """
 
+import sys as _sys
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Generic, TypeVar, Optional
 
@@ -208,6 +210,20 @@ from .utils import (
     get_user_config_dir, get_user_data_dir,
     parse_section_file,
 )
+
+# ── 弃用标记 ────────────────────────────────────────────────────────────────
+# 本包已由 ``albuswall.configue1`` 取代（迁移说明见仓库根 MIGRATION_CONFIGUE1.md）。
+# 用 sys 上的标记保证「每进程只警告一次」——普通 import 本来只执行一次模块体，
+# 但显式 ``importlib.reload`` 会重复执行，标记让那种情况也不刷屏。
+_WARN_FLAG = "_albuswall_configue_deprecation_warned"
+if not getattr(_sys, _WARN_FLAG, False):
+    setattr(_sys, _WARN_FLAG, True)
+    warnings.warn(
+        "albuswall.configue is deprecated and will be removed; "
+        "migrate to albuswall.configue1 (see MIGRATION_CONFIGUE1.md)",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
 T = TypeVar("T")
 

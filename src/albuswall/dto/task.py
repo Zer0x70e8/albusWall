@@ -19,7 +19,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Union
 
-from albuswall.common.enums import BackpressureReason, ExecutorType, PermitKind
+from albuswall.common.enums import BackpressureReason, ExecutorType
 from albuswall.dto.sentinel import UNSET, MaybeUnset
 
 __all__ = [
@@ -29,6 +29,7 @@ __all__ = [
     "TaskSpec",
 ]
 
+from albuswall.infrastructure.task.protocol import PermitKind
 
 # 对外暴露的 submit 参数类型：
 #   - 允许传 ExecutorType 枚举（推荐）

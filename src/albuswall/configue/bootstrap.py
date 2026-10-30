@@ -185,6 +185,7 @@ def setup_dynamic_config(
             )
 
     config: Configue = Application.instance().configure
+    # config: Configue = container.get("config")
     for name in (preload or ()):
         getattr(config.dynamic, name)  # 强制触发加载（DYNAMIC_REGISTRY fallback）
 
@@ -272,7 +273,7 @@ def _expand_include_spec(spec: str, base_dir: Path, *, key: str) -> list[Path]:
             value=spec,
         )
 
-    candidate = Path(spec)
+    candidate = Path(spec).expanduser()
     if not candidate.is_absolute():
         candidate = base_dir / candidate
 
