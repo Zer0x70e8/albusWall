@@ -205,9 +205,23 @@ TaskConfig().max_concurrency = 4  # 写：严格 isinstance；按文件 autosave
 
 - 旧实现 `src/albuswall/configue/` 已随 commit `bab0ed2` 删除；旧包唯一的回归防线
   `tests/test_configue_legacy_smoke.py` 一并删除。
-- **没有打 tag**。删除前最后一个包含旧包的提交是
-  `55b1b173d4394203fda9f2760ea5688cb3050d71`；要看旧实现用
-  `git show 55b1b17:src/albuswall/configue/configue.py` 之类的方式追溯。
+- **旧实现有 tag 可追**：annotated tag `configue-legacy-final` → `55b1b17`，即旧包
+  删除前的最后一个完整状态（`src/albuswall/configue/` 共 18 个文件：顶层 10 + `utils/` 8）。
+  查旧代码：
+
+  ```bash
+  git ls-tree -r configue-legacy-final --name-only   # 18 个文件的清单
+  git show configue-legacy-final:src/albuswall/configue/configue.py
+  ```
+
+- **`origin/archive/old-implementation` 不是旧包最后状态，别拿它当参照**：该分支
+  （`ce8febc`）的 `src/albuswall/configue/` 只有 12 个文件，缺
+  `dynamic_declaration.py`、`resolver.py`、`setting_schema.py`、`state.py`、`typed.py`、
+  `utils/annotation.py` 这 6 个，是早期的 scaffold。tag 之所以要补，就是因为当初
+  「archive 分支兜底了旧包」这个前提不成立。
+- 冗余锚点：即使 tag 被误删，删除前最后一个包含旧包的 commit 仍是
+  `55b1b173d4394203fda9f2760ea5688cb3050d71`，`git show 55b1b17:src/albuswall/configue/...`
+  照旧可用。
 - **包名已被复用，验证方式要跟着反过来**：紧随其后的一轮把 `src/albuswall/configue1/`
   改名回 `src/albuswall/configue/`，所以 `import albuswall.configue` 现在导入的是**新实现**
   （成功是正常的），要确认旧包确实不在，断言应改为
