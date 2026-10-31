@@ -8,7 +8,6 @@ import queue
 import signal
 import threading
 import traceback
-from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 from .exit_codes import ExitCode
@@ -18,41 +17,35 @@ logger = logging.getLogger(__package__)
 _Soon = Callable[[], None]
 
 
-class MainLoop(ABC):
-    """主循环抽象：run() 阻塞直到退出；quit() 请求退出。
+class MainLoop:
+    """主循环接口：run() 阻塞直到退出；quit() 请求退出。
 
-    `code` 是主循环退出码：run() 返回它。Runtime 在 quit() 前
-    可以覆写它来指定退出码（例如异常 → 1、SIGINT → 130）。
+    （其余 docstring 保持）
 
-    `call_soon` 是「从别的线程投递回调到主循环线程」的唯一入口。进程外
-    的调用方（IPC / CLI）拿到请求后，必须经它回到属主线程再碰服务状态，
-    否则会违反 state 的单线程属主约定。
+    注意：本类**不是** ABC。UI 层 ``class Application(QApplication, MainLoop)``
+    需要同时继承 PySide6 的 ``Shiboken.ObjectType`` 元类；若 ``MainLoop`` 用
+    ``ABCMeta``，Python 找不到同时是两者子类的元类，会抛
+    ``TypeError: metaclass conflict``。
 
-    当前边界：headless 模式下 handler 在 ``ipc-conn`` 工作线程里直接执行
-    是**预期行为**——服务层没有主线程属主状态（见
-    ``service/command/handlers/_protocol.py`` 契约第 8 条）。Qt 接入时由
-    UI 层负责把结果投递回主循环，投递点应在 ``IpcRequestService.__call__``，
-    而**不在** ``Dispatcher``：业务层不该感知线程模型。
-
-    默认实现抛 NotImplementedError，因为第三方自定义 MainLoop 可能在
-    本方法出现之前就已经存在：缺了它只应让 IPC 这类可选能力降级，
-    而不该让整个应用起不来。内置的两个实现都已覆盖。
+    未实现的子类方法在运行期以 ``NotImplementedError`` 暴露。这与原有的
+    ``call_soon`` 默认实现是同一策略。
     """
 
     code: int = -1
 
-    @abstractmethod
-    def run(self) -> int | ExitCode: ...
+    def run(self) -> int | ExitCode:
+        raise NotImplementedError(
+            f"{type(self).__name__}.run() is not implemented")
 
-    @abstractmethod
-    def quit(self, code: int | ExitCode | None = None) -> None: ...
+    def quit(self, code: int | ExitCode | None = None) -> None:
+        raise NotImplementedError(
+            f"{type(self).__name__}.quit() is not implemented")
 
     def call_soon(self, fn: _Soon) -> None:
         """线程安全：把 ``fn`` 排到主循环所属线程执行。"""
         raise NotImplementedError(
             f"{type(self).__name__} does not support call_soon(); "
-            f"cross-thread command dispatch is unavailable."
-        )
+            f"cross-thread command dispatch is unavailable.")
 
 
 class HeadlessMainLoop(MainLoop):

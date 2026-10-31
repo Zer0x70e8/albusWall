@@ -110,10 +110,11 @@ def test_repr_optional_none(loaded):
     class WitOptional:
         limit: Optional[int] = None
 
-    # 类是在 load() 之后声明的 → 默认值还没注入 → <missing>
-    assert repr(WitOptional()) == f"{q(WitOptional)}(limit=<missing>)"
+    # 类是在 load() 之后声明的 → configclass 装饰当下就注入了默认值
+    # （早注册路径由 load() 的 Step 4 注入，见 test_late_class.py）
+    assert repr(WitOptional()) == f"{q(WitOptional)}(limit=None)"
 
-    # 再 load() 一次会把新类的默认值补进来（Step 4 每次全量重跑）
+    # 再 load() 一次不影响已有值（Step 4 每次全量重跑，但只在缺值时注入）
     c.load()
     assert repr(WitOptional()) == f"{q(WitOptional)}(limit=None)"
 

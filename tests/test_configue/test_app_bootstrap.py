@@ -6,7 +6,8 @@
 - ``setup_config``：登记文件、声明 ``[path]``/``[files]``、``load()``、注册容器别名；
 - ``log.bootstrap``：``LogConf`` 读 ``[log] config`` / ``[log] level``，路径兜底；
 - ``infrastructure.task.bootstrap``：``Config`` 字段读值（含 ``int | None``）；
-- ``infrastructure.database.bootstrap``：``db`` 工厂用 ``tree.path.data / tree.files.db``。
+- ``infrastructure.database.bootstrap``：``db`` 工厂用 ``Paths().data / Files().db``
+  （``@configclass`` 类视图，不再走 ``tree``）。
 """
 
 from __future__ import annotations
@@ -71,7 +72,7 @@ def test_setup_config_loads_file_and_registers_aliases(tmp_path, container):
 
 
 def test_setup_config_declares_path_defaults(tmp_path, container):
-    """没有 [path] 段时，四个目录由 @configclass 默认值补齐。"""
+    """没有 [path] 段时，四个目录由 ``setup_config`` 注入的默认值补齐。"""
     config = _setup(tmp_path, container, content="[files]\ndb = db.db\n")
     tree = config.tree.main
 
@@ -216,7 +217,7 @@ def test_register_task_service_registers_factory(tmp_path, container, clean_hook
 
 # ==================== infrastructure.database.bootstrap ====================
 
-def test_register_database_computes_path_from_tree(
+def test_register_database_computes_path_from_class_view(
         tmp_path, container, monkeypatch, clean_hooks,
 ):
     configclass("db", "main")(db_bootstrap.Config)

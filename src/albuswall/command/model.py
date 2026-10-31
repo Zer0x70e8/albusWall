@@ -35,10 +35,14 @@ class Param:
                 f"Param {self.name!r}: flag params must use type=bool"
             )
         if self.kind == "pos" and not self.required and self.default is None:
+            # stacklevel=3：本类是 dataclass，``__init__`` 由 dataclasses 用
+            # exec 生成（文件名 ``<string>``），并在其中调用 ``__post_init__``。
+            # 退两帧才落在真正写下 ``Param(...)`` 的源码行上；用 2 的话警告
+            # 会指向 dataclass 生成代码的 ``<string>:11``，等于没指。
             warnings.warn(
                 f"Param {self.name!r}: positional param with no default and "
-                "required=False; consider required=True or kind='opt'",
-                stacklevel=2,
+                "required=False; consider required=True or default=...",
+                stacklevel=3,
             )
 
 

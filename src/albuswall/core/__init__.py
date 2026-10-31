@@ -1,19 +1,48 @@
 #
 """"""
 
-from .application import CoreApplication, Application
-from .types import Hooks, SimpleHook, LoopHook, ErrorHook, HooksMap
-from .registry import register, hooks_map
-from .runtime import Runtime
+from .application import Application, CoreApplication
 from .container import Container
 from .errors import MissingDependencyError
-from .exit_codes import ExitCode, AppError
+from .exit_codes import AppError, ExitCode
+from .plugins import (
+    BasePlugin,
+    DuplicatePluginError,
+    MissingPluginError,
+    Plugin,
+    PluginContext,
+    PluginCycleError,
+    PluginError,
+    PluginManager,
+    plugin,
+)
+from .registry import hooks_map, register, unregister
+from .runtime import Runtime
+from .types import ErrorHook, Hooks, HooksMap, LoopHook, SimpleHook
 
 __all__ = [
-    "CoreApplication", "Application",
-    "Hooks", "SimpleHook", "LoopHook", "ErrorHook", "HooksMap",
-    "register", "hooks_map",
+    "AppError",
+    "Application",
+    "BasePlugin",
+    "Container",
+    "CoreApplication",
+    "DuplicatePluginError",
+    "ErrorHook",
+    "ExitCode",
+    "Hooks",
+    "HooksMap",
+    "LoopHook",
+    "MissingDependencyError",
+    "MissingPluginError",
+    "Plugin",
+    "PluginContext",
+    "PluginCycleError",
+    "PluginError",
+    "PluginManager",
     "Runtime",
-    "Container", "MissingDependencyError",
-    "ExitCode", "AppError",
+    "SimpleHook",
+    "hooks_map",
+    "plugin",
+    "register",
+    "unregister",
 ]

@@ -154,3 +154,41 @@ def clean_hooks():
     finally:
         for name, hooks in saved.items():
             hooks_map[name][:] = hooks
+
+
+# ==================== 全局状态复位 ====================
+
+@pytest.fixture(autouse=True)
+def _reset_global_plugin_state():
+    """每个用例结束后复位进程级全局状态。
+
+    插件系统把三处状态放在模块 / 类级（而不是实例上），它们天然跨用例泄漏：
+
+    * ``core.registry.hooks_map``——插件 ``ctx.on(...)`` 会往里追加 hook；
+    * ``core.plugins._pending``——``@plugin`` 的收集表，留着会让下个用例
+      意外多出插件；
+    * ``Application`` / ``CoreApplication`` / ``Configue`` 的单例字段。
+
+    hook 用**原地切片赋值**恢复：``hooks_map[event]`` 这个 list 对象可能已经
+    被别的模块持有引用（例如某个 hook 追加时拿到的就是它），换对象会让那些
+    引用指向旧列表。
+    """
+    from albuswall.configue.configue import Configue
+    from albuswall.core.application import Application, CoreApplication
+    from albuswall.core.plugins import _pending
+    from albuswall.core.registry import hooks_map
+
+    hook_snapshot = {k: list(v) for k, v in hooks_map.items()}
+    pending_snapshot = list(_pending)
+    inst, self_, init = Application._instance, Application._self, Application._is_init
+    reg = CoreApplication._hooks_registered
+    cfg = Configue._instance
+
+    yield
+
+    for k, v in hook_snapshot.items():
+        hooks_map[k][:] = v        # 原地恢复，不换 list 对象
+    _pending[:] = pending_snapshot
+    Application._instance, Application._self, Application._is_init = inst, self_, init
+    CoreApplication._hooks_registered = reg
+    Configue._instance = cfg

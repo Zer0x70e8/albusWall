@@ -21,8 +21,11 @@ def setup(registry: CommandRegistry, container: Container) -> None:
     @registry.command(
         "task",
         help_="The task service cmd.",
+        # 位置参数的可选值必须显式给 default：绑定层（``Dispatcher._bind``）
+        # 缺参时填的是 ``Param.default``，不会用 handler 签名里的 ``= ""``。
+        # 漏写会得到 ``None``，而 ``subcmd.strip()`` 立刻 AttributeError。
         params=(
-                Param(name="subcmd", type=str),
+            Param(name="subcmd", type=str, default=""),
         ),
     )
     def namespace(subcmd: str = ""):

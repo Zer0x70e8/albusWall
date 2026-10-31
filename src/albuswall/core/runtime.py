@@ -10,9 +10,11 @@ from traceback import format_exception
 from typing import TYPE_CHECKING, Callable
 
 import albuswall
+from albuswall.utils.hooks import run_exception_hooks
 
 from .exit_codes import ExitCode
 from .application import Application, CoreApplication
+from .registry import hooks_map
 
 if TYPE_CHECKING:
     from albuswall.log.handlers import MemoryCacheHandler
@@ -64,8 +66,13 @@ class Runtime:
         exc_value = args.exc_value
         exc_traceback = args.exc_traceback
         if exc_type is not None and exc_value is not None:
-            for line in format_exception(exc_type, exc_value, exc_traceback):
-                logger.critical(line.rstrip())
+            # 线程里的异常先交给 on_error 钩子；没人认领才打印 traceback。
+            handled = run_exception_hooks(
+                hooks_map["on_error"], exc_type, exc_value, exc_traceback,
+            )
+            if not handled:
+                for line in format_exception(exc_type, exc_value, exc_traceback):
+                    logger.critical(line.rstrip())
         self._request_quit(ExitCode.ERROR)
 
     # ---------------- quit dispatch ----------------

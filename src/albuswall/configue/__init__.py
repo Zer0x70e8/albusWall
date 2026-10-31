@@ -36,6 +36,11 @@
     print(Core().debug)               # 类视图：严格 isinstance 赋值
     c.tree.main.save()                # == c.flush(file="main")
 
+上面的 ``c.tree`` 两行**只是演示**。业务代码优先用 ``@configclass`` 类视图
+（``Core().debug``）：声明即注册、默认值兜底、写入严格类型校验，落点由声明
+决定而不是「当前视图是哪个文件」。树视图留给它的合法用途——``[shortcuts]``
+这类运行期才知道 key 的段、以及「文件里实际有什么」的枚举。
+
 三条硬约束：
 
 1. ``Configue`` 是单例：同 ``base_dir`` 幂等，不同 ``base_dir`` 抛
@@ -52,6 +57,14 @@
 - ``register_converter(type_, reader, writer=)`` —— 「构造函数语义不对」的类型
 - ``register_load_hook(hook)`` —— 运行期才知道 key 的段（``[shortcuts]`` 之类）
 - ``register_backend(backend)`` —— 新文件格式（TOML / YAML 的落点）
+
+两个**审计开关**（默认都关，零行为变化；打开后让「拼错的 key」显形）：
+
+- ``load(strict_undeclared=True)`` —— 文件里有、但既无 ``@configclass``
+  声明、也无加载钩子登记类型的节点，进 ``LoadReport.warnings``。
+  只报告不隔离（强制隔离会误伤 ``[shortcuts]``）。
+- ``Configue.strict_tree_writes = True`` —— ``tree.<file>.<section>.<key> = v``
+  要求该 key 被声明或 hook 登记过，否则 ``AttributeError``。读侧不变。
 
 **hook 异常不中断加载**：``load()`` 会把 hook 异常收集成
 ``LoadError(kind="hook_failed")``，``partial=False`` 时和其它错误一起统一抛

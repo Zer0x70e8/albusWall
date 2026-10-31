@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 
 class LoopHook(Protocol):
-    def __call__(self, app: "Application") -> None: ...
+    def __call__(self, app: "Application", /) -> None: ...
 
 
 class ErrorHook(Protocol):
@@ -21,8 +21,8 @@ class ErrorHook(Protocol):
     ) -> bool:
         """Return True if the error has been handled.
 
-        Handled errors suppress the default traceback printer,
-        but all hooks are still invoked.
+        Handled errors suppress the default traceback printer; hooks registered
+        after the first that returns True will not be invoked.
         """
         ...
 
@@ -30,12 +30,9 @@ class ErrorHook(Protocol):
 SimpleHook = Callable[[], None]
 Hooks = Union[SimpleHook, ErrorHook, LoopHook]
 HookNames = Literal[
-    "boot",
-    "init",
-    "loop",
-    "exit",
-    "on_error",
-    "on_fatal",
+    "boot", "init",
+    "loop", "exit", "on_error", "on_fatal",
+    "select_config", "select_plugins", "select_loop",
 ]
 
 
@@ -46,3 +43,6 @@ class HooksMap(TypedDict):
     exit: list[SimpleHook]
     on_error: list[ErrorHook]
     on_fatal: list[ErrorHook]
+    select_config: list
+    select_plugins: list
+    select_loop: list

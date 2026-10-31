@@ -886,6 +886,14 @@ Window > BlurLabel {
  *  2.3  TitleBar Labels  ·  标题栏文本与封面图标
  * --------------------------------------------------------------------------- */
 
+/* 操作栏窗口标题：镜像 QWidget.windowTitle()，自绘边框下唯一的标题呈现。 */
+#TitleBarWindowTitle {
+    padding: 2px 12px;
+    font-size: 1em;
+    color: rgba(240, 240, 240, 0.92);
+    background: transparent;
+}
+
 #TitleBarTitleLabel {
     font-size: 36px;
     font-weight: bold;

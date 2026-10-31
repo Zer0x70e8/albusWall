@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import threading
 from collections.abc import Callable, Iterator
 from pprint import pformat
@@ -13,6 +14,8 @@ from albuswall.core.errors import MissingDependencyError
 from albuswall.utils.format import factory_repr
 
 __all__ = ["Container"]
+
+logger = logging.getLogger(__package__)
 
 _UNSET: Any = object()
 
@@ -119,6 +122,9 @@ class Container:
         returns : Any, optional
             返回类型/元数据提示。仅用于 ``str(container)`` 展示，
             不参与依赖解析。
+
+        注意：非 ``type`` 的 callable 若存在必填位置参数，会被注入
+        ``Container`` 本身，形参名无意义。
         """
         if factory is _UNSET:
             def decorator(fn: Any) -> Any:
@@ -132,6 +138,8 @@ class Container:
     def set(self, name: str, value: Any) -> None:
         """注册常量值（强制单例）。"""
         with self._lock:
+            if name in self._factories:
+                logger.debug("overriding dependency %r", name)
             self._factories[name] = lambda _c, v=value: v
             self._singleton_names.add(name)
             self._singleton_cache[name] = value
@@ -160,6 +168,8 @@ class Container:
             returns: Any = None,
     ) -> None:
         with self._lock:
+            if name in self._factories:
+                logger.debug("overriding dependency %r", name)
             self._singleton_cache.pop(name, None)  # 旧缓存失效
             self._returns.pop(name, None)
             if callable(obj):
@@ -215,10 +225,10 @@ class Container:
         """强依赖获取：未注册抛 ``MissingDependencyError``。"""
         return self._resolve(name)
 
-    def has_instance(self, name):
-        if name in self._singleton_cache:
-            return True
-        return False
+    def has_instance(self, name: str) -> bool:
+        """该依赖当前是否已有缓存实例（``singleton=False`` 恒为 False）。"""
+        with self._lock:
+            return name in self._singleton_cache
 
     # ---------------- 语法糖 ----------------
     def __call__(self, name: str, value: Any = _UNSET) -> Any:

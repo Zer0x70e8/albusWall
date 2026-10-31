@@ -492,6 +492,16 @@ class Resolver:
             for node in tuple(self._raw):
                 self.get_typed(*node)
 
+    def typed_nodes(self) -> frozenset[Node]:
+        """返回「有类型声明」的全部节点（``@configclass`` 或加载钩子登记过）。
+
+        供审计开关使用（``Configue.load(strict_undeclared=True)``）：文件里
+        出现、但既不被 ``@configclass`` 声明、也没有任何 hook 补过类型的
+        key，就是「幽灵配置」——它照常生效，但没有任何代码认识它。
+        """
+        with self._lock:
+            return frozenset(self._types)
+
     def types_of(self, section: str) -> dict[str, Any]:
         """返回 [{key: converter}]，供 UI / 校验 / 文档使用。"""
         with self._lock:

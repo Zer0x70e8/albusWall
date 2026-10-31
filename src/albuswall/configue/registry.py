@@ -471,6 +471,15 @@ def configclass(
 
     ``order`` 用于同文件多类的稳定排序（大者优先），与 ``FileInfo.order`` 独立；
     ``order`` 由调用方保证为 ``int``，本层只透传。
+
+    装饰时机影响默认值注入：
+
+    - ``Configue`` **未**构造：默认值等 ``load()`` 的 Step 4 注入（遍历
+      ``_CLASSES``，覆盖「声明先于加载」的常规路径）；
+    - ``Configue`` **已**构造：装饰当下立即注入
+      （``inject_raw(overwrite=False)``），**不覆盖**文件里写的值 / 运行期
+      ``set`` 过的值。这是「插件 / UI 在 ``load()`` 之后才 import」的兜底，
+      否则这些类的字段默认值永远进不了 Resolver。
     """
     class_path = _normalize_path(path)
 
@@ -583,6 +592,11 @@ def configclass(
         ):
             cls.__repr__ = _make_config_repr(cls)
 
+        # 晚注册兜底：Configue 已构造时立即注入类型/默认值；早注册让
+        # load() 的 Step 4 处理。必须在 _FIELD_OWNER 更新之后——注入的值没有
+        # origin，flush 要靠 _FIELD_OWNER 回查归属文件。
+        _inject_defaults_for_late_class(fields)
+
         return cls
 
     return decorator
@@ -624,3 +638,52 @@ def _make_config_repr(cls: type) -> Callable[[Any], str]:
 
     __repr__._configue_generated = True  # type: ignore[attr-defined]
     return __repr__
+
+
+def _same_converter(current: Any, wanted: Any) -> bool:
+    """两个转换器是否等价。
+
+    ``is`` 不够：``list[str]`` 这类泛型别名每次求值都是**新对象**，``is``
+    永远为假，会让每次装饰都触发一次无意义的 ``register_type``（连带清缓存）。
+    所以先比 ``is`` 再比 ``==``，比较本身抛异常就当作「不同」（宁可多注册一次，
+    不能漏注册）。
+    """
+    if current is wanted:
+        return True
+    try:
+        return bool(current == wanted)
+    except Exception:  # noqa: BLE001  特殊形式比较不出来
+        return False
+
+
+def _inject_defaults_for_late_class(fields: list[FieldInfo]) -> None:
+    """``configclass`` 在 ``Configue`` 已构造时，把字段的类型/默认值立即注入
+    Resolver，覆盖「晚于 ``load()`` 才注册的类」这一场景。
+
+    ``load()`` 的 Step 4 只遍历**当时**的 ``_CLASSES``；插件 / UI 模块通常在
+    ``load()`` 之后才被 import，装饰时若不做点什么，字段的默认值永远到不了
+    Resolver。
+
+    - ``Configue._instance`` 不存在：什么也不做，``load()`` 会处理；
+    - 已存在值（文件里写了 / 运行期 ``set`` 过）：``overwrite=False``
+      不覆盖；
+    - 类型相同：不重复 ``register_type``，避免无意义的缓存失效。
+    """
+    try:
+        from .configue import Configue
+    except ImportError:  # pragma: no cover  循环 import 未就绪（极罕见）
+        return
+    inst = getattr(Configue, "_instance", None)
+    if inst is None:
+        return
+
+    resolver = inst.resolver
+    for f in fields:
+        section, key = f.path[0], f.path[-1]
+        if not _same_converter(resolver.converter_of(section, key), f.type):
+            resolver.register_type(section, key, f.type)
+        # overwrite=False：文件值 / 运行期 set 过的值优先。没有 origin 的
+        # 默认值与 load() 的 Step 4 注入完全一致（flush 靠 _FIELD_OWNER 回查）。
+        if f.has_default and (section, key) not in resolver:
+            resolver.inject_raw(section, key, f.default)
+

@@ -74,8 +74,8 @@ class Configue:
 
         c = Configue(base_dir=Path.home() / ".config" / "app")
         c.load()
-        print(c.tree.main.core.debug)
-        c.tree.main.save()
+        print(Core().debug)          # 业务代码优先用类视图（@configclass 声明）
+        c.tree.main.save()           # 树视图仅用于 save / 枚举 / 动态 key
 
     """  # noqa: D301
 
@@ -106,6 +106,8 @@ class Configue:
         self.base_dir = Path(base_dir).resolve()
         self.resolver = Resolver()
         self._closed = False
+        #: 树视图写入的声明校验开关（默认关，见 ``strict_tree_writes``）。
+        self._strict_tree_writes = False
         self._last_flush_error: Optional[ConfigError] = None
         self._debounce_timers: dict[str, threading.Timer] = {}
         self._flush_lock = threading.RLock()
@@ -135,6 +137,36 @@ class Configue:
     def last_flush_error(self) -> Optional[ConfigError]:
         """最近一次写盘失败的错误；成功后不清空，便于排查。"""
         return self._last_flush_error
+
+    # ------------------------------------------------------------------
+    # strict_tree_writes（审计开关）
+    # ------------------------------------------------------------------
+    @property
+    def strict_tree_writes(self) -> bool:
+        """树视图写入是否要求 key「被声明或 hook 登记过」。默认 ``False``。
+
+        默认关：``tree.main.core.new_key = 1`` 是合法写法（树视图是值总线，
+        不要求 ``@configclass`` 声明，见 ``tree.py`` 模块 docstring）。
+
+        打开后 ``_SectionView.__setattr__`` 额外要求该 ``(section, key)``
+        满足其一，否则抛 ``AttributeError``：
+
+        - ``@configclass`` 声明过（``_FIELD_OWNER`` 里有它）；
+        - 加载钩子补过类型（``resolver.typed_nodes()`` 里有它，典型是
+          ``[shortcuts].<action_id>`` 这类运行期才知道的 key）。
+
+        用途：把「拼错 key 静默写进文件」从**静默 bug** 变成**当场异常**。
+        ``tree.main.core.debgu = True`` 在打开后会立刻
+        ``AttributeError``，而不是悄悄在 ini 里多一行 ``debgu``。
+
+        代价：运行期才出现的「全新 key」写不进去了（必须先让 hook 登记类型
+        或加 ``@configclass`` 字段）——所以默认关，只在开发/测试期打开。
+        """
+        return self._strict_tree_writes
+
+    @strict_tree_writes.setter
+    def strict_tree_writes(self, value: bool) -> None:
+        self._strict_tree_writes = bool(value)
 
     # ------------------------------------------------------------------
     # check
@@ -197,12 +229,17 @@ class Configue:
     # ------------------------------------------------------------------
     # load
     # ------------------------------------------------------------------
-    def load(self, *, partial: bool = False) -> LoadReport:
+    def load(
+            self,
+            *,
+            partial: bool = False,
+            strict_undeclared: bool = False,
+    ) -> LoadReport:
         """加载所有**尚未加载**的已登记文件。
 
         顺序（不能随意调换）：前置声明检查 → 按 ``order`` 升序逐文件注入 →
         应用待登记的转换器 → 全量注册类型 + 注入默认值 → **执行加载钩子** →
-        ``check_all`` → 汇总。
+        未声明 key 审计 → ``check_all`` → 汇总。
 
         幂等：``loaded=True`` 的文件会被跳过，重复调用不会重复注入。加载钩子
         例外——**每次** ``load()`` 都跑（它可能给运行期才知道的 key 补类型，
@@ -211,6 +248,18 @@ class Configue:
         ``optional=True`` 的文件缺失时不算错误：以 ``base_dir / file_path``
         作为占位 ``resolved_path`` 标成已加载（默认值照常注入，写回时创建
         文件）；**歧义（多候选）仍然报错**。
+
+        Args:
+            partial: True 时不抛 ``ConfigError``，返回 report 由调用方自查。
+            strict_undeclared: True 时把「文件里有、但既没被 ``@configclass``
+                声明、也没有加载钩子登记类型」的节点收集成
+                ``LoadReport.warnings``（**不影响成败、不阻止 key 生效**）。
+
+                这是**审计开关**而不是强制隔离：``[shortcuts]`` 这类段的 key
+                是运行期才知道的，强制隔离会把合法配置判成错误；而「幽灵
+                配置」恰恰是最难排查的一类问题（值生效了，却没有任何代码读
+                它，或者拼错的 key 悄悄多了一行）。默认 ``False``，零行为
+                变化。
 
         失败语义：
 
@@ -332,6 +381,12 @@ class Configue:
                     ),
                 ))
 
+        # ── Step 4.6：未声明 key 审计（默认关）──────────────────────
+        # 必须在 hook 之后：hook 补的类型（``[shortcuts]`` 之类）才算「已登记」，
+        # 否则合法配置会被误报成幽灵 key。
+        if strict_undeclared:
+            warnings.extend(self._undeclared_keys())
+
         # ── Step 5：类型自检 ────────────────────────────────────────
         try:
             self.resolver.check_all()
@@ -393,6 +448,42 @@ class Configue:
         _FILES[name] = replace(finfo, loaded=False, resolved_path=None)
         self._cancel_debounce(name)
         _logger.debug("unload: file=%s nodes=%d", name, len(removed))
+
+    # ------------------------------------------------------------------
+    # 声明审计（strict_undeclared / strict_tree_writes 共用）
+    # ------------------------------------------------------------------
+    def _is_declared(self, section: str, key: str) -> bool:
+        """该节点是否「被认识」：``@configclass`` 声明过，或 hook 补过类型。
+
+        两张表都查是有必要的：``_FIELD_OWNER`` 是**声明期**的（装饰时填充，
+        不依赖 ``load()``），``resolver.typed_nodes()`` 是**加载期**的
+        （``@configclass`` 的字段类型 + 加载钩子补的类型）。只查前者会误杀
+        ``[shortcuts]``，只查后者则在 ``load()`` 之前什么都认不出来。
+        """
+        if (section, key) in _FIELD_OWNER:
+            return True
+        return (section, key) in self.resolver.typed_nodes()
+
+    def _undeclared_nodes(self) -> list[Node]:
+        """「文件里有、但没人认识」的节点（已排序，纯诊断，不改任何状态）。
+
+        ``[shortcuts]`` 这类由 hook 补类型的段会被 ``typed_nodes()`` 认出来，
+        不会误报——这正是要求本检查在 hook **之后**运行的原因。
+        """
+        declared = set(_FIELD_OWNER)
+        typed = self.resolver.typed_nodes()
+        return [
+            node for node in sorted(self.resolver.nodes())
+            if node not in declared and node not in typed
+        ]
+
+    def _undeclared_keys(self) -> list[str]:
+        """``_undeclared_nodes()`` 的 warning 文案形式（``LoadReport.warnings``）。"""
+        return [
+            f"undeclared key [{section}]{key} "
+            f"(no @configclass, no load hook)"
+            for section, key in self._undeclared_nodes()
+        ]
 
     def _apply_pending_converters(self) -> None:
         """应用「``Configue`` 构造前登记的转换器」，然后清空队列。

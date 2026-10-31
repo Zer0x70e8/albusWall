@@ -8,7 +8,8 @@ from pathlib import Path
 from pprint import pformat
 
 import albuswall
-from albuswall.configue import Configue, configclass
+from albuswall.configue import configclass
+from albuswall.configue.bootstrap import Files
 from albuswall.configue.utils.platform_dir import get_user_config_dir
 from albuswall.core import Container
 
@@ -47,21 +48,21 @@ class LogConf:
 
 
 def setup_log(container: Container):
-    config: Configue = container.require("config")
-    tree = config.tree.main
+    # 装配顺序契约：日志配置来自 config 单例，所以本函数必须在 setup_config
+    # 之后调用。这里 require 一次，缺配置时立刻 MissingDependencyError，
+    # 而不是等到读 [log] 段才炸。
+    container.require("config")
 
-    log_section = tree.log
-    log_level: int | str | None = (
-        log_section.level if "level" in log_section else None
-    )
-    raw_log_config = log_section.config if "config" in log_section else None
+    log_conf = LogConf()
+    log_level: int | str | None = log_conf.level
+    raw_log_config = log_conf.config
 
     if raw_log_config:
         log_conf_file = Path(str(raw_log_config))
     else:
         log_conf_file = (
-            Path(get_user_config_dir(albuswall.__title__, albuswall.__author__))
-            / tree.files.log
+            Path(get_user_config_dir(albuswall.__name__, albuswall.__author__))
+            / Files().log
         )
 
     root_logger = logging.getLogger(albuswall.__name__)
@@ -108,3 +109,7 @@ def setup_log(container: Container):
             if source_logger.isEnabledFor(record.levelno):
                 source_logger.handle(record)
         buffer_handler.buffer.clear()
+
+    # 把配置好的根 logger 放进容器：插件通过 ``ctx.require("logger")``
+    # 拿到的就是它，能加 handler / 改 formatter / 改 level。
+    container.set("logger", logging.getLogger(albuswall.__name__))

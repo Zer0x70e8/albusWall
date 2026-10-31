@@ -2,6 +2,7 @@
 """"""
 
 from albuswall.configue import configclass
+from albuswall.configue.bootstrap import Files, Paths
 from albuswall.core import Application, Container
 
 from .connector import Connector
@@ -14,7 +15,7 @@ class Config:
 
     ``db_file`` 在旧包里是 ``ConfigField("files", "db")``（挂在 ``[files]`` 段），
     迁移后由 ``configue.bootstrap`` 的 ``[files]`` 声明统一提供
-    （``tree.files.db``），这里只留 ``[db]`` 自己的键。
+    （``Files().db``），这里只留 ``[db]`` 自己的键。
 
     ``root = ConfigField("db", default={})`` 的「确保段存在」不再需要：
     新包只支持 2 层 path，空段由第一次写入时自然产生。
@@ -27,10 +28,10 @@ def register_database(
         container: Container
 ):
     def _make_connector() -> Connector:
-        config = container.require("configue")
-        tree = config.tree.main
+        # 类视图读全局 Configue 单例：register_database 在 _boot 的
+        # setup_config 之后（phase 6）才调用，此时 [path] / [files] 已就位。
         return Connector(
-            tree.path.data / tree.files.db,
+            Paths().data / Files().db,
             must_exist=Config().must_exist,
         )
 

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import albuswall
+from albuswall.log import getLogger
 
 from .backends import get_backend
 from .errors import ConfigError
@@ -44,6 +45,9 @@ __all__ = [
     "setup_config",
     "CONFIG_FILE_NAME",
     "MAIN_FILE_NAME",
+    # 应用级段的类视图（业务代码从这里 import，见各自的 docstring）
+    "Files",
+    "Paths",
 ]
 
 #: 用户配置文件（放 ``base_dir`` 下）。
@@ -51,6 +55,8 @@ CONFIG_FILE_NAME = "config.ini"
 
 #: 主配置的注册名——``c.tree.main`` / ``c.flush(file="main")`` 用它。
 MAIN_FILE_NAME = "main"
+
+logger = getLogger(__package__)
 
 
 # ===========================================================================
@@ -80,43 +86,85 @@ def load_file(finfo: FileInfo) -> dict[tuple[str, str], Any]:
 # 2. 应用装配：albuswall 的内建段 + setup_config
 # ===========================================================================
 
-def _declare_app_sections(
-        name: str,
+class Paths:
+    """``[path]``：应用自己的目录。
+
+    **字段不带默认值**：四个目录依赖 ``portable`` / ``base_dir``，只能在
+    ``setup_config`` 运行期算出来，由它 ``resolver.inject_raw`` 注入（效果与
+    ``@configclass`` 默认值等价——``load()`` 注入文件值时用 ``overwrite=True``，
+    文件里写了的段照样赢）。
+
+    ``@configclass`` 装饰发生在 :func:`_declare_app_sections`（装配期）而不是
+    模块导入期，有两个原因：
+
+    - 登记键是 ``(file, class_path)``，``file`` 来自 ``setup_config(name=...)``
+      参数，导入期还不知道；也正因为键里带 file，**同一段不能声明两份**
+      （后装饰者会把先注册的类从 ``_CLASSES`` 顶掉），所以业务代码要读
+      ``[path]`` 只能 import 本类，不能再写一份「只读视图」；
+    - 导入 ``configue`` 不往全局登记表里塞节点（未装配时 ``load()`` 不会因为
+      「引用了未 reg 的 file」而报错）。
+
+    业务代码用法（**必须在 ``setup_config`` 之后**）::
+
+        from albuswall.configue.bootstrap import Paths
+
+        db_file = Paths().data / "db.db"
+    """
+
+    config: Path
+    data: Path
+    cache: Path
+    temp: Path
+
+
+class Files:
+    """``[files]``：文件名，相对 ``[path]`` 使用。
+
+    默认值与平台无关，所以直接写在字段上（``load()`` 时由 ``@configclass``
+    注入）；装饰时机与用法同 :class:`Paths`。
+    """
+
+    log: str = "log_config.ini"
+    db: str = "db.db"
+    qss: str = "qss.qss"
+    icons: str = "*.svg"
+
+
+def _declare_app_sections(name: str) -> None:
+    """把 :class:`Paths` / :class:`Files` 登记到 ``file=name`` 名下。
+
+    幂等：``configclass`` 对同一 ``(file, class_path)`` 是覆盖注册，测试清空
+    全局表之后仍能重建。两个类是**模块级对象**，所以业务代码 import 到的
+    就是被登记的那个类（装饰是原地修改，不产生新类）。
+    """
+    configclass("path", name)(Paths)
+    configclass("files", name)(Files)
+
+
+def _inject_path_defaults(
+        config: Any,
         path_config: Path,
         path_data: Path,
         path_cache: Path,
         path_temp: Path,
 ) -> None:
-    """声明 ``[path]`` / ``[files]`` 的默认值（``@configclass``）。
+    """注入 ``[path]`` 四段的默认值（替代 ``@configclass`` 字段默认值）。
 
-    两个类**定义在函数里**，因此：
+    必须在 ``load()`` **之前**调用：``load()`` 注入文件值的 ``overwrite=True``，
+    文件里写了的段会盖掉这里，语义与「默认值只在缺值时补位」一致；同时默认值
+    在 ``check_all`` / 加载钩子之前就已就位（与改前逐字段默认值的时机相同）。
 
-    - 导入 ``configue`` 不会往全局登记表里塞节点，也不会因为
-      ``get_temp_dir()`` 的 ``mkdir`` 产生导入期副作用；
-    - 每次 ``setup_config`` 都重跑，``configclass`` 对同一 ``(file, path)``
-      是幂等覆盖，测试清空全局表之后仍能重建。
-
-    四个目录由 ``setup_config`` 按 ``portable`` 算好后传入：``portable=False``
-    时是各平台用户目录，``portable=True`` 时全部落在 ``base_dir`` 下。
+    ``inject_raw`` 不带 origin，所以这些值不会被当成「用户改过的」而回写——
+    与 ``@configclass`` 默认值完全一致。
     """
-
-    @configclass("path", name)
-    class Paths:
-        """``[path]``：应用自己的目录（默认值由 ``setup_config`` 决定）。"""
-
-        config: Path = path_config
-        data: Path = path_data
-        cache: Path = path_cache
-        temp: Path = path_temp
-
-    @configclass("files", name)
-    class Files:
-        """``[files]``：文件名，相对 ``[path]`` 使用。"""
-
-        log: str = "log_config.ini"
-        db: str = "db.db"
-        qss: str = "qss.qss"
-        icons: str = "*.svg"
+    resolver = config.resolver
+    for key, value in (
+            ("config", path_config),
+            ("data", path_data),
+            ("cache", path_cache),
+            ("temp", path_temp),
+    ):
+        resolver.inject_raw("path", key, value)
 
 
 def setup_config(
@@ -183,7 +231,7 @@ def setup_config(
 
     target_dir = (
         Path(base_dir).resolve() if base_dir is not None
-        else get_user_config_dir(albuswall.__title__, albuswall.__author__).resolve()
+        else get_user_config_dir(albuswall.__name__, albuswall.__author__).resolve()
     )
 
     if portable:
@@ -195,24 +243,27 @@ def setup_config(
         path_temp = target_dir / "temp"
     else:
         path_config = get_user_config_dir(
-            albuswall.__title__, albuswall.__author__,
+            albuswall.__name__, albuswall.__author__,
         ).resolve()
         path_data = get_user_data_dir(
-            albuswall.__title__, albuswall.__author__,
+            albuswall.__name__, albuswall.__author__,
         ).resolve()
-        path_cache = get_cache_dir(albuswall.__title__).resolve()
-        path_temp = get_temp_dir(albuswall.__title__).resolve()
+        path_cache = get_cache_dir(albuswall.__name__).resolve()
+        path_temp = get_temp_dir(albuswall.__name__).resolve()
 
-    _declare_app_sections(
-        name, path_config, path_data, path_cache, path_temp,
-    )
+    _declare_app_sections(name)
 
     reg(
         ConfigFile.INI, file_name, name=name, autosave=autosave, order=order,
         optional=ignore_missing,
     )
     config: Configue = Configue(target_dir)
+    # [path] 默认值先注入再 load()：文件里写了的段由 load() 的 overwrite 赢。
+    _inject_path_defaults(
+        config, path_config, path_data, path_cache, path_temp,
+    )
     config.load()
+    logger.info("Conf loaded: %s", base_dir / file_name)
 
     if register_aliases:
         container.reg("config", lambda: config, returns=Configue)
