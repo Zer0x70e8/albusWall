@@ -94,7 +94,20 @@ def parse_cli_args(tokens: list[str]) -> tuple[list, dict]:
 
 def run_cli(argv: list[str]) -> int:
     """入口：version / help 特殊处理，其余 argv 解析后转发。"""
-    setup_cli_logging()
+    # 必须在**这里**重新绑定 ``_log``，不能只靠模块级那一次 ``getLogger``：
+    #
+    # * 走 ``python -m albuswall.cli`` 时本文件是以 ``__main__`` 执行的，
+    #   模块级 ``_log`` 的名字因此是 ``"__main__"``，而 ``setup_cli_logging()``
+    #   配置的是 ``"albuswall.cli"`` —— 不重绑，``_log.info`` 全被 root 的
+    #   WARNING 挡掉，CLI 会「退出码 0 但一个字都不打印」。
+    # * 走 ``albusctl`` 控制台脚本时名字才对得上，重绑也无害（幂等）。
+    global _log
+    _log = setup_cli_logging()
+
+    # ``--cli`` 是"强制走客户端"的开关（``entrypoint._CLIENT_FLAGS``）：它只
+    # 影响 entrypoint 的分支判断，不该被当成命令名。剥掉它，否则
+    # ``albuswall --cli task stats`` 会去找一条叫 ``--cli`` 的命令。
+    argv = [tok for tok in argv if tok != "--cli"]
 
     if not argv or argv[0] in _HELP_FLAGS:
         return _run_help(argv[1:])
@@ -195,5 +208,14 @@ def _emit_result(result) -> None:
         _log.info("%s", result)
 
 
+def main() -> int:
+    """``console_scripts`` 入口（``pyproject.toml`` 的 ``albusctl``）。
+
+    setuptools/hatch 生成的包装器是 ``sys.exit(main())`` 形式，所以这里必须
+    是**零参**函数；``run_cli`` 自己收 argv，不能用它直接当入口。
+    """
+    return run_cli(sys.argv[1:])
+
+
 if __name__ == "__main__":
-    raise SystemExit(run_cli(sys.argv[1:]))
+    raise SystemExit(main())

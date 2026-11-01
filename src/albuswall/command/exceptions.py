@@ -21,6 +21,7 @@ __all__ = [
     # 执行期
     "DispatchError", "BadRequest", "UnknownCommand",
     "CommandNotExecutable", "ArgumentBindingError", "CommandFailed",
+    "DispatchTimeout", "DispatchUnavailable",
 ]
 
 
@@ -108,3 +109,43 @@ class CommandFailed(DispatchError):
         )
         self.path = path
         self.original = original
+
+
+class DispatchTimeout(DispatchError):
+    """主循环在超时内没有给出响应（大概率被某个回调阻塞）。
+
+    由服务层 ``MainThreadTimeout`` 经 ``service/command/dispatch_errors.py``
+    翻译而来 —— 命令本身没问题，重试通常能成功，所以是软件错误而非用法错误。
+    """
+    code = "dispatch_timeout"
+    exit_code = ExitCode.SOFTWARE_ERROR
+
+    def __init__(
+            self,
+            message: str = "",
+            *,
+            original: BaseException | None = None,
+    ) -> None:
+        #: 原始异常（翻译链上游的服务层异常），供日志 / 诊断回溯。
+        self.original = original
+        super().__init__(message)
+
+
+class DispatchUnavailable(DispatchError):
+    """调度目标不可用：主循环已关闭 / 退出 / 无法投递。
+
+    由服务层 ``MainLoopUnavailable`` 翻译而来。调用方（``albusctl``）应把它
+    理解为"实例正在退出"，而不是命令写错了。
+    """
+    code = "dispatch_unavailable"
+    exit_code = ExitCode.SOFTWARE_ERROR
+
+    def __init__(
+            self,
+            message: str = "",
+            *,
+            original: BaseException | None = None,
+    ) -> None:
+        #: 原始异常（翻译链上游的服务层异常），供日志 / 诊断回溯。
+        self.original = original
+        super().__init__(message)

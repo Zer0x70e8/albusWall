@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Callable, Any, TypedDict
 
 from albuswall.utils.registry import register_all, build_getters
 
+from .album import AlbumRepository
 from .source import IngestSourceRepository
 from .import_ import ImportRepository
 from .thumbnail import ThumbnailRepository
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
 
 
 class Repositories(TypedDict):
+    album_repo: AlbumRepository
     ingest_source_repo: IngestSourceRepository
     import_repo: ImportRepository
     thumbnail_repo: ThumbnailRepository

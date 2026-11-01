@@ -159,12 +159,14 @@ class Connector:
         try:
             conn.row_factory = sqlite3.Row
             conn.execute(PRAGMA_FOREIGN_KEYS_ON)
-            if not self._is_memory:
-                # WAL 对内存库无意义
-                conn.execute(PRAGMA_JOURNAL_WAL)
+            # ``busy_timeout`` 必须在任何要拿写锁的语句之前设置，否则并发场景
+            # 下会直接抛 "database is locked"（没有重试窗口）。
             conn.execute(PRAGMA_BUSY_TIMEOUT)
             conn.execute(PRAGMA_RESOURCE_TRIGGERS)
-            self._ensure_initialized(conn, resolved)
+            # WAL 切换 + schema 初始化都是"一次性、需要写锁"的动作：
+            # 放进同一把进程级锁里，避免两个线程同时给同一个新库做初始化
+            # （``journal_mode = WAL`` 是写操作，且不会走 busy handler 重试）。
+            self._prepare_database(conn, resolved)
         except Exception:
             # 初始化失败时主动关掉，避免半初始化连接泄漏
             try:
@@ -175,17 +177,33 @@ class Connector:
         return conn
 
     # --------------------------------------------------------- initialization
-    def _ensure_initialized(self, conn: sqlite3.Connection, resolved: str) -> None:
-        # 内存库：每实例唯一 URI → 不同实例互不影响
-        # 文件库：解析后的路径 → 同一文件在同进程内只初始化一次
-        #
-        # 初始化本身完全幂等（schema 里全部是 CREATE TABLE/INDEX/TRIGGER
-        # IF NOT EXISTS + INSERT OR IGNORE）。_initialized_dbs 只是为了避免
-        # 在同进程内对同一库重复 executescript，纯粹的性能优化，去掉也不
-        # 影响正确性。
+    @staticmethod
+    def _journal_mode_is_wal(conn: sqlite3.Connection) -> bool:
+        """当前连接看到的 journal_mode 是否已是 WAL（只读查询，不加锁）。"""
+        try:
+            row = conn.execute("PRAGMA journal_mode").fetchone()
+        except sqlite3.Error:  # pragma: no cover - 查询失败就当不是 WAL
+            return False
+        return bool(row) and str(row[0]).lower() == "wal"
+
+    def _prepare_database(self, conn: sqlite3.Connection, resolved: str) -> None:
+        """一次性准备工作：切 WAL + 建 schema（进程内每库只做一次）。
+
+        内存库：每实例唯一 URI → 不同实例互不影响
+        文件库：解析后的路径 → 同一文件在同进程内只初始化一次
+
+        初始化本身完全幂等（schema 里全部是 CREATE TABLE/INDEX/TRIGGER
+        IF NOT EXISTS + INSERT OR IGNORE），``_initialized_dbs`` 既是性能优化，
+        也是**并发正确性**的保证点：``PRAGMA journal_mode = WAL`` 是写操作，
+        且 SQLite 在拿不到锁时**不**走 busy handler 重试（会直接报
+        "database is locked"）。多个线程同时首次连同一个新库时，必须由这把
+        进程级锁串行化，否则第二个线程会随机失败。
+        """
         with Connector._init_dbs_lock:
             if resolved in Connector._initialized_dbs:
                 return
+            if not self._is_memory and not self._journal_mode_is_wal(conn):
+                conn.execute(PRAGMA_JOURNAL_WAL)
             self.logger.info("Initializing database: %s", resolved)
             conn.executescript(self._schema_sql)
             Connector._initialized_dbs.add(resolved)

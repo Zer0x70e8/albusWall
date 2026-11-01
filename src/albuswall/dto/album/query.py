@@ -1,10 +1,12 @@
 #
 """Album / Asset 读模型（Query）。
 
-归属（``dto/CONVENTIONS.md`` · DTO 归属与命名）：本文件只有 **Query** 侧 DTO
-（``Album`` / ``Asset``），只由读路径消费（``ViewRepository`` / ``TagRepository.list_assets``
-→ ``ViewService`` → presenter）。相簿写入尚未实现，因此本域暂无 Command DTO；
-将来实现时按 ``AlbumCreate`` / ``AlbumUpdate`` 命名，放 ``dto/album/command.py``。
+归属（``dto/CONVENTIONS.md`` · DTO 归属与命名）：本模块只有 **Query** 侧 DTO
+（``Album`` / ``Asset``），只由读路径消费（``ViewRepository`` /
+``TagRepository.list_assets`` → ``ViewService`` → presenter）。
+
+写模型在 ``dto/album/command.py``（``AlbumCreate`` / ``AlbumUpdate`` /
+``AlbumReorder``）；两侧不互相 import。
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from dataclasses import dataclass, asdict
 from typing import Any, Optional
 from uuid import UUID
 
-from .utils import to_uuid, row_get
+from ..utils import to_uuid, row_get
 
 __all__ = ["Album", "Asset"]
 

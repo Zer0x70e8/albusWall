@@ -5,8 +5,21 @@
 builtin 排第一：诊断/自省能力先注册，后续业务命令注册后 help 即可见。
 
 只读观测命令（album/asset/tag/thumb/trash/source）已随那批"最小接口"
-service 一起退役——它们的接口从未被承诺实现，重新实现业务时按新契约
-重建 handler 模块，再加回 ``MODULES``。
+service 一起退役——重新实现业务时按新契约重建 handler 模块，再加回
+``MODULES``。目前业务域（与 ``service/`` 下的包一一对应）：
+
+* ``source``    —— ``service/source/`` 五层 + 源回收站（``source.trash`` 等）；
+* ``import``    —— 手动唤醒导入 worker（正常链路是扫描完成信号自动驱动）；
+* ``asset``     —— 资产写命令（收藏 / 回收站 / 相册成员 / 标签绑定）；
+* ``album``     —— 相簿生命周期（主语是"一个相簿"）；
+* ``tag``       —— 标签树 + 别名（``tag.alias.*``）；
+* ``trash``     —— **资产级**回收站（保留期清理 / 清空 / 恢复）；
+* ``thumbnail`` —— 按需生成 + 维护（统计 / 路径 / 手动催 / 清孤儿）；
+* ``setting``   —— 配置读写（结构内省 / 校验后写盘 / 脏节点落盘）。
+  **例外**：它依赖容器的 ``config`` 键，因此不进
+  ``tests/test_handlers_contract.py`` 的 ``_BUSINESS_HANDLERS`` 白名单；
+  ``setup`` 里也不 ``require("config")``（测试用容器没有这个键），
+  配置实例在命令函数体内懒取。
 """
 
 from __future__ import annotations
@@ -14,11 +27,22 @@ from __future__ import annotations
 from albuswall.command import CommandRegistry
 from albuswall.core import Container
 
-from . import builtin, task
+from . import (
+    album,
+    asset,
+    builtin,
+    import_,
+    setting,
+    source,
+    tag,
+    task,
+    thumbnail,
+    trash,
+)
 from ._protocol import HandlerModule
 
 MODULES: tuple[HandlerModule, ...] = (
-    builtin, task,
+    builtin, setting, task, source, import_, asset, album, tag, trash, thumbnail,
 )
 
 

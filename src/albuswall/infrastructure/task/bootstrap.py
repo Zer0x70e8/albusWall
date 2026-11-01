@@ -74,5 +74,5 @@ def register_task_service(
             return
         container.get("task_service").shutdown(wait=True)
 
-    # 插到最前：先停任务，再让下游收尾（db 在 on_final 里追加，顺序靠后）
+    # 插到最前：先停任务，再让下游收尾（db 的 on_exit 在之后登记，顺序靠后）
     Application.on_exit(_shutdown_task_service)

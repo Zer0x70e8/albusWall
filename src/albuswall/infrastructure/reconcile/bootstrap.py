@@ -35,7 +35,7 @@ def register_reconciler(
     Application.on_loop(lambda app: _start_reconciler())
 
     # 关闭：必须在 task_service 之前。
-    # task/bootstrap.py 用 on_final 注册了 task 关闭；这里也用 on_final，
-    # 但注册顺序靠后 → 后注册的 on_final 先跑 → 我们先停，
-    # 之后 task 服务的关闭才把余下任务清空。
+    # 钩子名是 on_exit（``Application`` 没有 on_final）；``run_hooks`` 按
+    # **登记顺序**执行，不反转。本模块在 task/bootstrap 之后被 import，
+    # 因此登记更早 → 我们先停，之后 task 服务的关闭才把余下任务清空。
     Application.on_exit(_shutdown_reconciler)

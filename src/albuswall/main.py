@@ -93,6 +93,9 @@ def _boot(app: Application):
     # 会把自己的 init/loop hook 插到列表头部，插件在 on_init 里才能访问 ui_app。
     # 本 phase 位于 _boot，_boot 早于 _main 的 app.exec()，满足时序。
     loop = app.resolve_slot("main_loop")
+    # 放进容器：服务层据此建 ``main_loop_service``（写入口回主线程的通道）。
+    # 必须与 ``loop.run()`` 是**同一个对象**，否则调度会投递到没人消费的队列。
+    container.set("main_loop", loop)
     _logger.debug("Main loop: %r", type(loop).__name__)
 
     # phase 5: gc

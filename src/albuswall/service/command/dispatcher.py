@@ -45,9 +45,12 @@ class Dispatcher:
             registry: CommandRegistry,
             *,
             subject_provider: Callable[[], frozenset[str]] | None = None,
+            exception_translator:
+                Callable[[BaseException], DispatchError | None] | None = None,
     ) -> None:
         self._registry = registry
         self._subject_provider = subject_provider or (lambda: _EMPTY)
+        self._translate = exception_translator
 
     def dispatch(
             self,
@@ -96,6 +99,11 @@ class Dispatcher:
         except DispatchError:
             raise
         except Exception as e:
+            # 服务层异常（``ServiceError`` 家族）没有协议码，先交给翻译表；
+            # 认不出来才走 ``CommandFailed`` 兜底。
+            mapped = self._translate(e) if self._translate is not None else None
+            if mapped is not None:
+                raise mapped from e
             raise CommandFailed(cmd.path, e) from e
 
     # -- 参数绑定 --------------------------------------------------

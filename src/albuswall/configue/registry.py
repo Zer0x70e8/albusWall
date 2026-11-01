@@ -10,6 +10,16 @@
 - ``path``      —— 配置访问路径，类型 ``tuple[str, ...]``，如 ``("core", "debug")``
 - ``file_path`` —— 文件系统路径，类型 ``str``
 
+**声明共享**：同一个 ``(section, key)``（节点）可以被任意多个 ``@configclass``
+声明——它们读到 / 写到的是同一个 Resolver 节点。共享的前提是声明**等价**：
+
+- 类型相同（``_same_converter`` 语义：``is`` 或 ``==``）；
+- 默认值相同（都写了且相等，或都没写）；
+- ``label`` / ``description`` 不参与判定（纯展示信息，谁非空用谁的）。
+
+任一不一致 → 装饰期抛 ``ConfigDeclarationConflict``，不让「同一个格子两种解释」
+悄悄变成后写者赢。
+
 契约（下游实现依赖，改动前请先读）：
 
 - ``order`` 由调用方保证为 ``int``；本层只做透传，不做类型校验。
@@ -19,6 +29,9 @@
 - ``_ConfigSlot.type`` / ``_ConfigSlot.default`` 是**装饰时快照**；装饰完成后
   它们可能过期（重复装饰、类级覆盖）。运行时路由一律以 ``_CLASSES[type(instance)]``
   为准，slot 上的两个字段仅作调试 / 文档用途。
+- ``_CLASSES`` 以**类对象**为键，因此同名 section 的多个类并存；``_PATHS``
+  以 ``(file, class_path)`` 为键，值是**类列表**（同一 section 的多份声明都
+  在里面，``classes_in`` 只是它的派生视图）。
 """
 
 from __future__ import annotations
@@ -39,7 +52,13 @@ from typing import (
     get_origin,
 )
 
-from .errors import ConfigError, ConfigFileNotFound, ConfigMissingError
+from .errors import (
+    ConfigClassNotRegistered,
+    ConfigDeclarationConflict,
+    ConfigError,
+    ConfigFileNotFound,
+    ConfigMissingError,
+)
 from .utils.annotation import resolve_annotation
 
 __all__ = [
@@ -48,6 +67,9 @@ __all__ = [
     "configclass",
     "field",
     "classes_in",
+    "declarations",
+    "registered_files",
+    "field_owner",
     "ConfigFile",
     "AutosavePolicy",
     "FileInfo",
@@ -55,6 +77,7 @@ __all__ = [
     "ClassInfo",
     "ConfigError",
     "ConfigFileNotFound",
+    "ConfigDeclarationConflict",
     "MISSING",
 ]
 
@@ -175,11 +198,16 @@ def field(
 
 _FILES: dict[str, FileInfo] = {}
 _CLASSES: dict[type, ClassInfo] = {}
-_PATHS: dict[tuple[str, tuple[str, ...]], ClassInfo] = {}
+#: ``(file, class_path) → 声明该 section 的类列表``（登记顺序）。
+#:
+#: **同名 section 允许多份声明**：两个模块各自 ``@configclass("core", "main")``
+#: 时会同时存在于此表里，只要字段声明等价（见模块 docstring 的「声明共享」）。
+#: 同一个类被重复装饰则原地替换它自己的条目（幂等）。
+_PATHS: dict[tuple[str, tuple[str, ...]], list[ClassInfo]] = {}
 #: ``(section, key) → file name`` 反查表，``configclass`` 装饰期填充。
 #: 访问层在「节点没有 origin」时靠它决定兜底写回哪个文件，避免每次 flush
-#: 都遍历 ``_CLASSES``（热路径）。覆盖语义自动生效：后装饰者覆盖先前的值；
-#: 旧类被取代后**残留的字段键不回滚**（只在缺 origin 时做兜底，瑕不掩瑜）。
+#: 都遍历 ``_CLASSES``（热路径）。多个类声明同一节点时**后装饰者覆盖**
+#: （跨文件共享时决定「默认值写回哪个文件」，与 ``_CLASSES`` 的迭代顺序一致）。
 _FIELD_OWNER: dict[tuple[str, str], str] = {}
 
 
@@ -189,13 +217,57 @@ def classes_in(file: str) -> tuple[type, ...]:
     大者在前：``order`` 越大越靠前（与「同文件多类、大者优先」的排序约定一致）。
     同 ``order`` 时按注册顺序（稳定排序）。
 
-    这是 ``_CLASSES`` 的派生视图，不引入第三张表；覆盖语义下旧类自动消失。
+    这是 ``_CLASSES`` 的派生视图，不引入第三张表；同一个 section 的多份声明
+    都会出现在这里（它们共享取值，只是各自的字段集合可能不同）。
     """
     return tuple(sorted(
         (cls for cls, info in _CLASSES.items() if info.file == file),
         key=lambda cls: _CLASSES[cls].order,
         reverse=True,
     ))
+
+
+def declarations() -> tuple[ClassInfo, ...]:
+    """返回全部已登记声明的 ``ClassInfo``，按「稳定的全局顺序」排序。
+
+    排序键（依次比较）：
+
+    1. 所属 ``FileInfo.order`` **升序**——与 ``load()`` 的合并顺序一致，
+       低优先级文件在前；
+    2. ``ClassInfo.order`` **降序**——同文件内大者优先（同 ``classes_in``）；
+    3. 登记顺序（稳定排序兜底）。
+
+    ``ClassInfo.file`` 引用了一个尚未 ``reg()`` 的名字时按 ``order=0`` 参与
+    排序而不是抛错：schema / 文档生成这类只读消费方必须能在「声明先于
+    注册」的中间态下工作。
+    """
+    def file_order(info: ClassInfo) -> int:
+        finfo = _FILES.get(info.file)
+        return 0 if finfo is None else finfo.order
+
+    indexed = list(enumerate(_CLASSES.values()))
+    indexed.sort(key=lambda item: (
+        file_order(item[1]), -item[1].order, item[0],
+    ))
+    return tuple(info for _index, info in indexed)
+
+
+def registered_files() -> tuple[FileInfo, ...]:
+    """返回全部已 ``reg()`` 的配置文件，按 ``order`` **升序**。
+
+    未 ``load()`` 的文件同样在里面（``FileInfo.loaded`` 为 ``False``）；
+    需要「只列已加载」的调用方自己过滤 ``loaded`` / ``resolved_path``。
+    """
+    return tuple(sorted(_FILES.values(), key=lambda f: f.order))
+
+
+def field_owner(section: str, key: str) -> str | None:
+    """``(section, key) → 声明它的文件 name``；无人声明时返回 ``None``。
+
+    ``_FIELD_OWNER`` 的薄包装：把「节点属于哪个文件」这条规则收在一个地方，
+    避免外部调用方直接摸私有表（``flush`` 的兜底规则就是它）。
+    """
+    return _FIELD_OWNER.get((section, key))
 
 
 # ---------------------------------------------------------------------------
@@ -237,9 +309,9 @@ class _ConfigSlot:
         cls = type(instance)
         info = _CLASSES.get(cls)
         if info is None:
-            raise RuntimeError(
+            raise ConfigClassNotRegistered(
                 f"{cls.__qualname__} is not registered in _CLASSES "
-                f"(was it superseded by another @configclass?)"
+                f"(is @configclass applied to it?)"
             )
 
         config = _get_configue()
@@ -263,9 +335,9 @@ class _ConfigSlot:
         cls = type(instance)
         info = _CLASSES.get(cls)
         if info is None:
-            raise RuntimeError(
+            raise ConfigClassNotRegistered(
                 f"{cls.__qualname__} is not registered in _CLASSES "
-                f"(was it superseded by another @configclass?)"
+                f"(is @configclass applied to it?)"
             )
 
         config = _get_configue()
@@ -469,6 +541,14 @@ def configclass(
     需要复用字段请显式在子类重新声明。``file`` 此时不校验是否已 ``reg``，
     未注册引用留到 ``load()`` 时报错。
 
+    **同名声明共享**：``(path, file)`` 相同的多个类可以同时存在，它们读写的
+    是同一个 Resolver 节点，因此「多个模块各自声明同一 section」是合法写法：
+
+    - 字段集合可以不同（各声明各的，合并成一个 section 的字段集）；
+    - 同一个 ``(section, key)`` 被两处声明时，两处的**类型与默认值必须等价**，
+      否则装饰期抛 ``ConfigDeclarationConflict``（不静默让后写者赢）；
+    - 同一个类被重复装饰是幂等的：用新注解 / 默认值原地刷新它自己的登记。
+
     ``order`` 用于同文件多类的稳定排序（大者优先），与 ``FileInfo.order`` 独立；
     ``order`` 由调用方保证为 ``int``，本层只透传。
 
@@ -556,6 +636,14 @@ def configclass(
                     f"shadows an existing method"
                 )
 
+        # ── 共享声明校验 ────────────────────────────────────────────
+        # 同名 section 允许多份声明（它们共享同一个 Resolver 节点），但同一个
+        # (section, key) 的**类型与默认值必须等价**。校验在任何全局表变更之前
+        # 完成，冲突抛错时登记表保持原样——不留半登记状态。
+        conflicts = _collect_declaration_conflicts(cls, file, fields)
+        if conflicts:
+            raise ConfigDeclarationConflict("\n".join(conflicts))
+
         # 替换类属性为 _ConfigSlot。
         # 重复装饰时**不能** `continue`：注解类型 / 默认值可能已经变了，
         # 旧 slot 的快照必须跟着刷新（path 可能因类换 namespace 而变）。
@@ -573,14 +661,19 @@ def configclass(
         class_info = ClassInfo(cls, class_path, file, tuple(fields), order)
         key = (file, class_path)
 
-        old = _PATHS.get(key)
-        if old is not None:
-            _CLASSES.pop(old.cls, None)
+        # 同一个类换过 (file, path) 或重复装饰时先把它自己摘干净，
+        # 保证一个类只出现在一个 section 的声明列表里，且位置反映最新一次装饰。
+        # **不再**把同名 section 的其它类挤出去：它们是并存的多份声明。
+        for bucket in _PATHS.values():
+            bucket[:] = [ci for ci in bucket if ci.cls is not cls]
+        for stale in [k for k, bucket in _PATHS.items() if not bucket]:
+            del _PATHS[stale]
 
-        _PATHS[key] = class_info
+        _PATHS.setdefault(key, []).append(class_info)
         _CLASSES[cls] = class_info
 
         # 字段 → 文件 的反查表：访问层在「节点没有 origin」时靠它兜底写回。
+        # 同一节点被多处声明时后装饰者覆盖（跨文件时决定默认值写回哪个文件）。
         for f in fields:
             _FIELD_OWNER[(f.path[0], f.path[-1])] = file
 
@@ -600,6 +693,75 @@ def configclass(
         return cls
 
     return decorator
+
+
+# ---------------------------------------------------------------------------
+# 共享声明：一致性校验
+# ---------------------------------------------------------------------------
+
+def _defaults_equal(one: Any, other: Any) -> bool:
+    """两个声明默认值是否等价（``MISSING`` 只与 ``MISSING`` 等价）。"""
+    if one is other:
+        return True
+    if one is _MISSING or other is _MISSING:
+        return False
+    try:
+        return bool(one == other)
+    except Exception:  # noqa: BLE001  比较不出来就当不一致
+        return False
+
+
+def _describe_declaration(cls: type, file: str, f: FieldInfo) -> str:
+    """``Core (main): bool = False`` 形式的一行声明摘要。"""
+    type_name = getattr(f.type, "__name__", None) or repr(f.type)
+    default = "<no default>" if f.default is _MISSING else repr(f.default)
+    return f"{cls.__qualname__} ({file}): {type_name} = {default}"
+
+
+def _collect_declaration_conflicts(
+        cls: type,
+        file: str,
+        fields: list[FieldInfo],
+) -> list[str]:
+    """新声明与已登记声明之间的冲突描述（空列表 = 全部等价，可以共享）。
+
+    比较维度只有两个：**类型** 与 **默认值**（``label`` / ``description`` 是
+    纯展示信息，不参与判定）。同一个类自己的旧声明不参与比较——重复装饰
+    允许改动注解与默认值，那是在刷新自己。
+    """
+    conflicts: list[str] = []
+    reported: set[tuple[str, str]] = set()
+    for f in fields:
+        node = (f.path[0], f.path[-1])
+        for other_cls, other_info in list(_CLASSES.items()):
+            if other_cls is cls:
+                continue
+            for other_f in other_info.fields:
+                if (other_f.path[0], other_f.path[-1]) != node:
+                    continue
+                problems: list[str] = []
+                if not _same_converter(f.type, other_f.type):
+                    problems.append(
+                        f"type {other_f.type!r} != {f.type!r}"
+                    )
+                if not _defaults_equal(f.default, other_f.default):
+                    problems.append(
+                        f"default {other_f.default!r} != {f.default!r}"
+                    )
+                if not problems:
+                    continue
+                # 同一节点只报第一个对不上的声明：多个类共享同一节点时，
+                # 逐个罗列只会把同一条信息重复 N 遍。
+                if node in reported:
+                    break
+                reported.add(node)
+                conflicts.append(
+                    f"configclass: conflicting declarations for "
+                    f"[{file}] {'/'.join(node)} ({'; '.join(problems)})\n"
+                    f"  + {_describe_declaration(cls, file, f)}\n"
+                    f"  - {_describe_declaration(other_cls, other_info.file, other_f)}"
+                )
+    return conflicts
 
 
 def _make_config_repr(cls: type) -> Callable[[Any], str]:

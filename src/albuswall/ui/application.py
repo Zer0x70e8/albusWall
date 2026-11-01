@@ -23,6 +23,7 @@ from albuswall.core.registry import hooks_map
 
 from .i18n import TranslationManager
 from .languages import DEFAULT_LANGUAGE
+from .presenter import MainPresenter
 from .window import Window
 
 __all__ = ["Application", "UIApplication"]
@@ -110,6 +111,10 @@ class Application(QApplication, MainLoop):
     #: 界面语言管理器（与容器里的 ``i18n`` 是同一个对象）。
     translations: TranslationManager
 
+    #: presenter 树的根（``setup`` 里通过 ``MainPresenter.bootstrap`` 建立）。
+    #: 容器里的 ``presenter`` / ``main_presenter`` 就是它。
+    presenter: MainPresenter
+
     def __init__(
             self,
             container: Container,
@@ -146,6 +151,10 @@ class Application(QApplication, MainLoop):
         2. 占位 QLabel
 
         要完全自定义窗口，override 本方法；只换内容，注册 ``ui_root_factory``。
+
+        窗口建好后立刻 :meth:`MainPresenter.bootstrap`：presenter 树在
+        ``show()`` 之前就绪，插件在 ``on_init``（本 hook 之后执行）里就能
+        通过 ``container.get("presenter")`` 拿到它，此时窗口已有主题。
         """
         # 先定语言再建窗口：控件一出生就是目标语言的文案
         self.set_language(self._configured_language())
@@ -155,6 +164,9 @@ class Application(QApplication, MainLoop):
         window.resize(*DEFAULT_SIZE)
 
         self.main_window = window
+        # presenter 在 ``show()`` 之前套主题：避免窗口先以无主题的样子闪一下。
+        self.presenter = MainPresenter.bootstrap(
+            container, app=self, window=window)
         logger.debug("ui.qt: main window built")
 
     # ---------------- 语言 ----------------
@@ -179,11 +191,11 @@ class Application(QApplication, MainLoop):
         text = str(value or "").strip()
         return text or DEFAULT_LANGUAGE
 
-    def show(self, container: Container) -> None:
+    def show(self) -> None:
         """显示主窗口。"""
         if self.main_window is not None:
             self.main_window.show()
-            logger.debug("ui.qt: main window shown")
+            logger.debug("ui.builtin: main window shown")
 
     # ---------------- hook 桥接 ----------------
     def _on_init_hook(self) -> None:
@@ -202,7 +214,7 @@ class Application(QApplication, MainLoop):
         if self._show_done:
             return
         self._show_done = True
-        self.show(self._container)
+        self.show()
 
     # ---------------- MainLoop 协议 ----------------
     def run(self) -> int | ExitCode:

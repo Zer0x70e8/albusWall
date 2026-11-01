@@ -635,6 +635,20 @@ class ColumnListView(QAbstractItemView):
         self.updateGeometries()
         self.viewport().update()
 
+    # ========== 数据接口 ==========
+    def bind_model(self, model, delegate=None):
+        """直接接收一份模型（和可选委托）并立即生效。
+
+        :param model: 任意 ``QAbstractItemModel``；本项目里通常是
+            :class:`~albuswall.ui.model.SourceCardModel`。
+        :param delegate: 委托；``None`` 时保留当前委托。
+        :return: ``self``，便于链式调用。
+        """
+        self.setModel(model)
+        if delegate is not None:
+            self.setItemDelegate(delegate)
+        return self
+
     # ========== 尺寸变化 ==========
     def resizeEvent(self, event):
         super().resizeEvent(event)

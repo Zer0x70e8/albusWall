@@ -10,9 +10,11 @@
 from albuswall.command.exceptions import (
     DispatchError, BadRequest, UnknownCommand,
     CommandNotExecutable, ArgumentBindingError, CommandFailed,
+    DispatchTimeout, DispatchUnavailable,
 )
 
 __all__ = [
     "DispatchError", "BadRequest", "UnknownCommand",
     "CommandNotExecutable", "ArgumentBindingError", "CommandFailed",
+    "DispatchTimeout", "DispatchUnavailable",
 ]

@@ -21,6 +21,26 @@ def test_setup_registers_builtin_commands(assembled):
     assert {"ping", "help", "parse", "version"} <= names
 
 
+def test_setup_registers_the_import_trigger(assembled):
+    """导入域回来了一个命令：``import.trigger``（手动唤醒 worker）。"""
+    registry, _ = assembled
+    assert "import.trigger" in registry.names(include_hidden=True,
+                                              subject=frozenset({"admin"}))
+
+
+def test_import_trigger_wakes_the_worker_once_per_call(assembled):
+    from albuswall.service.command.dispatcher import Dispatcher
+
+    registry, container = assembled
+    dispatch = Dispatcher(registry).dispatch
+    service = container.require("import_service")
+
+    assert dispatch("import.trigger", [], {}) == {"triggered": True}
+    assert dispatch("import.trigger", [], {}) == {"triggered": True}
+
+    assert service.triggers == 2
+
+
 def test_two_registries_are_isolated(fresh_registry, fake_container):
     """两个用例各用一张表：互相看不见对方注册的命令。"""
     other = CommandRegistry()

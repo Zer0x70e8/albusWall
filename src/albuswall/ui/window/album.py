@@ -1,13 +1,21 @@
 #
-"""相册页：整页模糊背景 + 可滚动的内容区（悬浮操作行 + 网格 + 更多视图）。
+"""相册页：整页模糊背景 + 可滚动的内容区。
 
-纯视图组件：不加载数据、不认识 model 的具体内容；外部把 model 塞给
-``view`` / ``more_view`` 即可。
+版式（自上而下）::
+
+    close_button    关闭整页
+    hover           悬浮操作行（编辑 / 新建相册）
+    album_view      相册网格：全部相册（顶部）
+    trash_view      回收站：虚拟 Trash 相册（底部）
+
+纯视图组件：不加载数据、不认识 model 的具体内容。外部用
+:meth:`Album.set_album_model`（顶部相册网格）与 :meth:`Album.set_trash_model`
+（底部回收站）直接注入模型即可，委托缺省时自动装配。
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -19,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..delegate import AlbumCoverDelegate
 from ..i18n import Retranslatable
 from ..widgets.blur_overlay_label import BlurLabel
 from ..widgets.square_grid import SquareGridView
@@ -46,13 +55,19 @@ class Album(Retranslatable, BlurLabel):
     option_layout: QHBoxLayout
     edit_button: QPushButton
     add_button: QPushButton
-    view: SquareGridView
-    more_view: QListView
+    #: 顶部：相册网格
+    album_view: SquareGridView
+    #: 底部：回收站（只放虚拟 Trash 相册）
+    trash_view: QListView
 
     def __init__(self,
                  target: QWidget | None = None,
                  parent: QWidget | None = None):
         super().__init__(parent, target=target, draw_label_content=False)
+
+        # 默认委托（set_album_model / set_trash_model 首次调用时装配）
+        self._album_delegate = None
+        self._trash_delegate = None
 
         self._setup_ui()
         self.retranslate_ui()
@@ -102,15 +117,15 @@ class Album(Retranslatable, BlurLabel):
         self.option_layout.addWidget(self.edit_button)
         self.option_layout.addWidget(self.add_button)
 
-        self.view = SquareGridView(parent=self.content)
+        self.album_view = SquareGridView(parent=self.content)
 
         self.hover_layout.addLayout(self.option_layout)
-        self.hover_layout.addWidget(self.view)
+        self.hover_layout.addWidget(self.album_view)
 
-        self.more_view = QListView(self.content)
+        self.trash_view = QListView(self.content)
 
         self.content_layout.addWidget(self.hover)
-        self.content_layout.addWidget(self.more_view)
+        self.content_layout.addWidget(self.trash_view)
         self.content_layout.addStretch()
 
         self.main_layout.addWidget(self.close_button)
@@ -122,3 +137,76 @@ class Album(Retranslatable, BlurLabel):
     def retranslate_ui(self) -> None:
         """重新应用文案。"""
         self.edit_button.setText(self.tr("编辑"))
+
+    # ------------------------------------------------------------------ #
+    # 数据接口（直接接收模型）
+    # ------------------------------------------------------------------ #
+    def set_album_model(self, model, delegate=None) -> None:
+        """设置**顶部相册网格**（``album_view``）的模型。
+
+        :param model: 任意实现 ``ItemRole`` 的模型，通常是
+            :class:`~albuswall.ui.model.AlbumModel`。
+        :param delegate: 委托；``None`` 时按需装一个默认的
+            :class:`~albuswall.ui.delegate.AlbumCoverDelegate`。
+        """
+        if delegate is None:
+            delegate = self._default_album_delegate()
+        self.album_view.bind_model(model, delegate)
+
+    def set_trash_model(self, model, delegate=None) -> None:
+        """设置**底部回收站**（``trash_view``）的模型。
+
+        通常只有一行（虚拟 Trash 相册），所以按图标列表排版：
+        与相册网格同样大小的格子、单行不换行。
+
+        :param model: 任意实现 ``ItemRole`` 的模型，通常是
+            :class:`~albuswall.ui.model.AlbumModel`。
+        :param delegate: 委托；``None`` 时按需装一个默认的
+            :class:`~albuswall.ui.delegate.AlbumCoverDelegate`。
+        """
+        if delegate is None:
+            delegate = self._default_trash_delegate()
+        view = self.trash_view
+        view.setModel(model)
+        view.setItemDelegate(delegate)
+        cell = self.album_view.gridSize().height() or 96
+        view.setGridSize(QSize(cell, cell))
+        view.setIconSize(QSize(cell, cell))
+        view.setViewMode(QListView.ViewMode.IconMode)
+        view.setFlow(QListView.Flow.LeftToRight)
+        view.setWrapping(False)
+        view.setResizeMode(QListView.ResizeMode.Adjust)
+        view.setUniformItemSizes(True)
+        view.setMovement(QListView.Movement.Static)
+        view.setSelectionMode(QListView.SelectionMode.SingleSelection)
+        view.setEditTriggers(QListView.EditTrigger.NoEditTriggers)
+        view.setFixedHeight(cell + 8)
+
+    def album_delegate(self):
+        """当前相册网格的委托（可能是外部注入的）。"""
+        return self.album_view.itemDelegate()
+
+    def trash_delegate(self):
+        """当前回收站列表的委托（可能是外部注入的）。"""
+        return self.trash_view.itemDelegate()
+
+    # ------------------------------------------------------------------ #
+    # 内部
+    # ------------------------------------------------------------------ #
+    def _default_album_delegate(self):
+        """复用已装的默认相册委托，没有就新建一个。"""
+        current = self.album_view.itemDelegate()
+        if isinstance(current, AlbumCoverDelegate):
+            return current
+        delegate = AlbumCoverDelegate(self.album_view)
+        self._album_delegate = delegate
+        return delegate
+
+    def _default_trash_delegate(self):
+        """回收站用同一个封面委托（外观一致，只有数据来源不同）。"""
+        current = self.trash_view.itemDelegate()
+        if isinstance(current, AlbumCoverDelegate):
+            return current
+        delegate = AlbumCoverDelegate(self.trash_view)
+        self._trash_delegate = delegate
+        return delegate

@@ -14,7 +14,14 @@
 ``bootstrap``       ``FileInfo`` → 原始字典（只做分派，不认识格式）
 ``configue``        单例 + ``check()`` / ``load()`` / ``unload()`` / ``flush()``
 ``tree``            ``c.tree.<file>.<section>.<key>`` 三层视图
+``schema``          设置结构层：声明 → 可枚举 / 可校验 / 可写回的设置树
 ==================  ============================================================
+
+其中 ``schema`` 是**唯一**给上层（CLI / 设置页 / 文档生成器）用的内省面：
+它把 ``@configclass`` 声明自动枚举成「分组 → 叶子」的树（``dump_schema`` /
+``format_schema_dump``），并提供**两遍算法**的写回（``save_values`` /
+``save_group``：先全量校验、后统一落盘，支持 ``dry_run``）。上层不应该
+自己去遍历 ``registry`` 的私有表，也不应该自己拼 ``flush``。
 
 典型用法::
 
@@ -83,6 +90,8 @@ from .backends import (
 from .configue import Configue
 from .errors import (
     AmbiguousConfigFile,
+    ConfigClassNotRegistered,
+    ConfigDeclarationConflict,
     ConfigError,
     ConfigFileNotFound,
     ConfigMissingError,
@@ -96,17 +105,47 @@ from .registry import (
     FileInfo,
     classes_in,
     configclass,
+    declarations,
     field,
+    field_owner,
     reg,
+    registered_files,
+)
+from .schema import (
+    UNSET,
+    SettingGroup,
+    SettingItem,
+    SettingSchemaRegistry,
+    SettingWidget,
+    SettingWriteResult,
+    build_schema,
+    dump_schema,
+    dump_schema_by_file,
+    dump_schema_dict,
+    format_schema_dump,
+    get_schema,
+    invalidate_schema,
+    save_group,
+    save_values,
+    setting_group,
+    setting_item,
 )
 
 __all__ = [
     # 声明（模块级，导入期安全）
     "reg", "configclass", "field", "ROOT",
     "ConfigFile", "AutosavePolicy",
-    "classes_in",
+    "classes_in", "declarations", "registered_files", "field_owner",
     # 主类
     "Configue",
+    # 设置结构层（枚举 / 校验 / 写回）
+    "SettingWidget", "SettingItem", "SettingGroup",
+    "SettingSchemaRegistry", "SettingWriteResult", "UNSET",
+    "build_schema", "get_schema", "invalidate_schema",
+    "setting_group", "setting_item",
+    "dump_schema", "dump_schema_dict", "dump_schema_by_file",
+    "format_schema_dump",
+    "save_values", "save_group",
     # 加载钩子（运行期才知道 key 的段用）
     "register_load_hook", "unregister_load_hook",
     # 自定义类型转换（读写成对注册）
@@ -114,7 +153,8 @@ __all__ = [
     # 后端（扩展点：新格式 = 实现 Backend + register_backend）
     "Backend", "register_backend", "get_backend", "registered_backends",
     # 错误 / 报告
-    "ConfigError", "ConfigMissingError",
+    "ConfigError", "ConfigMissingError", "ConfigClassNotRegistered",
+    "ConfigDeclarationConflict",
     "ConfigFileNotFound", "AmbiguousConfigFile",
     "LoadReport", "LoadError",
     # 元数据（调试 / 工具脚本用，业务侧不建议直接依赖）

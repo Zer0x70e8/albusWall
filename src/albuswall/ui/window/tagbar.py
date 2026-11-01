@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..i18n import Retranslatable
+from ..model.roles import TagRole
 from ..widgets import BlurLabel
 from ..widgets.anchored_popup import AnchoredPopup
 from ..widgets.tag_chip_view import TagChipView
@@ -38,7 +39,8 @@ from ..widgets.tag_chip_view import TagChipView
 __all__ = ["TagBar"]
 
 #: 标签树模型里承载「标签标识」的 role（与 chip 列表保持一致）。
-TREE_TAG_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+#: 单一来源在 ``albuswall.ui.model.roles.TagRole``，这里只是别名。
+TREE_TAG_ROLE = int(TagRole.Tag)
 
 
 def _tag_id(value: object) -> str:
@@ -122,6 +124,9 @@ class TagBar(Retranslatable, QFrame):
     # ------------------------------------------------------------------ #
     def _setup_ui(self) -> None:
         self.content_widget = BlurLabel(self, draw_label_content=False)
+        # 显式命名：样式表用 ``#TagBarContentWidget`` 命中这层模糊底
+        # （``BlurLabel`` 构造期会先把自己命名成类名，不覆盖的话拿不到这个名）。
+        self.content_widget.setObjectName("TagBarContentWidget")
         self.content_layout = QHBoxLayout(self.content_widget)
         self.main_layout = QHBoxLayout(self)
         self.content_widget.target_widget = self
@@ -389,12 +394,36 @@ class TagBar(Retranslatable, QFrame):
     # 数据注入（view 接口：外部把 model 塞进来）
     # ------------------------------------------------------------------ #
     def set_chip_model(self, model) -> None:
-        """设置 chip 列表 model（需要 ``DisplayRole`` 与 ``TAG_ROLE``）。"""
+        """设置 chip 列表模型。
+
+        :param model: 任意实现 ``DisplayRole`` + ``TAG_ROLE`` 的模型，
+            通常是 :class:`~albuswall.ui.model.TagChipModel`。
+        """
         self.tags_view.setModel(model)
 
     def set_tree_model(self, model) -> None:
-        """设置标签树 model（需要 ``TREE_TAG_ROLE`` 承载标识）。"""
+        """设置标签树模型。
+
+        :param model: 任意实现 ``TREE_TAG_ROLE`` 的树模型，通常是
+            :class:`~albuswall.ui.model.TagTreeModel`。
+        """
         self.layer_tree_popup.tree_view.setModel(model)
+        self.layer_tree_popup.tree_view.expandAll()
+
+    def bind_models(self, chip_model=None, tree_model=None) -> None:
+        """一次装好两个模型（任一项为 ``None`` 时跳过）。"""
+        if chip_model is not None:
+            self.set_chip_model(chip_model)
+        if tree_model is not None:
+            self.set_tree_model(tree_model)
+
+    def tags_model(self):
+        """当前 chip 列表模型（未注入时为 ``None``）。"""
+        return self.tags_view.model()
+
+    def tree_model(self):
+        """当前标签树模型（未注入时为 ``None``）。"""
+        return self.layer_tree_popup.tree_view.model()
 
     def clear_apply_input(self) -> None:
         """清空输入框。"""

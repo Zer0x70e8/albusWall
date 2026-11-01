@@ -22,13 +22,14 @@ from PySide6.QtCore import QModelIndex, Qt, Signal
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QListView
 
+from ..model.roles import TagRole
 from .tag_chip_delegate import TagChipDelegate
 
 __all__ = ["TagChipView", "TAG_ROLE"]
 
 #: chip 承载的标识（uuid / 带 uuid 属性的对象）所在 role。
-#: 取值与 ``Qt.ItemDataRole.UserRole + 1`` 一致，外部 model 可以直接用。
-TAG_ROLE = Qt.ItemDataRole.UserRole + 1
+#: 单一来源在 ``albuswall.ui.model.roles.TagRole``，这里只是别名。
+TAG_ROLE = int(TagRole.Tag)
 
 
 class TagChipView(QListView):
@@ -43,6 +44,19 @@ class TagChipView(QListView):
         self.setSelectionMode(QListView.SelectionMode.SingleSelection)
         # QListView 自带的 Enter/Return → activated 已经够用
         self.activated.connect(self._on_activated)
+
+    # -------------------------------------------------------------- 数据
+    def bind_model(self, model, delegate=None) -> "TagChipView":
+        """直接接收一份模型（通常为 :class:`~albuswall.ui.model.TagChipModel`）。
+
+        :param delegate: 委托；``None`` 时保留自带的
+            :class:`~albuswall.ui.widgets.TagChipDelegate`。
+        :return: ``self``，便于链式调用。
+        """
+        self.setModel(model)
+        if delegate is not None:
+            self.setItemDelegate(delegate)
+        return self
 
     # -------------------------------------------------------------- 鼠标
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:

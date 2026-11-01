@@ -58,25 +58,13 @@ def test_get_on_unregistered_class_raises(env):
         _ = Stranger().debug
 
 
-def test_get_on_superseded_class_raises(tmp_path):
-    write_ini(tmp_path / "config.ini", INI)
-    reg(ConfigFile.INI, "config.ini", name="main", autosave="off")
+def test_get_on_class_removed_from_registry_raises(env):
+    """登记表里没有这个类（不是"被顶掉"——同名声明现在是共享）→ 当场炸。"""
+    _, Core = env
 
-    @configclass("core", "main")
-    class Old:
-        debug: bool = True
-
-    @configclass("core", "main")  # 同 file + 同 path → 覆盖
-    class New:
-        debug: bool = False
-
-    c = Configue(tmp_path)
-    c.load()
-
-    assert Old not in _CLASSES
-    with pytest.raises(RuntimeError, match="superseded"):
-        _ = Old().debug
-    assert New().debug is True  # 值来自文件
+    _CLASSES.pop(Core)
+    with pytest.raises(RuntimeError, match="not registered in _CLASSES"):
+        _ = Core().debug
 
 
 def test_get_without_configue_raises_config_missing():

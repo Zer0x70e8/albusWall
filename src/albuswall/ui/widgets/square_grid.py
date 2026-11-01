@@ -146,3 +146,17 @@ class SquareGridView(QListView):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._apply_grid()
+
+    # ---------- 数据接口 ----------
+    def bind_model(self, model, delegate=None) -> "SquareGridView":
+        """直接接收一份模型（和可选委托）并立即生效。
+
+        :param model: 任意 ``QAbstractItemModel``；本项目里通常来自
+            :mod:`albuswall.ui.model`（``AlbumModel`` / ``AssetGridModel``）。
+        :param delegate: 委托；``None`` 时保留当前委托（本视图不自带默认值）。
+        :return: ``self``，便于链式调用。
+        """
+        self.setModel(model)
+        if delegate is not None:
+            self.setItemDelegate(delegate)
+        return self

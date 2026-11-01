@@ -20,7 +20,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QIcon, QPixmap, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -32,6 +32,8 @@ from PySide6.QtWidgets import (
 )
 
 from ..i18n import Retranslatable
+from ..model import NavigationModel
+from ..model.roles import NavigationRole
 from ..widgets import BlurLabel
 from ..widgets.image_viewer import ImageViewer
 
@@ -45,7 +47,8 @@ __all__ = ["Detail"]
 THUMB_SIZE = QSize(80, 80)
 
 #: 导航条承载 chip 标识的 role。
-NAV_ID_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+#: 单一来源在 ``albuswall.ui.model.roles.NavigationRole``，这里只是别名。
+NAV_ID_ROLE = int(NavigationRole.Id)
 
 
 class Detail(Retranslatable, BlurLabel):
@@ -91,6 +94,9 @@ class Detail(Retranslatable, BlurLabel):
         # 快速预览模式：隐藏 HUD，只在底部留一条提示
         self._preview_mode: bool = False
         self._hud_visible_before_preview: tuple[bool, bool] = (True, True)
+
+        # 只显示图标的动作按钮：文案改放 tooltip（图标不参与翻译）
+        self._icon_only: set[QPushButton] = set()
 
         self._setup_ui()
         self.retranslate_ui()
@@ -142,8 +148,9 @@ class Detail(Retranslatable, BlurLabel):
         self.item_line_viewer.setSelectionMode(
             QListView.SelectionMode.SingleSelection)
 
-        # 导航数据：纯展示的字符串 + 图标，不认识任何业务模型
-        self._nav_model = QStandardItemModel(self)
+        # 导航数据：标识 + 缩略图，不认识任何业务模型
+        self._nav_model = NavigationModel(
+            icon_size=THUMB_SIZE, parent=self)
         self.item_line_viewer.setModel(self._nav_model)
         self.item_line_viewer.clicked.connect(self._on_nav_item_clicked)
         # 键盘：方向键移动 + Enter/Return 激活（与点击同一条出口）
@@ -243,16 +250,26 @@ class Detail(Retranslatable, BlurLabel):
             ``None``（占位）。标识只用于回传信号，本组件不解释它。
         :param current: 需要选中的标识；找不到时保持不动。
         """
-        self._nav_model.clear()
-        for nav_id, icon in items:
-            item = QStandardItem()
-            if isinstance(icon, QPixmap):
-                item.setIcon(QIcon(icon))
-            elif isinstance(icon, QIcon):
-                item.setIcon(icon)
-            item.setData(str(nav_id), NAV_ID_ROLE)
-            self._nav_model.appendRow(item)
+        model = self._nav_model
+        if hasattr(model, "set_items"):
+            model.set_items(items)
+        self._select_navigation(current)
 
+    def set_navigation_model(self, model) -> None:
+        """直接注入导航条模型（通常是 :class:`NavigationModel`）。
+
+        注入后 :meth:`set_navigation_items` 会转调模型的 ``set_items``，
+        懒加载（``set_lazy_provider``）这类能力也随之可用。
+        """
+        self._nav_model = model
+        self.item_line_viewer.setModel(model)
+
+    def navigation_model(self):
+        """当前导航条模型。"""
+        return self._nav_model
+
+    def _select_navigation(self, current: str | None) -> None:
+        """把 ``current`` 对应的行设为当前项并滚到中间。"""
         row = self._nav_row_of(current) if current is not None else -1
         if row < 0:
             return
@@ -271,13 +288,21 @@ class Detail(Retranslatable, BlurLabel):
             index, QListView.ScrollHint.PositionAtCenter)
 
     def clear_navigation(self) -> None:
-        """清空底部导航栏。"""
-        self._nav_model.clear()
+        """清空底部导航栏（模型没有 ``set_items`` 时退回 ``clear``）。"""
+        model = self._nav_model
+        if hasattr(model, "set_items"):
+            model.set_items([])
+        elif hasattr(model, "clear"):
+            model.clear()
 
     def _nav_row_of(self, nav_id: str) -> int:
+        """标识对应的行号；找不到返回 ``-1``。"""
+        model = self._nav_model
+        if hasattr(model, "row_of"):
+            return int(model.row_of(nav_id))
         target = str(nav_id)
-        for row in range(self._nav_model.rowCount()):
-            data = self._nav_model.item(row).data(NAV_ID_ROLE)
+        for row in range(model.rowCount()):
+            data = model.index(row, 0).data(NAV_ID_ROLE)
             if data is not None and str(data) == target:
                 return row
         return -1
@@ -286,6 +311,21 @@ class Detail(Retranslatable, BlurLabel):
         nav_id = index.data(NAV_ID_ROLE) if index.isValid() else None
         if nav_id is not None:
             self.asset_navigate_requested.emit(str(nav_id))
+
+    # ------------------------------------------------------------------ #
+    # 数据接口（直接接收模型）
+    # ------------------------------------------------------------------ #
+    def set_metadata(self, metadata) -> None:
+        """装载信息面板的键值数据（``Mapping`` / dataclass / DTO 均可）。"""
+        self.panel.set_metadata(metadata)
+
+    def set_metadata_model(self, model, delegate=None) -> None:
+        """直接注入信息面板的键值行模型。"""
+        self.panel.set_model(model, delegate)
+
+    def set_tag_models(self, chip_model=None, tree_model=None) -> None:
+        """直接注入标签栏的 chip 模型与标签树模型。"""
+        self.tag_bar.bind_models(chip_model, tree_model)
 
     # ------------------------------------------------------------------ #
     # 展示状态
@@ -301,7 +341,7 @@ class Detail(Retranslatable, BlurLabel):
     def set_deleted_state(self, is_deleted: bool) -> None:
         """切换 trash 按钮语义：未删 → "trash"；已删 → "recover"。"""
         self._is_deleted = bool(is_deleted)
-        self.trash_button.setText(self._trash_button_text())
+        self._apply_button_text(self.trash_button, self._trash_button_text())
 
     def _trash_button_text(self) -> str:
         return self.tr("恢复") if self._is_deleted else self.tr("移入回收站")
@@ -322,12 +362,41 @@ class Detail(Retranslatable, BlurLabel):
     # ------------------------------------------------------------------ #
     def retranslate_ui(self) -> None:
         """重新应用详情页所有按钮文案（含 trash 的双态文案）。"""
-        self.multiple_choice_button.setText(self.tr("多选"))
-        self.favourite_button.setText(self.tr("收藏"))
-        self.information_button.setText(self.tr("信息"))
-        self.edit_button.setText(self.tr("编辑"))
-        self.trash_button.setText(self._trash_button_text())
+        self._apply_button_text(self.multiple_choice_button, self.tr("多选"))
+        self._apply_button_text(self.favourite_button, self.tr("收藏"))
+        self._apply_button_text(self.information_button, self.tr("信息"))
+        self._apply_button_text(self.edit_button, self.tr("编辑"))
+        self._apply_button_text(self.trash_button, self._trash_button_text())
         self.preview_hint.setText(self._preview_hint_text())
+
+    def set_action_icon(self, button: QPushButton, icon: QIcon | str | None) -> None:
+        """给动作按钮装图标（``None`` = 回到纯文字模式）。
+
+        装了图标的按钮进入「只有图标」模式：文字清空、文案转 tooltip ——
+        48px 的圆形按钮放不下「多选 / 收藏 / 信息」这类中文标签。
+        """
+        if icon is None or str(icon) == "":
+            self._icon_only.discard(button)
+            button.setIcon(QIcon())
+            button.setToolTip("")
+            self.retranslate_ui()
+            return
+        label = button.toolTip() or button.text()
+        self._icon_only.add(button)
+        button.setIcon(QIcon(str(icon)))
+        self._apply_button_text(button, label)
+
+    def is_action_icon_mode(self, button: QPushButton) -> bool:
+        """该动作按钮当前是否是「只有图标」模式。"""
+        return button in self._icon_only
+
+    def _apply_button_text(self, button: QPushButton, text: str) -> None:
+        """按按钮模式写文案：纯文字模式写 setText，图标模式写 tooltip。"""
+        if button in self._icon_only:
+            button.setText("")
+            button.setToolTip(text)
+            return
+        button.setText(text)
 
     # ------------------------------------------------------------------ #
     # 快速预览模式（显式模式，不是宏）

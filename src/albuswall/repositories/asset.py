@@ -426,6 +426,85 @@ class AssetRepository(BaseRepository):
                 result[to_uuid(row["uuid"])] = True
         return result
 
+    # ------------------------------------------------------------------
+    # 批量成员写（``AssetOpsService`` 的写用例走这两个）
+    # ------------------------------------------------------------------
+    #
+    # 为什么单条之外还要批量版：``add_to_album`` / ``remove_from_album`` 是
+    # "一条资产"的接口，返回 ``rowcount``；而服务层的用例主语是**一批资产**，
+    # 需要"哪些真的变成功了"的 uuid 集合来记账（撤销栈只认实际发生的事）。
+    # 用 ``rowcount`` 反推不出是哪一个，所以批量版在事务内做
+    # "写前读 → 写 → 写后读"，用差集给出精确集合。
+
+    def add_many_to_album(
+            self,
+            album_uuid: _UUIDLike,
+            asset_uuids: Sequence[_UUIDLike],
+    ) -> set[UUID]:
+        """批量加入相册，返回**真正新增**的 asset uuid 集合。
+
+        条件与 :meth:`add_to_album` 完全同源（相簿可见 + 资产可见），已存在
+        的成员被 ``INSERT OR IGNORE`` 跳过且不出现在返回值里。
+        """
+        wanted = _dedupe_uuids(asset_uuids)
+        if not wanted:
+            return set()
+        requested = [to_uuid(u) for u in wanted]
+
+        before = self.memberships(album_uuid, requested)
+        album = as_uuid_str(album_uuid)
+        with self._transaction() as conn:
+            for chunk in chunked(wanted):
+                conn.execute(
+                    f"""
+                    INSERT OR IGNORE INTO album_assets
+                           (album_id, asset_id, asset_taken_at)
+                    SELECT al.id, a.id, a.taken_at
+                      FROM albums AS al
+                      JOIN assets AS a ON a.uuid IN ({placeholders(len(chunk))})
+                     WHERE al.uuid = ?
+                       AND {_MEMBERSHIP_VISIBLE_WHERE}
+                    """,
+                    (*chunk, album),
+                )
+        after = self.memberships(album_uuid, requested)
+        return {u for u in requested if after.get(u) and not before.get(u)}
+
+    def remove_many_from_album(
+            self,
+            album_uuid: _UUIDLike,
+            asset_uuids: Sequence[_UUIDLike],
+    ) -> set[UUID]:
+        """批量移出相册，返回**真正移除**的 asset uuid 集合。
+
+        与 :meth:`remove_from_album` 同源：相簿不可见时一行都不动。
+        """
+        wanted = _dedupe_uuids(asset_uuids)
+        if not wanted:
+            return set()
+        requested = [to_uuid(u) for u in wanted]
+
+        before = self.memberships(album_uuid, requested)
+        album = as_uuid_str(album_uuid)
+        with self._transaction() as conn:
+            for chunk in chunked(wanted):
+                conn.execute(
+                    f"""
+                    DELETE FROM album_assets
+                     WHERE album_id = (
+                               SELECT id FROM albums
+                                WHERE uuid = ? AND is_deleted = 0
+                           )
+                       AND asset_id IN (
+                               SELECT id FROM assets
+                                WHERE uuid IN ({placeholders(len(chunk))})
+                           )
+                    """,
+                    (album, *chunk),
+                )
+        after = self.memberships(album_uuid, requested)
+        return {u for u in requested if before.get(u) and not after.get(u)}
+
     def move_between_albums(
             self,
             src_album_uuid: _UUIDLike,

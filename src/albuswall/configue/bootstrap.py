@@ -98,11 +98,13 @@ class Paths:
     模块导入期，有两个原因：
 
     - 登记键是 ``(file, class_path)``，``file`` 来自 ``setup_config(name=...)``
-      参数，导入期还不知道；也正因为键里带 file，**同一段不能声明两份**
-      （后装饰者会把先注册的类从 ``_CLASSES`` 顶掉），所以业务代码要读
-      ``[path]`` 只能 import 本类，不能再写一份「只读视图」；
+      参数，导入期还不知道；
     - 导入 ``configue`` 不往全局登记表里塞节点（未装配时 ``load()`` 不会因为
       「引用了未 reg 的 file」而报错）。
+
+    **同名 section 允许多份声明**：别的模块想写一份「只读视图」是合法的，
+    只要字段的类型与默认值与本类一致（不一致会在装饰期抛
+    ``ConfigDeclarationConflict``，声明不一致时应当直接 import 本类）。
 
     业务代码用法（**必须在 ``setup_config`` 之后**）::
 
@@ -263,7 +265,10 @@ def setup_config(
         config, path_config, path_data, path_cache, path_temp,
     )
     config.load()
-    logger.info("Conf loaded: %s", base_dir / file_name)
+    # 用 ``target_dir`` 而不是 ``base_dir``：``base_dir`` 可能是 ``None``
+    # （回退用户配置目录）或 ``str``（调用方直接传字符串），两者做 ``/`` 都会
+    # 失败 —— 前者 ``TypeError``，后者拼出错误的 ``str / str``。
+    logger.info("Conf loaded: %s", target_dir / file_name)
 
     if register_aliases:
         container.reg("config", lambda: config, returns=Configue)

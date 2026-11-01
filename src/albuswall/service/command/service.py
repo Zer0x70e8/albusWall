@@ -81,9 +81,14 @@ class CommandService:
         registry: CommandRegistry,
         *,
         subject_provider=None,
+        exception_translator=None,
     ) -> None:
         self.registry = registry
-        self.dispatcher = Dispatcher(registry, subject_provider=subject_provider)
+        self.dispatcher = Dispatcher(
+            registry,
+            subject_provider=subject_provider,
+            exception_translator=exception_translator,
+        )
 
     def execute(
         self,

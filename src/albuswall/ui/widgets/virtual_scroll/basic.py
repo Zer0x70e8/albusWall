@@ -51,8 +51,8 @@ class VirtualScrollWidget(QWidget):
     ):
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        # 网格自己消费方向键 / Home / End / 回车：Qt 的 ShortcutOverride 守卫
-        # 看到这个属性就不再让 QShortcut 抢走无修饰键（keymap.qt_binder）。
+        # 网格自己消费方向键 / Home / End / 回车：外部若接入全局快捷键
+        # 处理器，看到这个属性就不应再抢走无修饰键。
         self.setProperty("keymap_passthrough", True)
 
         # conf
@@ -82,6 +82,11 @@ class VirtualScrollWidget(QWidget):
 
         # 绘制委托（可通过 delegate setter 替换）
         self._delegate: CellDelegate = PixmapCellDelegate(self._pixmap_cache.get)
+
+        # 绑定的 Qt 模型（见 bind_model）；None = 纯索引模式
+        self._model = None
+        self._model_pixmap_role: int = int(Qt.ItemDataRole.DecorationRole)
+        self._model_hydrate_visible: bool = True
 
         # 用于防抖，避免重复发射相同范围
         self._last_emitted_start = -1
@@ -204,6 +209,144 @@ class VirtualScrollWidget(QWidget):
         self._pixmap_cache.clear()
         self.update()
         self.cache_cleared.emit()
+
+    # ---- 模型绑定 --------------------------------------------------------
+    #
+    # 本控件按「全局索引」工作，不依赖 Qt 的 item view 机制；但外部数据往往
+    # 已经是一份 Qt 模型（``AssetGridModel`` 等）。``bind_model`` 就是那座桥：
+    # 行数 → ``max_item_index``，``DecorationRole`` → pixmap 缓存，
+    # 变更 / 重置 → 自动重新同步，可见范围变化 → 只取看得见的格子。
+
+    def bind_model(
+            self,
+            model,
+            *,
+            pixmap_role: int | None = None,
+            hydrate_visible: bool = True,
+    ) -> "VirtualScrollWidget":
+        """直接接收一份 Qt 模型（行数 + 缩略图）并自动保持同步。
+
+        Args:
+            model: 任意 ``QAbstractItemModel``；``None`` 表示解绑。
+            pixmap_role: 从哪个 role 取缩略图，默认 ``DecorationRole``。
+            hydrate_visible: 可见范围变化时是否自动把该范围内的缩略图灌进缓存。
+
+        Returns:
+            ``self``，便于链式调用。
+        """
+        self.unbind_model()
+        self._model = model
+        self._model_pixmap_role = (
+            int(Qt.ItemDataRole.DecorationRole)
+            if pixmap_role is None else int(pixmap_role)
+        )
+        self._model_hydrate_visible = bool(hydrate_visible)
+        if model is None:
+            return self
+
+        model.rowsInserted.connect(self._on_bound_rows_changed)
+        model.rowsRemoved.connect(self._on_bound_rows_changed)
+        model.modelReset.connect(self._on_bound_source_changed)
+        model.layoutChanged.connect(self._on_bound_source_changed)
+        model.dataChanged.connect(self._on_bound_data_changed)
+        self.visible_range_changed.connect(self._on_bound_visible_range)
+        self._sync_row_count_from_model()
+        return self
+
+    def unbind_model(self) -> None:
+        """断开与当前模型的全部连接（重复调用安全）。"""
+        model = getattr(self, "_model", None)
+        if model is None:
+            return
+        for signal, slot in (
+                (model.rowsInserted, self._on_bound_rows_changed),
+                (model.rowsRemoved, self._on_bound_rows_changed),
+                (model.modelReset, self._on_bound_source_changed),
+                (model.layoutChanged, self._on_bound_source_changed),
+                (model.dataChanged, self._on_bound_data_changed),
+                (self.visible_range_changed, self._on_bound_visible_range),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        self._model = None
+
+    def model(self):
+        """当前绑定的模型（未绑定时为 ``None``）。"""
+        return getattr(self, "_model", None)
+
+    def hydrate_model_pixmaps(self, rows=None) -> int:
+        """把模型里的缩略图灌进 LRU 缓存，返回本次灌入的数量。
+
+        Args:
+            rows: 要处理的行号序列；``None`` 表示当前可见范围。
+        """
+        model = getattr(self, "_model", None)
+        if model is None:
+            return 0
+        if rows is None:
+            rows = self._visible_row_range()
+
+        role = getattr(self, "_model_pixmap_role",
+                       int(Qt.ItemDataRole.DecorationRole))
+        loaded = 0
+        for row in rows:
+            if row < 0 or row > self._max_item_index:
+                continue
+            pixmap = model.index(int(row), 0).data(role)
+            if not isinstance(pixmap, QPixmap) or pixmap.isNull():
+                continue
+            self._pixmap_cache[int(row)] = pixmap
+            loaded += 1
+
+        if loaded:
+            self.update()
+        return loaded
+
+    # ---- 模型绑定的内部实现 ----------------------------------------------
+
+    def _visible_row_range(self):
+        start = getattr(self, "_last_emitted_start", -1)
+        end = getattr(self, "_last_emitted_end", -1)
+        if start < 0 or end < 0:
+            return range(0, min(self._max_item_index + 1, 0))
+        return range(int(start), int(end) + 1)
+
+    def _sync_row_count_from_model(self) -> None:
+        model = getattr(self, "_model", None)
+        count = model.rowCount() if model is not None else 0
+        self.update_max_item_index(count - 1, force=True)
+        self.hydrate_model_pixmaps()
+
+    def _on_bound_rows_changed(self, *_args) -> None:
+        self._sync_row_count_from_model()
+
+    def _on_bound_source_changed(self, *_args) -> None:
+        self.clear_cache()
+        self._sync_row_count_from_model()
+
+    def _on_bound_data_changed(
+            self,
+            top_left,
+            bottom_right,
+            roles=None,
+    ) -> None:
+        role = getattr(self, "_model_pixmap_role",
+                       int(Qt.ItemDataRole.DecorationRole))
+        if roles and role not in {int(item) for item in roles}:
+            decoration = int(Qt.ItemDataRole.DecorationRole)
+            if decoration not in {int(item) for item in roles}:
+                return
+        first = max(0, int(top_left.row()))
+        last = min(int(bottom_right.row()), self._max_item_index)
+        if last < first:
+            return
+        self.hydrate_model_pixmaps(range(first, last + 1))
+
+    def _on_bound_visible_range(self, start: int, end: int, _request: int) -> None:
+        if getattr(self, "_model_hydrate_visible", False):
+            self.hydrate_model_pixmaps(range(int(start), int(end) + 1))
 
     # ---- 键盘光标 --------------------------------------------------------
 

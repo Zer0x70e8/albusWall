@@ -37,6 +37,7 @@ from .backends import get_backend
 from .bootstrap import load_file
 from .errors import (
     AmbiguousConfigFile,
+    ConfigClassNotRegistered,
     ConfigError,
     ConfigFileNotFound,
     LoadError,
@@ -184,7 +185,8 @@ class Configue:
         3. 该文件的 ``backend`` 是否已注册（TOML / YAML 未实现时在这里暴露，
            报告为 ``read_failed``）。
 
-        不检查：section 冲突（``configclass`` 的覆盖语义已经处理）、字段类型
+        不检查：声明冲突（``configclass`` 在装饰期已经校验并可能抛
+        ``ConfigDeclarationConflict``）、字段类型
         转换、无默认字段缺失——这些都要读文件才能判断，属于 ``load()``。
 
         不抛异常，结果全部落在 ``LoadReport.errors``。
@@ -216,10 +218,16 @@ class Configue:
                 errors.append(LoadError(
                     kind="ambiguous_file", file=name, message=str(exc),
                 ))
+            except ConfigClassNotRegistered:
+                # 编程错误（@configclass 未登记 / 拼错），不是「配置缺失」：
+                # 当场炸，绝不降级成 read_failed 报告项。
+                raise
             except ConfigError as exc:
                 # 后端未注册（TOML / YAML 还没实现）也在这里暴露：
                 # 严格说这既不是「路径错」也不是「读盘错」，但 kind 取值有限，
                 # read_failed 是唯一合理的兜底。
+                # 剩余可捕获的只有 get_backend() 的裸 ConfigError（backend 未
+                # 注册），没有更具体的类型可收窄；``exc`` 已进 message。
                 errors.append(LoadError(
                     kind="read_failed", file=name, message=str(exc),
                 ))
@@ -321,8 +329,13 @@ class Configue:
                     kind="ambiguous_file", file=finfo.name, message=str(exc),
                 ))
                 continue
+            except ConfigClassNotRegistered:
+                # 编程错误（类未登记 / 拼错）：不得降级成一条 LoadError，
+                # 否则启动会带着"某个 @configclass 其实没登记上"继续跑。
+                raise
             except ConfigError as exc:
-                # 后端未注册（TOML / YAML）走到这里
+                # 后端未注册（TOML / YAML）走到这里 —— 这是 get_backend() 抛
+                # 的裸 ConfigError，没有更具体的类型可收窄；``exc`` 进 message。
                 errors.append(LoadError(
                     kind="read_failed", file=finfo.name, message=str(exc),
                 ))
@@ -684,49 +697,89 @@ class Configue:
             return True
         try:
             target, _finfo = self._target_file_for(node)
-        except ConfigError:
+        except ConfigClassNotRegistered:
+            # 编程错误（类未登记 / 拼错）必须当场炸：它不是"这个节点没有归属
+            # 文件"（那是正常的 False），而是"某份配置类压根没登记"。
+            raise
+        except ConfigError as exc:
+            # 正常分支：该节点不属于任何已加载文件（运行期新 key / 无 origin）。
+            # 这里返回 False 只是"本文件不写它"，可以安全继续 —— 无归属的
+            # 节点不会因此被静默丢掉：``flush()``（不带 file=）根本不走本方法，
+            # 而是在 ``_flush_impl`` 里对每个 dirty 节点重新调
+            # ``_target_file_for`` 并抛 ``ConfigError``。
+            _logger.debug(
+                "node %s has no owning file (%s); treat as not owned by %s",
+                node, exc, path,
+            )
             return False
         return target == path
 
     def _target_file_for(self, node: Node) -> tuple[Path, FileInfo]:
         """推导节点的写回目标：``(写回路径, 所属 FileInfo)``。
 
-        1. origin 可写 → origin；
-        2. origin 只读 → 「也定义过该 node」的最高优先级可写文件；
-        3. 都没有（运行期新 key / 只有默认值）→ ``_FIELD_OWNER`` 反查
-           「声明该字段的文件」，取其已解析路径；
-        4. 仍无 → ``ConfigError``（该 key 不属于任何已加载文件，写不出去）。
+        规则的唯一实现在 :meth:`target_file_of`（公开入口，schema / dump 共用）；
+        本方法只是再补上「用哪个后端」——「写哪个文件」和「用什么格式写」是
+        同一个决定。
+        """
+        path = self.target_file_of(node[0], node[1])
+        return path, self._finfo_for_path(path)
 
-        ``FileInfo`` 必须一起返回：``flush`` 要靠它知道用哪个后端——
-        「写哪个文件」和「用什么格式写」是同一个决定。
+    def target_file_of(self, section: str, key: str) -> Path:
+        """该节点写回时会落到哪个文件（绝对路径）。
+
+        与 ``flush`` 完全同一套规则，四步：
+
+        1. 生效值来自某个可写文件 → 就是它（origin）；
+        2. origin 只读 → 「也定义过该节点」的文件里优先级最高的可写文件；
+        3. 都没有（默认值 / 运行期新 key）→ ``registry.field_owner`` 反查
+           声明该字段的文件，取其已解析路径；
+        4. 仍然没有 → 抛 ``ConfigError``（这个 key 不属于任何已加载文件）。
+
+        只读判定走 :meth:`is_readonly_path`：显式 ``mark_readonly_file`` 标记
+        优先，其次看文件系统写权限（root 下 ``os.access`` 恒真，靠显式标记）。
         """
         resolver = self.resolver
-        origin = resolver.origin_of(*node)
+        origin = resolver.origin_of(section, key)
         if origin is not None:
-            if not self._is_readonly(origin):
-                return origin, self._finfo_for_path(origin)
-            alternative = self._writable_alternative(node, exclude=origin)
+            if not self.is_readonly_path(origin):
+                return origin
+            alternative = self._writable_alternative(
+                (section, key), exclude=origin,
+            )
             if alternative is not None:
-                return alternative, self._finfo_for_path(alternative)
+                return alternative
 
-        owner = _FIELD_OWNER.get((node[0], node[1]))
+        owner = _FIELD_OWNER.get((section, key))
         if owner is None:
             raise ConfigError(
-                f"no owning file for [{'/'.join(node)}]; "
+                f"no owning file for [{'/'.join((section, key))}]; "
                 f"not declared by any @configclass"
             )
         finfo = _FILES.get(owner)
         if finfo is None:
             raise ConfigError(
-                f"field [{node[0]}]{node[1]} declares file {owner!r} "
+                f"field [{section}]{key} declares file {owner!r} "
                 f"which is not registered"
             )
         if not finfo.loaded or finfo.resolved_path is None:
             raise ConfigError(
-                f"field [{node[0]}]{node[1]} declares file {owner!r} "
+                f"field [{section}]{key} declares file {owner!r} "
                 f"which is not loaded"
             )
-        return finfo.resolved_path, finfo
+        return finfo.resolved_path
+
+    def is_readonly_path(self, path: Path) -> bool:
+        """该路径是否只读（显式标记优先，其次看文件系统写权限）。
+
+        只读的文件 ``flush`` 不会写，``target_file_of`` 会改挑「另一个也定义
+        过该节点的可写文件」。``resolver.mark_readonly_file`` 是 root 环境下
+        唯一可靠的判定来源。
+        """
+        return self._is_readonly(path)
+
+    def dirty_nodes(self) -> frozenset[Node]:
+        """当前待回写的节点集合（``resolver.dirty_nodes()`` 的薄包装）。"""
+        return self.resolver.dirty_nodes()
 
     def _finfo_for_path(self, path: Path) -> FileInfo:
         """``resolved_path`` → 已加载的 ``FileInfo``（找不到就是内部状态不一致）。"""

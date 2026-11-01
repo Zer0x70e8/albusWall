@@ -51,15 +51,22 @@ class HandlerModule(Protocol):
     3. **handler 函数只做三件事**：取参数 → 调 service → 返回可序列化
        结果（dict / list / 基本类型 / str）。超过约 15 行说明逻辑该
        下沉到 service。
-    4. **不抛非 ``DispatchError`` 的异常**。``Dispatcher`` 会兜住并包装
-       成 ``CommandFailed``，但业务错误应抛 ``DispatchError`` 子类以
-       获得正确的 ``code`` 和 ``exit_code``。
+    4. **不抛非 ``DispatchError`` 的异常**。业务错误应抛 ``DispatchError``
+       子类以获得正确的 ``code`` 和 ``exit_code``。服务层异常（如
+       ``SourceError``）有统一翻译：``service/command/dispatch_errors.py``
+       把 ``ServiceError`` 家族映射成带码的 ``DispatchError``，``Dispatcher``
+       在兜底分支里调用它；只有**认不出**的异常才会变成 ``CommandFailed``。
+       所以 handler 里不必为每个服务调用套 ``try/except`` —— 但仍然优先让
+       服务抛类型化异常，别抛裸 ``RuntimeError``。
     5. **``params`` 的 schema 属于命令层**。``Param.name/kind/short/help``
        是给 CLI/GUI 看的契约，不要从 service 的签名反推。注意
        ``Param.type`` **不参与运行时转换**：``Dispatcher._bind`` 只校验
        ``choices``，值原样交给 handler。类型由入口保证——CLI 侧是
-       ``ast.literal_eval``；GUI / IPC 直接构造请求的调用方需自行强转，
-       需要强约束时在 handler 里显式校验（如 ``require_uuid``）。
+       ``ast.literal_eval``；GUI / IPC 直接构造请求的调用方需自行强转。
+       构造 ``Param`` 与收口入参一律走 ``handlers/_params.py``
+       （``pos`` / ``opt`` / ``flag`` / ``as_uuid`` / ``as_int`` /
+       ``as_choice`` …）：它把"可选位置参数必须给 default""flag 只能
+       ``type=bool``"这两个坑做成了构造期报错。
        **``Param.name`` 必须是合法 Python 标识符**（下划线风格，如
        ``asset_uuid`` / ``include_deleted``）：``Dispatcher`` 用
        ``**bound_kwargs`` 调 handler，带连字符的名字（``asset-uuid``）
@@ -77,10 +84,18 @@ class HandlerModule(Protocol):
        否则 GUI 生成不出表单、CLI 提示不出用法、review 时直接拒绝。
        代码层没有运行时拦截，靠 review 拦。
     8. **handler 跑在 IPC 工作线程**（线程名 ``ipc-conn``），不是主循环
-       线程。因此 handler 只能调 service，**不得**触碰主线程属主的状态
-       （Qt 控件、主循环事件队列等）；需要回到主线程由 UI 层自行投递。
-       同理不要在 handler 里做长时间阻塞操作——它占住的是那一条连接的
-       工作线程。
+       线程。线程边界因此**不在 handler 里**：需要主线程属主状态的写操作由
+       **服务的写入口**自己搬回主线程（``service/main_loop_service.py``，
+       见 ``SourceService.create/update/delete`` 与
+       ``SourceStateService.refresh_source/mount_source``）。所以：
+
+       * 不要自己 ``loop.call_soon`` 或起线程去"回主线程"——那会把边界
+         摊到 N 个 handler 上，并绕开服务的超时/关闭语义；
+       * **不要**在 handler 里同步等一个"主线程在等的任务"（例如主线程
+         正 ``join`` 的任务里再调 handler 用到的服务），否则就是死锁；
+       * 长耗时不要在这里等：服务提供 ``start_xxx`` → ``status_xxx``
+         两段式，命令只负责启动与查询（handler 本身仍是"取参数 → 调服务
+         → 返回可序列化结果"）。
 
     满足此契约的模块在 ``handlers/__init__.py`` 里显式列出即可，
     **不要**用 ``importlib`` 扫描目录自动发现——注册顺序和失败点都

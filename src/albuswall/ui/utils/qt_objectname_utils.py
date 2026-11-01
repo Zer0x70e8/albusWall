@@ -496,18 +496,38 @@ def _pick_instance(
 
 
 # noinspection broad-exception
+def _subtree_size(widget: QWidget) -> int:
+    """控件树规模（后代数量）——用来判断「哪个类才是界面主体」。"""
+    return len(widget.findChildren(QWidget))
+
+
+# noinspection broad-exception
 def _try_instantiate(
         classes: List[Tuple[str, type]],
 ) -> Tuple[Optional[str], Optional[QWidget]]:
-    """尝试实例化某个 QWidget 子类；按名字长度排序，主窗口通常较短。"""
-    for name, cls in sorted(classes, key=lambda kv: len(kv[0])):
+    """尝试实例化 QWidget 子类，挑**控件树最大**的那个。
+
+    一个模块里通常 import 了一堆子组件（``Menu`` / ``TitleBar`` / ``Content``
+    ……），按名字长度或字母序都可能挑错。主界面（``Window``）几乎总是
+    后代控件最多的那个，所以按控件树规模排序；同规模时名字含 ``Window``
+    的优先。
+    """
+    best: Tuple[int, str, QWidget] | None = None
+    for name, cls in classes:
         try:
             instance = cls()
         except Exception:  # noqa: BLE001
             continue
-        if isinstance(instance, QWidget):
-            return name, instance
-    return None, None
+        if not isinstance(instance, QWidget):
+            continue
+        score = _subtree_size(instance)
+        bonus = 1 if "window" in name.lower() else 0
+        candidate = (score * 10 + bonus, name, instance)
+        if best is None or candidate[0] > best[0]:
+            best = candidate
+    if best is None:
+        return None, None
+    return best[1], best[2]
 
 
 def cli_main(argv: Optional[List[str]] = None) -> int:

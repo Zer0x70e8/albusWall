@@ -243,7 +243,7 @@ class TaskService:
                     getattr(fn, "__name__", type(fn).__name__),
                 )
                 raise TaskServiceShutdownError(
-                    "TaskService is shut down, cannot submit new demo"
+                    "TaskService is shut down, cannot submit new task"
                 )
 
             try:

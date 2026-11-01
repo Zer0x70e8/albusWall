@@ -107,6 +107,49 @@ def _coerce_scalar(item: Any, type_: Any, custom_converters: Optional[dict]) -> 
         return item
 
 
+def _describe_type(type_: Any) -> str:
+    """类型的人类可读名（只用于报错文本，不求完整）。"""
+    if type_ is None:
+        return "?"
+    name = getattr(type_, "__name__", None)
+    if isinstance(name, str):
+        return name
+    return str(type_).replace("typing.", "")
+
+
+def coerce_value(
+        raw: Any,
+        type_: Any,
+        *,
+        custom_converters: Optional[Mapping[Any, Any]] = None,
+) -> Any:
+    """把「外部输入」（CLI / IPC / GUI 传来的值）按声明类型转换。
+
+    语义与**读配置文件完全一致**——这是硬要求：写回与读取同源，否则
+    「GUI 写进去的值重启后读不出来」这类不对称 bug 会长期潜伏。
+
+    - 字符串 → ``utils.ini_parser._convert``（bool / int / float / Enum /
+      Path / 泛型容器 / 自定义转换器全走同一套）；
+    - 非字符串（JSON 后端的原生结构 / 已类型化的值）→ ``_coerce_native``；
+    - ``type_`` 为 ``None`` / ``Any`` → 原样返回。
+
+    Raises:
+        ValueError: 转不过去；消息里带原值与目标类型名。
+    """
+    if type_ is None or type_ is Any:
+        return raw
+
+    custom = dict(custom_converters or {})
+    try:
+        if isinstance(raw, str):
+            return _convert(raw, type_, custom)
+        return _coerce_native(raw, type_, custom)
+    except Exception as exc:  # noqa: BLE001  统一收口成 ValueError
+        raise ValueError(
+            f"cannot convert {raw!r} to {_describe_type(type_)}: {exc}"
+        ) from exc
+
+
 
 class Resolver:
     """惰性 + 记忆化 + 环检测 + 类型转换。所有访问路径的唯一中枢。"""

@@ -272,11 +272,12 @@ class TitleBar(Retranslatable, QWidget):
         if button is None:
             return
         if icon:
-            # 图标模式：只留图标，且不受语言切换影响
+            # 图标模式：只留图标，且不受语言切换影响；文案落到 tooltip
             self._icon_only.add(name)
             self._explicit_text.pop(name, None)
             button.setIcon(QIcon(str(icon)))
             button.setText("")
+            button.setToolTip(self._button_text(name))
         else:
             self._icon_only.discard(name)
             button.setIcon(QIcon())
@@ -330,14 +331,25 @@ class TitleBar(Retranslatable, QWidget):
     # 文案
     # ------------------------------------------------------------------ #
     def retranslate_ui(self) -> None:
-        """重新应用工具栏按钮文案（幂等：每次切换语言都重算）。"""
+        """重新应用工具栏按钮文案（幂等：每次切换语言都重算）。
+
+        图标模式的按钮不改文字，只同步 tooltip —— 图标不参与翻译，
+        但提示文案要跟着语言走。
+        """
         for name in _BUTTONS:
             button = self._button(name)
-            if button is None or name in self._icon_only:
+            if button is None:
+                continue
+            if name in self._icon_only:
+                button.setToolTip(self._button_text(name))
                 continue
             button.setText(self._button_text(name))
             button.setVisible(
                 bool(button.text()) or not button.icon().isNull())
+
+    def button_icon_mode(self, name: str) -> bool:
+        """该工具按钮当前是否是「只有图标」模式。"""
+        return name in self._icon_only
 
     # ------------------------------------------------------------------ #
     # 几何

@@ -195,7 +195,8 @@ def test_configclass_failed_annotation_becomes_any():
     assert _CLASSES[Weird].fields[0].type is Any
 
 
-def test_configclass_overrides_same_file_and_path():
+def test_configclass_shares_same_file_and_path():
+    """同名 section 多份声明：字段不冲突 → 并存共享，不互相顶掉。"""
     @configclass("core", "main")
     class First:
         a: int = 1
@@ -204,9 +205,13 @@ def test_configclass_overrides_same_file_and_path():
     class Second:
         b: int = 2
 
-    assert First not in _CLASSES
+    assert First in _CLASSES
+    assert Second in _CLASSES
     assert _CLASSES[Second].path == ("core",)
-    assert classes_in("main") == (Second,)
+    assert classes_in("main") == (First, Second)
+    from albuswall.configue.registry import _PATHS
+
+    assert [ci.cls for ci in _PATHS[("main", ("core",))]] == [First, Second]
 
 
 # ==================== 重装饰（#1） ====================

@@ -4,7 +4,8 @@
 分两类：
 
 - **异常**：``ConfigError`` / ``ConfigFileNotFound`` / ``AmbiguousConfigFile`` /
-  ``ConfigMissingError``——调用方需要 ``except`` 的那些。
+  ``ConfigMissingError`` / ``ConfigClassNotRegistered`` /
+  ``ConfigDeclarationConflict``——调用方需要 ``except`` 的那些。
 - **值对象**：``LoadError`` / ``LoadReport``——``check()`` / ``load()`` 的返回值，
   「一部分文件成功、一部分失败」是正常结果，不该用异常表达。
 
@@ -22,6 +23,8 @@ __all__ = [
     "ConfigError",
     "ConfigFileNotFound",
     "AmbiguousConfigFile",
+    "ConfigClassNotRegistered",
+    "ConfigDeclarationConflict",
     "ConfigMissingError",
     "LoadError",
     "LoadReport",
@@ -102,3 +105,36 @@ class LoadReport:
     @property
     def ok(self) -> bool:
         return not self.errors
+
+
+class ConfigDeclarationConflict(ConfigError):
+    """同一个 ``(section, key)`` 被多处 ``@configclass`` 声明，且**声明不一致**。
+
+    同名共享是允许的（多个类读同一个配置项），但前提是声明完全等价：类型一致、
+    默认值一致。不一致就说明「同一个格子有两种解释」，此时无论采用哪一份都会
+    让另一份的作者拿到意料之外的值，所以**装饰期当场报错**，而不是让后写者
+    静默覆盖前者。
+
+    继承 ``ConfigError`` 而不是 ``RuntimeError``：这条错误只会出现在导入 /
+    装配期（``import`` 时炸），不会发生在运行期读取路径上，上层不需要为它
+    准备"降级到默认值"的分支。
+    """
+
+
+class ConfigClassNotRegistered(RuntimeError, ConfigError):
+    """``@configclass`` 类不在登记表里（从未声明，或 ``_CLASSES`` 被清空）。
+
+    为什么继承两个基类：
+
+    * ``RuntimeError`` —— 这是它的**历史类型**。``registry._ConfigSlot`` 过去
+      直接抛裸 ``RuntimeError``，既有 ``except RuntimeError`` 与测试都不用改；
+    * ``ConfigError`` —— 让上层"配置系统不可用 → 退回默认值"的分支只需要
+      ``except ConfigError`` 一棵树，不必再兜一次宽 ``RuntimeError``
+      （那会把调用方真正的编程错误也吞掉）。
+
+    典型触发：某处借用了别的类的描述符（``class Stranger: x = Core.x``）、
+    测试里清空了 ``_CLASSES``，随后仍然 ``Config()`` 读字段。
+
+    注意：**同名 section 的多个 ``@configclass`` 不再互相顶出登记表**——声明
+    一致时它们共存并共享取值（见 ``ConfigDeclarationConflict``）。
+    """

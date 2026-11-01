@@ -129,11 +129,16 @@ class Window(QWidget):
         self.back_ground = BlurLabel(self)
         self.back_ground_screen_area = QWidget(self)
         self.back_ground.target_widget = self.back_ground_screen_area
-        self.back_ground.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.back_ground.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.back_ground.setContextMenuPolicy(
-            Qt.ContextMenuPolicy.NoContextMenu)
+        # 取景目标只被 ``BlurLabel.grab()`` 读取，从不处理交互。它铺满整窗、
+        # 且在层叠顺序里位于内容层之上（见 _setup_ui 末尾的 raise_/lower_），
+        # 所以必须对所有鼠标事件透明 —— 否则它会吞掉内容层的点击与滚轮，
+        # 表现为「内容页既不能滚动、也点不开详情」。
+        for widget in (self.back_ground, self.back_ground_screen_area):
+            widget.setAttribute(
+                Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            widget.setContextMenuPolicy(
+                Qt.ContextMenuPolicy.NoContextMenu)
 
         # ---- 标题栏 ----
         self.title_bar = TitleBar(self)

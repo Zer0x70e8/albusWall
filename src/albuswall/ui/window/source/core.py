@@ -27,9 +27,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...delegate import SourceCardDelegate
 from ...i18n import Retranslatable
+from ...model import SourceCardModel
 from ...widgets import BlurLabel, ColumnListView
-
 from ..utils import install_close_button
 from .detail_widget import IngestSourceDetailWidget
 
@@ -176,18 +177,47 @@ class IngestSource(Retranslatable, BlurLabel):
     # ------------------------------------------------------------------ #
     # 数据接口
     # ------------------------------------------------------------------ #
-    def set_model(self, model, delegate) -> None:
-        """注入卡片列表的 model 与 delegate（纯 view 侧接线）。"""
+    def set_model(self, model, delegate=None) -> None:
+        """注入卡片列表的模型（委托可省，缺省装默认卡片委托）。
+
+        :param model: 任意实现 :class:`~albuswall.ui.model.SourceCardRole`
+            的模型，通常是 :class:`~albuswall.ui.model.SourceCardModel`。
+        :param delegate: 委托；``None`` 时用
+            :class:`~albuswall.ui.delegate.SourceCardDelegate`。
+        """
+        if delegate is None:
+            delegate = self._default_delegate()
         self.model = model
         self.delegate = delegate
-        self.view.setModel(model)
-        self.view.setItemDelegate(delegate)
+        self.view.bind_model(model, delegate)
 
         # 此时 selectionModel 才存在
         selection_model = self.view.selectionModel()
         if selection_model is not None and not self._selection_connected:
             selection_model.currentChanged.connect(self._on_current_changed)
             self._selection_connected = True
+
+    def set_source_cards(self, cards) -> None:
+        """便捷入口：直接喂一批导入源对象（DTO / ``SourceCard`` 都行）。
+
+        内部会新建 :class:`~albuswall.ui.model.SourceCardModel` 并装好默认
+        委托；已经自己维护模型时请继续用 :meth:`set_model`。
+        """
+        model = self.model
+        if not isinstance(model, SourceCardModel):
+            model = SourceCardModel(parent=self)
+            self.set_model(model)
+        model.set_cards(cards)
+
+    def cards_model(self) -> SourceCardModel | None:
+        """当前卡片模型（外部注入的模型不是 ``SourceCardModel`` 时为 ``None``）。"""
+        return self.model if isinstance(self.model, SourceCardModel) else None
+
+    def _default_delegate(self):
+        """复用已装的默认委托，没有就新建一个。"""
+        if isinstance(self.delegate, SourceCardDelegate):
+            return self.delegate
+        return SourceCardDelegate(self.view)
 
     # ------------------------------------------------------------------ #
     # 交互

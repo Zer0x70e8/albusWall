@@ -57,13 +57,14 @@ def test_field_owner_filled_by_configclass():
 
 
 def test_field_owner_last_registration_wins():
+    """同一节点被两个文件的类声明（声明等价 → 允许共享）→ 后装饰者的文件兜底。"""
     @configclass("core", "first")
     class First:
         a: int = 1
 
     @configclass("core", "second")
     class Second:
-        a: int = 2
+        a: int = 1
 
     assert _FIELD_OWNER[("core", "a")] == "second"
 
