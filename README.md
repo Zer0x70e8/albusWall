@@ -10,8 +10,8 @@
 
 > ⚠️ **Early Development Notice**  
 > AlbusWall is still in **active development**.  
-> The project has recently gone through a major refactor. The old temporary CLI has been removed, a plugin system has been introduced, and the built-in UI is now replaceable. The core no longer hard-depends on PySide6.  
-> Most previously working features are being restored on top of the new architecture and should return quickly.  
+> The project has just finished a major refactor (configuration layer, service layer, and a presenter-based UI). A plugin system has replaced the old temporary CLI, the built-in UI is replaceable, and the core no longer hard-depends on PySide6.  
+> Most of the previous gallery features are restored on the new architecture; the settings GUI and shortcut wiring are still missing.  
 > This is a personal spare-time project and my first public Python application. Feedback, issues, and patience are deeply appreciated.
 
 **AlbusWall** is an image gallery designed to showcase **Hyprland ricing setups** with a clean, HIG-inspired interface.  
@@ -23,15 +23,17 @@ Under the hood, it is now built as a modular application: the core manages media
 
 This is not just a cleanup — the architecture is now much more flexible.
 
-- **Temporary CLI removed**  
-  The previous short-lived CLI entry point is gone. Future CLI support, if needed, should be implemented as a plugin or a separate frontend instead of being coupled to the GUI.
+- **Temporary CLI replaced**  
+  The previous short-lived in-process CLI is gone. Control from outside now goes
+  through the IPC endpoint (`albusctl`, see below), so the GUI process stays the
+  single owner of the state instead of a second process importing the same code.
 
 - **Plugin system added**  
   AlbusWall now has plugin discovery, declaration, and lifecycle management.  
   Relevant modules:
-  - `albuswall.plugin.declaration`
+  - `albuswall.core.plugins` (`Plugin`, `PluginManager`, `@plugin`)
+  - `albuswall.core.application` (`Application`: lifecycle, slots, hooks)
   - `albuswall.plugin.discovery`
-  - `albuswall.plugin.manager`
 
 - **UI is now replaceable**  
   The built-in UI is implemented as a plugin. The core application no longer forces PySide6 as a hard dependency.  
@@ -44,8 +46,11 @@ This is not just a cleanup — the architecture is now much more flexible.
 - **Most technical debt addressed**  
   The project is now split into clearer layers: common, config, core, DTOs, infrastructure, logging, plugins, repositories, services, UI, and utilities.
 
-- **Feature recovery is in progress**  
-  Grid rendering, album switching, image viewing, and other previous GUI capabilities are being rebuilt on the new plugin-based foundation.
+- **Feature recovery is largely done**  
+  Grid rendering, albums, tags, the detail view, thumbnails and the asset trash
+  were rebuilt on the new foundation in this refactor. What is still missing is
+  the settings GUI and the final wiring of the shortcut library into the views —
+  see the roadmap below.
 
 ---
 
@@ -90,11 +95,18 @@ the configured window theme, and cascades `start()` / `stop()` to the whole tree
 
 ### Arch Linux (AUR)
 
+> **Status:** the AUR package is **not published yet** (`albuswall` does not
+> exist on aur.archlinux.org), so `yay -S albuswall` will fail. The recipe in
+> `packaging/aur/` is ready — build it locally until the first release is
+> pushed:
+
 ```bash
-yay -S albuswall          # or: paru -S albuswall
+git clone https://github.com/Zer0x70e8/albusWall.git
+cd albusWall/packaging/aur
+makepkg -si                    # needs a tag whose tarball hash is filled in
 ```
 
-The AUR package pulls in `pyside6`, `python-psutil`, `python-pillow` and
+The recipe pulls in `pyside6`, `python-psutil`, `python-pillow` and
 `python-apscheduler` (AUR), and installs:
 
 | Path | Content |
@@ -142,14 +154,11 @@ cd src
 python -m albuswall
 ```
 
-If your current build supports explicit UI plugin selection, it may look like this:
-
-```bash
-python -m albuswall --ui builtin
-```
-
-> Please check `python -m albuswall --help` for the actual arguments in your current revision.  
-> This README intentionally avoids promising CLI flags that may still be changing.
+`python -m albuswall` is a single entry point: `entrypoint.should_launch_main()`
+decides whether this process becomes the GUI or acts as an IPC client
+(`status` / `start` / `stop` / `restart` / `reload` / `version`, or `--cli`).
+There is no `--ui` selector — the built-in UI is a plugin, picked through the
+plugin slot, so alternative frontends are chosen by plugins rather than flags.
 
 ---
 
@@ -161,10 +170,12 @@ AlbusWall now treats functionality and frontends as plugins.
 
 | Module | Responsibility |
 |---|---|
-| `plugin/declaration.py` | Plugin interfaces and declarations |
-| `plugin/discovery.py` | Finding available plugins |
-| `plugin/manager.py` | Loading, initialising, and managing plugins |
+| `core/plugins.py` | `Plugin` protocol, `PluginManager`, `@plugin` registration |
+| `core/application.py` | `Application` lifecycle, slot resolution, hook dispatch |
+| `core/main_loop.py` | `MainLoop` protocol (`call_soon` / `run` / `stop`) |
+| `plugin/discovery.py` | Finding available plugins (entry points, directories, packages) |
 | `plugins/builtin_ui.py` | The default UI provided as a plugin |
+| `plugins/command.py` | Assembles every command handler, then freezes the registry |
 | `ui/application.py` | Qt `MainLoop` (`Application` / `UIApplication`) |
 | `ui/window/`, `ui/widgets/` | Pure views (they only emit intent signals) |
 | `ui/presenter/` | Presentation layer: `MainPresenter` + one presenter per screen |
@@ -219,14 +230,14 @@ So the running instance listens on a local endpoint and executes calls **on
 its own main thread**.
 
 ```bash
-albusctl ping           # is it running?
-albusctl sources        # list tracked import sources
-albusctl import         # wake the import worker
-albusctl thumbs         # queue thumbnail backfill
-albusctl stats          # task service counters
-albusctl watch import.assets_imported   # stream events
-albusctl call source.list '{}'          # any registered command
-albusctl quit
+albusctl help                    # every registered command, grouped by namespace
+albusctl version                 # project version + IPC protocol version
+albusctl ping                    # answered on the transport thread
+albusctl source list             # namespace form of `source.list`
+albusctl album create 旅行 --description="trip shots"
+albusctl asset trash <asset_uuid> # positional args + --flags are typed by ast
+albusctl task.stats              # task service counters
+albusctl thumbnail.request <asset_uuid>
 ```
 
 `albusctl` exists after `pip install -e .` (it is a `[project.scripts]` entry).
@@ -234,12 +245,13 @@ From a plain source checkout — no install — use the wrapper, which puts `src
 on `PYTHONPATH` and picks the repo's own venv:
 
 ```bash
-./scripts/albusctl.sh ping     # note the ./ — fish & zsh don't search CWD
+./scripts/albusctl.sh help     # note the ./ — fish & zsh don't search CWD
 ```
 
-Every name printed by `albusctl list` can be used directly as a subcommand
-(`albusctl task.stats` == `albusctl call task.stats`); the short aliases
-(`sources`, `import`, `thumbs`, `stats`, `status`, `quit`) are just sugar.
+Every registered command is reachable two ways: the dotted path
+(`albusctl source.list`) and the namespace form (`albusctl source list`), which
+is the same dispatcher underneath. `albusctl help --all` includes hidden
+commands, `albusctl help <command>` prints one command's parameters.
 
 Exit codes: `0` ok · `2` usage · `3` not running · `4` token mismatch ·
 `5` remote error · `6` timeout · `130` interrupted.
@@ -248,11 +260,13 @@ Exit codes: `0` ok · `2` usage · `3` not running · `4` token mismatch ·
 
 | Layer | Module | Responsibility |
 |---|---|---|
-| Endpoint | `utils/ipc_endpoint.py` | socket address + token, shared by both sides |
+| Endpoint | `infrastructure/ipc/_endpoints.py` | socket address + token, shared by both sides |
 | Protocol | `common/ipc.py` | JSON-RPC style frames, error codes, exceptions |
-| Commands | `services/command.py` | `@command` registry + `Dispatcher` |
-| Transport | `infrastructure/ipc/server.py` | accept loop, connections, forwarding |
-| Client | `client/` | `albusctl` — no GUI, no core imports |
+| Registry | `command/registry.py` | `CommandRegistry`, `Param` schemas, ACL |
+| Dispatcher | `service/command/dispatcher.py` | argument binding, error translation |
+| Handlers | `service/command/handlers/` | one module per domain (`album`, `asset`, `tag`, …) |
+| Transport | `infrastructure/ipc/manager.py` | `register_ipc`: accept loop, connections, forwarding |
+| Client | `cli.py` | `albusctl` — no GUI, no core imports beyond version |
 
 - **Transport is `multiprocessing.connection`**: `AF_UNIX` on POSIX,
   named pipes (`AF_PIPE`) on Windows — one code path, zero dependencies.
@@ -262,32 +276,49 @@ Exit codes: `0` ok · `2` usage · `3` not running · `4` token mismatch ·
 - **Address** lives in `$XDG_RUNTIME_DIR/albuswall/ipc.sock` (`0600`, dir
   `0700`) or `\\.\pipe\albuswall-<user>`; the `authkey` token sits next to
   it. Binding the endpoint doubles as a **single-instance lock**.
-- The endpoint is a plugin (`plugins/ipc.py`), so `[plugin_disables] ipc`
-  removes it entirely and `[ipc] enabled = false` just stops listening.
+- The endpoint is registered by `infrastructure.bootstrap` (`register_ipc`),
+  so it is part of the infrastructure layer rather than a plugin; business
+  commands are separate handler modules assembled by the `command` plugin.
 
 ### Adding a command
 
 ```python
-from albuswall.services.command import command
+from albuswall.command import CommandRegistry
+from albuswall.core import Container
 
-@command("source.rescan")
-def _rescan(container, *, source_id: int) -> dict:
-    # runs on the main loop thread; keep it short, or hand off to task_service
-    container.get("source_service").update_source(source_id)
-    return {"accepted": True}
+from ._params import pos, opt
+
+def setup(registry: CommandRegistry, container: Container) -> None:
+    source_service = container.require("source_service")
+
+    @registry.command(
+        "source.rescan",
+        help_="rescan one import source",
+        params=(pos("source_id", help="source id"),),
+    )
+    def source_rescan(source_id: int) -> dict:
+        # runs on the main loop thread; keep it short, or hand off to task_service
+        source_service.scan(source_id)
+        return {"accepted": True}
 ```
+
+Then add the module to `MODULES` in
+`service/command/handlers/__init__.py` — the list is explicit on purpose, no
+directory scanning, and `registry.freeze()` in the `command` plugin turns a
+missing registration into a startup error instead of a silent gap.
 
 Layout:
 
 ```text
-common/ipc.py              # frames + error codes
-common/enums/ipc.py        # IpcErrorCode
-utils/ipc_endpoint.py      # address + token
-services/command.py        # @command + Dispatcher + builtin commands
-infrastructure/ipc/        # config, server, bootstrap
-client/                    # IpcClient + albusctl
-plugins/ipc.py             # plugin declaration
-test/test_ipc.py           # headless end-to-end tests
+common/ipc.py                     # frames + error codes
+common/enums/ipc.py               # IpcErrorCode
+infrastructure/ipc/_endpoints.py  # address + token
+infrastructure/ipc/manager.py     # register_ipc, server loop
+command/registry.py               # CommandRegistry + Param schemas
+service/command/dispatcher.py     # bind params, translate errors
+service/command/handlers/         # one module per domain
+cli.py                            # IpcClient + albusctl entry point
+tests/test_handlers_*.py          # headless end-to-end tests
 ```
 
 ### Logs
@@ -319,31 +350,50 @@ albusctl status     # running / address / clients / accepted / handled / errors
 ```text
 src/
 └── albuswall/
-    ├── __about__.py
-    ├── __main__.py
-    ├── common/              # Enums, exceptions, shared primitives
-    ├── configue/            # Configuration system
-    ├── core/                # Application lifecycle, bootstrap, runtime
-    ├── dto/                 # Data transfer objects（按 Command / Query 归属分包）
-    │                          #   album|import_|trash|task|trigger|sentinel.py 单文件
-    │                          #   tag|source|thumbnail → {command,query[,events|paths]}.py
-    │                          #   见 dto/CONVENTIONS.md · DTO 归属与命名
-    ├── infrastructure/      # Database and infrastructure bootstrapping
-    ├── log/                 # Logging system
-    ├── plugin/              # Plugin declaration, discovery, manager
-    ├── plugins/             # Built-in plugins, e.g. builtin_ui
-    ├── repositories/        # Data access layer
-    ├── resources/           # Config, SQL, themes, i18n, app icon (package data)
-    ├── services/            # Business logic
-    ├── ui/                  # UI abstraction and bootstrap
-    │   ├── builtin/
-    │   ├── protocol.py
-    │   └── vo/
-    └── utils/               # Path, signal, mount, time, SQL helpers
+    ├── __about__.py           # version, authors, supported Python range
+    ├── __main__.py            # `python -m albuswall`
+    ├── entrypoint.py          # decide: launch GUI or act as IPC client
+    ├── main.py                # composition root: container + plugins
+    ├── cli.py                 # `albusctl` (IPC client, no GUI imports)
+    ├── command/               # CommandRegistry, Param schemas, ACL, exceptions
+    ├── common/                # enums, exceptions, IPC frames, primitives
+    ├── configue/              # declaration → validation → atomic write
+    │   ├── bootstrap.py       # setup_config(): [path]/[files] + aliases
+    │   ├── registry.py        # @configclass declarations
+    │   ├── schema.py          # enumerable/writable settings tree
+    │   └── backends/ resolver.py serialization.py tree.py utils/
+    ├── core/                  # Application, PluginManager, MainLoop protocol
+    ├── dto/                   # DTOs split by Command / Query ownership
+    │   ├── album/ asset/ tag/ source/ thumbnail/ utils/
+    │   └── import_.py task.py trash.py trigger.py sentinel.py
+    ├── infrastructure/        # database, ipc, task, trigger, reconcile, platform
+    ├── log/                   # logging system (filters, formatters, handlers)
+    ├── plugin/                # discovery (entry points / directories / packages)
+    ├── plugins/               # built-ins: builtin_ui, command, hello
+    ├── repositories/          # data access (+ utils/visibility.py)
+    ├── resources/             # conf.ini, shortcuts.ini, sql, themes, i18n, icons
+    ├── service/               # business logic, one package per domain
+    │   ├── album/ asset/ source/ tag/ thumbnail/ view/ importer/
+    │   ├── command/           # dispatcher + one handler module per domain
+    │   └── main_loop_service.py
+    ├── ui/                    # the built-in Qt UI
+    │   ├── application.py     # Qt MainLoop (Application / UIApplication)
+    │   ├── window/ widgets/   # views: they only emit intent signals
+    │   ├── presenter/         # one presenter per screen, MainPresenter root
+    │   ├── delegate/ dialog/ model/ anims/
+    │   ├── keymap/            # shortcut library (not yet attached to views)
+    │   ├── i18n.py languages.py
+    │   └── utils/             # objectName inspector, signal adapter
+    └── utils/                 # paths, images, thumbnails, time, SQL helpers
 
+assets/                        # screenshots and promo images
+docs/                          # i18n.md, keymap.md, plugin-author-guide.md
 packaging/
-├── albuswall.desktop        # Desktop entry
-└── aur/                     # PKGBUILD + .SRCINFO for Arch Linux
+├── albuswall.desktop          # Desktop entry
+└── aur/                       # PKGBUILD + .SRCINFO for Arch Linux
+scripts/                       # albusctl.sh, dbtool.sh, build_i18n.py,
+                               # i18n_catalog.py, aur_release.py
+tests/                         # pytest suite (headless: QT_QPA_PLATFORM=offscreen)
 ```
 
 > Note: the directory name `configue/` follows the current repository layout.
@@ -352,11 +402,20 @@ packaging/
 
 ## 🧩 Dependencies
 
-- Python ≥ 3.11
+- Python ≥ 3.11 (3.11 – 3.14 supported)
 - SQLite via the standard library
-- Core: standard library + project modules
+- Core: standard library + `psutil`, `apscheduler`
 - Optional built-in UI: PySide6
-- image processing: Pillow ≥ 10.0
+- Image processing: Pillow ≥ 12.3.0
+
+`pyproject.toml` pins the ranges actually tested:
+
+| Package | Constraint | Why |
+|---|---|---|
+| `psutil` | `>=7.2.2` | load/memory aware concurrency control |
+| `apscheduler` | `>=3.10.0` | trash cleanup + scheduled tasks |
+| `pillow` | `>=12.3.0` | thumbnails, EXIF, format sniffing |
+| `pyside6` | `>=6.11.0` | the built-in UI plugin |
 
 PySide6 is no longer a mandatory core dependency.  
 It is required only when using the built-in PySide6 UI plugin.
@@ -378,11 +437,25 @@ Runtime assets live inside the package (`src/albuswall/resources/`):
 
 ```text
 resources/
-├── config/     conf.ini, log_config.ini     # defaults copied to ~/.config
-├── i18n/       albuswall_<lang>.{ts,qm}     # translations
-├── icons/      albuswall.svg                # application / window icon
+├── config/     conf.ini, log_config.ini, shortcuts.ini   # defaults copied to ~/.config
+├── i18n/       albuswall_<lang>.{ts,qm}                  # translations
+├── icons/      albuswall.svg                             # application / window icon
 ├── sql/        media_library_schema.sql
 └── themes/     default/main_window.qss + icons/
+```
+
+`shortcuts.ini` is the default key map: one line per command, in the
+`command.path = [keys, positional_args, keyword_args]` form documented inside
+the file itself. User overrides live in `<user config dir>/shortcuts.ini` and
+win per command path.
+
+Translations are generated, not hand-edited. `scripts/i18n_catalog.py` holds
+the translation table; `scripts/build_i18n.py` runs `pyside6-lupdate` over
+`src/albuswall/ui`, merges both sources and compiles `.qm`:
+
+```bash
+python scripts/build_i18n.py            # regenerate .ts + .qm under resources/i18n
+python scripts/build_i18n.py --check    # CI: fail if a translation is missing
 ```
 
 They are **not** separate data files: hatchling collects every non-`.py` file
@@ -401,10 +474,15 @@ them there. Nothing is written back into the package at runtime — user copies
 | `scripts/aur_release.py` | fills the source checksum + regenerates `.SRCINFO` |
 
 `PKGBUILD` installs the wheel with `python -m installer`, then adds the desktop
-entry, the hicolor icon and the MIT license.
+entry, the hicolor icon and the MIT license. `build()` needs the `makedepends`
+(`python-build`, `python-hatchling`, `python-installer`, `python-wheel`), and
+`package()` reads `packaging/albuswall.desktop` from the source tree — so the
+recipe has to be built from a checkout or a source tarball, not from a bare
+`PKGBUILD` download.
 
-The checksum can only be computed after the release tag exists, so the release
-order is:
+The checksum can only be computed after the release tag exists
+(`sha256sums=('SKIP')` in the repository build passes `makepkg`, but is not
+acceptable for AUR), so the release order is:
 
 ```bash
 # 1. bump version, commit, tag, push
@@ -412,14 +490,23 @@ git tag -a v1.1.0 -m "AlbusWall 1.1.0" && git push origin v1.1.0
 
 # 2. compute the tag tarball hash and regenerate .SRCINFO
 python scripts/aur_release.py            # --tarball <file> to use a local archive
+                                         # --check / --srconly for dry runs
 
 # 3. copy PKGBUILD + .SRCINFO into the AUR repo and push
+git clone ssh://aur@aur.archlinux.org/albuswall.git
+cp packaging/aur/PKGBUILD packaging/aur/.SRCINFO albuswall/ && cd albuswall
+git add -A && git commit -m "albuswall 1.1.0" && git push
 ```
 
 ```bash
-# verify the recipe locally before publishing
-cd packaging/aur && makepkg --printsrcinfo > .SRCINFO   # regenerate only
+# regenerate .SRCINFO only, without touching the checksum
+cd packaging/aur && makepkg --printsrcinfo > .SRCINFO
 ```
+
+The AUR push needs an AUR account whose SSH key is registered on
+aur.archlinux.org (a GitHub key is not enough) — that key is the last step
+before `yay -S albuswall` / `paru -S albuswall` starts working for everybody
+else.
 
 ---
 
@@ -427,30 +514,30 @@ cd packaging/aur && makepkg --printsrcinfo > .SRCINFO   # regenerate only
 
 ### Completed / Refactored
 
-- [x] Major architecture refactor
-- [x] Plugin system: declaration, discovery, manager
+- [x] Major architecture refactor (configue, services, presenters)
+- [x] Plugin system: declaration, discovery, lifecycle
 - [x] Replaceable UI abstraction
 - [x] Built-in UI moved into a plugin
 - [x] Core no longer hard-depends on PySide6
-- [x] Removed temporary CLI entry point
 - [x] Database, repository, and service layers reorganised
-- [x] Theming / theme switching
-- [x] Configuration foundation
+- [x] Configuration system: declare → validate → atomic write
+- [x] Theming / theme switching (`main_window.qss` + presenter-driven icons)
+- [x] Image directory scanner and import pipeline
+- [x] Thumbnail generation on demand + cache maintenance
+- [x] Grid rendering with virtual scrolling
+- [x] Single image detail view, zoom, information panel
+- [x] Albums (create / rename / reorder / cover / trash) and tag trees
+- [x] Asset trash with retention policy and cleanup
+- [x] Out-of-process control (`albusctl` over IPC)
+- [x] i18n (`zh_CN` / `en_US`) with `scripts/build_i18n.py`
+- [x] Packaging: wheel / sdist + Arch Linux (AUR recipe)
 
 ### Restoring / In Progress
 
-- [ ] Image directory scanner
-- [ ] Thumbnail generation and cache cleanup
-- [ ] Grid layout rendering
-- [ ] Basic image viewing
-- [ ] Album switching in the GUI
-- [ ] Album editing
-- [ ] Gallery interaction: selection, zoom
-- [ ] Single image detail view
-- [ ] Settings GUI
-- [ ] Logging system
-- [x] Packaging: wheel / sdist + Arch Linux (AUR)
-- [ ] PyPI release
+- [ ] Settings GUI (settings page, key-binding page, about page)
+- [ ] Attaching the `ui/keymap` shortcut library to the real views
+- [ ] Multi-file config includes (`[configue] include`)
+- [ ] Publishing to PyPI / AUR
 
 The new architecture is intended to make these features faster to restore and easier to maintain.
 
@@ -465,6 +552,19 @@ The new architecture is intended to make these features faster to restore and ea
 - Windows 11 corner radius awareness
 - Purpose-built presentation for Hyprland and other WM ricing shots
 - Plugin-based UI and feature extensions
+
+---
+
+## 📚 Documentation
+
+| Document | Content |
+|---|---|
+| `docs/plugin-author-guide.md` | writing a plugin: declaration, hooks, lifecycle, examples |
+| `docs/plugin-system-pr-description.md` | rationale behind the plugin architecture |
+| `docs/i18n.md` | translation pipeline: `tr()` conventions, catalogs, language switching |
+| `docs/keymap.md` | shortcut model: config file format, registry, chords |
+| `MIGRATION_CONFIGUE1.md` | how the `configue` refactor maps onto the previous config layer |
+| `src/albuswall/dto/CONVENTIONS.md` | DTO ownership (Command vs Query) and naming |
 
 ---
 

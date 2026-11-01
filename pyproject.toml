@@ -77,7 +77,8 @@ packages = ["src/albuswall"]
 include = [
     "/src",
     "/scripts",
-    "/test",
+    "/tests",
+    "/assets",
     "/packaging",
     "/docs",
     "/README.md",
