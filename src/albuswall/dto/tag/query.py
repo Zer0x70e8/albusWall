@@ -19,6 +19,7 @@ from albuswall.dto.utils import to_uuid
 
 __all__ = [
     "Tag",
+    "TagAlias",
     "TagMatch",
     "TagTreeNode",
     "TagWithStats",
@@ -114,3 +115,41 @@ class TagMatch:
     @property
     def label(self) -> str:
         return self.path or self.tag.display_name or self.tag.name
+
+
+@dataclass
+class TagAlias:
+    """读模型：如实映射 ``tag_aliases`` 行（路径解析用的"软链接"）。
+
+    语义（见 ``media_library_schema.sql`` 第 7 节）：
+
+    * 别名有自己的路径段名（如 ``游戏A.link``），**只**用于路径解析；
+    * 解析路径命中别名时，跳到 ``target_uuid`` 指向的规范标签；
+    * 别名**不参与**资产绑定 —— ``asset_tags.tag_uuid`` 必须指向 ``tags.uuid``；
+    * 应用层负责禁环（A → B → A）并尽量直接指向规范标签。
+
+    契约：``uuid`` / ``parent_uuid`` / ``target_uuid`` 对外都是 ``UUID``。
+    """
+    uuid: UUID
+    parent_uuid: Optional[UUID]
+    name: str
+    norm_name: str
+    target_uuid: UUID
+    created_at: str
+    modified_at: str
+
+    @classmethod
+    def from_row(cls, row: Row) -> "TagAlias":
+        """从 ``sqlite3.Row`` 构造（契约同 :meth:`Tag.from_row`）。"""
+        raw_parent = row["parent_uuid"]
+        return cls(
+            uuid=to_uuid(row["uuid"]),
+            parent_uuid=(
+                to_uuid(raw_parent) if raw_parent is not None else None
+            ),
+            name=row["name"],
+            norm_name=row["norm_name"],
+            target_uuid=to_uuid(row["target_uuid"]),
+            created_at=row["created_at"],
+            modified_at=row["modified_at"],
+        )

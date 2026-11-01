@@ -11,15 +11,22 @@
     - ``_task``      : _Task 数据类
 """
 
-from albuswall.dto.task import TaskSpec
-
-from .protocol import TaskServiceProtocol
+from .protocol import (
+    BackpressureEvent,
+    ExecutorArg,
+    TaskServiceProtocol,
+    TaskServiceStats,
+    TaskSpec,
+)
 from .service import TaskService
 from .bootstrap import register_task_service
 
 __all__ = [
     "TaskService",
     "TaskServiceProtocol",
+    "BackpressureEvent",
+    "TaskServiceStats",
     "TaskSpec",
+    "ExecutorArg",
     "register_task_service",
 ]

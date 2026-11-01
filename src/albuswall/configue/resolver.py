@@ -1,7 +1,7 @@
 #
 """值的唯一中枢：惰性 + 记忆化 + 类型转换 + 环检测 + origin 追踪。
 
-除取值之外，Resolver 还维护两份「来源」信息，供回写（flush）使用：
+除取值之外，Resolver 还维护两份「来源」信息，供回写（flush）与卸载（unload）使用：
 
 - ``_origins``: node -> 生效值来自哪个文件（``origin_of``）
 - ``_definitions``: node -> 所有定义过它的文件（低 → 高优先级，``definitions_of``）
@@ -12,24 +12,149 @@
 ``RLock`` 是必需的——``get_str`` 展开 ``${...}`` 时会递归调用自身。
 """
 
+from __future__ import annotations
+
 import re
 import threading
-from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Optional
+import types
+from collections.abc import Mapping
 from configparser import InterpolationError
+from pathlib import Path
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Iterator,
+    Optional,
+    Union,
+    get_args,
+    get_origin,
+)
 
-# noinspection protected-member
 from .utils.ini_parser import _convert  # 复用现有转换器
 
 REF_RE = re.compile(r'\${([^}:]+)(?::([^}]+))?}')
 
 Node = tuple[str, str]
 
+_UNION_ORIGINS = (Union, getattr(types, "UnionType", Union))
+_CONTAINER_ORIGINS = (list, tuple, set, frozenset)
+
+
+def _coerce_native(
+        raw: Any,
+        converter: Any,
+        custom_converters: Optional[dict],
+) -> Any:
+    """把「JSON 原生结构」按声明的泛型逐项转成目标类型。
+
+    ``_convert`` 只吃字符串（INI 的形态）；JSON 后端给的是 list / dict /
+    标量，所以这里补一层「容器 + 元素」的递归。规则：
+
+    - 非泛型（``int`` / ``Path`` / 自定义类）→ **不动**：值已经是 typed，
+      交给 ``get_typed`` 原样返回（``isinstance`` 校验是写值方的事）
+    - ``list[X]`` / ``set[X]`` / ``frozenset[X]`` / ``tuple[X, ...]`` →
+      逐项转 ``X``（字符串项走 ``_convert``；类型已匹配则原样）
+    - ``dict[str, X]`` → 逐值转 ``X``
+    - ``Optional[X]`` / ``Union[...]`` → ``None`` 直接放过，其余不动
+      （``Union`` 该选哪支是 ``_convert`` 的判断，这里没有字符串可转）
+
+    这样 ``{"recent": ["/a.png"]}`` + ``list[Path]`` 读出来就是 ``[Path]``，
+    与写回侧 ``to_json_native`` 的逐项 ``str`` 对称。
+    """
+    origin = get_origin(converter)
+    if origin is None:
+        return raw
+
+    args = get_args(converter)
+
+    if origin in _UNION_ORIGINS:
+        return None if raw is None else raw
+
+    if origin is dict and isinstance(raw, Mapping):
+        value_type = args[1] if len(args) > 1 else None
+        return {
+            key: _coerce_native(value, value_type, custom_converters)
+            for key, value in raw.items()
+        }
+
+    if origin in _CONTAINER_ORIGINS and isinstance(
+            raw, (list, tuple, set, frozenset),
+    ):
+        item_type = args[0] if args else None
+        items = [
+            _coerce_scalar(item, item_type, custom_converters)
+            for item in raw
+        ]
+        return tuple(items) if origin is tuple else origin(items)
+
+    return raw
+
+
+def _coerce_scalar(item: Any, type_: Any, custom_converters: Optional[dict]) -> Any:
+    """单个元素的转换：能匹配就原样，是字符串就按 ``_convert`` 转。"""
+    if type_ is None or type_ is Any:
+        return item
+    if isinstance(item, str):
+        return _convert(item, type_, custom_converters)
+    if get_origin(type_) is not None:
+        return _coerce_native(item, type_, custom_converters)
+    try:
+        if isinstance(item, type_):
+            return item
+        return _convert(str(item), type_, custom_converters)
+    except TypeError:  # type_ 不是类（特殊形式）→ fail-open
+        return item
+
+
+def _describe_type(type_: Any) -> str:
+    """类型的人类可读名（只用于报错文本，不求完整）。"""
+    if type_ is None:
+        return "?"
+    name = getattr(type_, "__name__", None)
+    if isinstance(name, str):
+        return name
+    return str(type_).replace("typing.", "")
+
+
+def coerce_value(
+        raw: Any,
+        type_: Any,
+        *,
+        custom_converters: Optional[Mapping[Any, Any]] = None,
+) -> Any:
+    """把「外部输入」（CLI / IPC / GUI 传来的值）按声明类型转换。
+
+    语义与**读配置文件完全一致**——这是硬要求：写回与读取同源，否则
+    「GUI 写进去的值重启后读不出来」这类不对称 bug 会长期潜伏。
+
+    - 字符串 → ``utils.ini_parser._convert``（bool / int / float / Enum /
+      Path / 泛型容器 / 自定义转换器全走同一套）；
+    - 非字符串（JSON 后端的原生结构 / 已类型化的值）→ ``_coerce_native``；
+    - ``type_`` 为 ``None`` / ``Any`` → 原样返回。
+
+    Raises:
+        ValueError: 转不过去；消息里带原值与目标类型名。
+    """
+    if type_ is None or type_ is Any:
+        return raw
+
+    custom = dict(custom_converters or {})
+    try:
+        if isinstance(raw, str):
+            return _convert(raw, type_, custom)
+        return _coerce_native(raw, type_, custom)
+    except Exception as exc:  # noqa: BLE001  统一收口成 ValueError
+        raise ValueError(
+            f"cannot convert {raw!r} to {_describe_type(type_)}: {exc}"
+        ) from exc
+
+
 
 class Resolver:
     """惰性 + 记忆化 + 环检测 + 类型转换。所有访问路径的唯一中枢。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._raw: dict[Node, Any] = {}
         self._types: dict[Node, Any] = {}
         self._custom_converters: dict = {}   # 类型 -> str -> 值（读）
@@ -41,10 +166,13 @@ class Resolver:
         self._stack: list[Node] = []
         self._rdeps: dict[Node, set[Node]] = {}
 
-        # ── 来源追踪（阶段 1）──────────────────────────────
+        # ── 来源追踪 ───────────────────────────────────────
         self._origins: dict[Node, Path] = {}  # node -> 生效值所在文件
         self._by_file: dict[Path, set[Node]] = {}  # 反查，flush 时按文件分组
         self._definitions: dict[Node, list[Path]] = {}  # 低 → 高，允许重复
+        # 每个文件自己写入的原始值（不管是否生效）。unload 时靠它把被撤掉的
+        # 生效值回退到「剩下文件里优先级最高的那个值」，而不是直接消失。
+        self._file_raw: dict[Path, dict[Node, Any]] = {}
         self._readonly_files: set[Path] = set()  # 显式标记的只读来源
         self._dirty: set[Node] = set()  # 待回写节点
         self._lock = threading.RLock()
@@ -99,11 +227,16 @@ class Resolver:
             raw = self._get_str_locked(node)
             converter = self._types.get(node)
 
-            if converter is None or not isinstance(raw, str):
-                # 无转换器，或 raw 已是具体值 → 直接采用，不再过 _convert
+            if converter is None:
+                # 无类型声明 → 原样返回
                 value = raw
-            else:
+            elif isinstance(raw, str):
                 value = _convert(raw, converter, self._custom_converters)
+            else:
+                # 非字符串原始值（JSON / TOML 后端的原生结构）：
+                # 泛型容器要逐项转（list[Path] 里的字符串 → Path），
+                # 标量已经是 typed，不动。
+                value = _coerce_native(raw, converter, self._custom_converters)
 
             self._typed_cache[node] = value
             return value
@@ -141,8 +274,15 @@ class Resolver:
                 self._dirty.add(node)
             self._invalidate(node)
 
-    def inject_raw(self, section, key, raw, *, origin: Optional[Path] = None,
-                   overwrite: bool = False) -> None:
+    def inject_raw(
+            self,
+            section: str,
+            key: str,
+            raw: Any,
+            *,
+            origin: Optional[Path] = None,
+            overwrite: bool = False,
+    ) -> None:
         """加载阶段注入原始值。
 
         Args:
@@ -156,6 +296,9 @@ class Resolver:
             if origin is not None:
                 origin = Path(origin)
                 self._definitions.setdefault(node, []).append(origin)
+                # 记录「这个文件里这个 key 是什么」——注意与是否生效无关，
+                # unload 回退时要靠它。
+                self._file_raw.setdefault(origin, {})[node] = raw
             if overwrite or node not in self._raw:
                 self._raw[node] = raw
                 if origin is not None:
@@ -177,7 +320,7 @@ class Resolver:
                 self._typed_cache.pop(n, None)
                 self._rdeps.pop(n, None)
 
-    # ---------- origin / dirty（阶段 1）----------
+    # ---------- origin / dirty ----------
     @property
     def lock(self) -> threading.RLock:
         """共享状态锁。调用方需要「读-改-写」原子性时用它。"""
@@ -208,6 +351,18 @@ class Resolver:
         with self._lock:
             return set(self._by_file.get(Path(path), ()))
 
+    def sections_of_path(self, path: Path) -> list[str]:
+        """返回该文件**贡献过生效值**的 section 名（去重、排序）。
+
+        「贡献过」= 该节点的生效 origin 是这个文件。被更高优先级文件覆盖掉的
+        段不会出现在这里——``tree.<file>.keys()`` 想知道的是「这个文件当前
+        提供什么」，而不是「这个文件里写过什么」（后者用
+        ``values_of_file`` 看节点级信息）。
+        """
+        with self._lock:
+            nodes = self._by_file.get(Path(path), ())
+            return sorted({section for section, _ in nodes})
+
     def definitions_of(self, section: str, key: str) -> tuple[Path, ...]:
         """返回定义过该节点的所有文件，按注入顺序（低 → 高优先级）。"""
         with self._lock:
@@ -233,6 +388,59 @@ class Resolver:
         with self._lock:
             for node in nodes:
                 self._dirty.discard(tuple(node))
+
+    def values_of_file(self, path: Path) -> dict[Node, Any]:
+        """返回该文件写入过的原始值（副本），不论是否生效。"""
+        with self._lock:
+            return dict(self._file_raw.get(Path(path), {}))
+
+    def forget_file(self, path: Path) -> frozenset[Node]:
+        """清除该文件对 Resolver 的全部贡献（``unload()`` 调用）。
+
+        规则：
+
+        1. ``_definitions[node]`` 里移除 ``path``：列表空了就整条 key 删除，
+           否则保留其它文件的定义记录（被高优先级文件覆盖的节点，值仍归别人）。
+        2. 生效值来自该文件的节点（``_by_file[path]``）**回退**到剩余定义里
+           优先级最高、且确实带值的那个文件（逆序遍历 ``_definitions``，
+           配合 ``_file_raw`` 取回那个文件自己写的值）；一个都没有才删除节点。
+        3. 回退/删除都会递归失效 ``${...}`` 展开缓存。
+
+        返回「生效值来自该文件」的节点集合（调用方据此清 dirty）。
+
+        注意：不带 origin 注入的默认值不属于任何文件，不会被本方法删除。
+        """
+        path = Path(path)
+        with self._lock:
+            effective = set(self._by_file.pop(path, set()))
+            self._file_raw.pop(path, None)
+
+            # 1) 剥掉该文件在 definitions 里的全部痕迹
+            for node, defs in tuple(self._definitions.items()):
+                if path not in defs:
+                    continue
+                remaining = [p for p in defs if p != path]
+                if remaining:
+                    self._definitions[node] = remaining
+                else:
+                    self._definitions.pop(node, None)
+
+            # 2) 被撤掉生效值的节点：回退到剩下的最高优先级定义
+            for node in effective:
+                for candidate in reversed(self._definitions.get(node, ())):
+                    values = self._file_raw.get(candidate)
+                    if values is not None and node in values:
+                        self._raw[node] = values[node]
+                        self._origins[node] = candidate
+                        self._by_file.setdefault(candidate, set()).add(node)
+                        self._invalidate(node)
+                        break
+                else:
+                    self._raw.pop(node, None)
+                    self._origins.pop(node, None)
+                    self._invalidate(node)
+
+            return frozenset(effective)
 
     def converter_of(self, section: str, key: str) -> Any:
         """返回节点注册的转换器；未注册时返回 None。"""
@@ -272,7 +480,7 @@ class Resolver:
         Args:
             mapping: 读侧转换器
             serializers: 写侧转换器 ``{类型: 值 -> str}``；不给则写回只能
-                ``str(value)``（见 ``ini_parser._deconvert`` 的说明）
+                ``str(value)``
         """
         with self._lock:
             self._custom_converters = dict(mapping)
@@ -288,30 +496,12 @@ class Resolver:
     ) -> None:
         """增量注册一个自定义转换器（与 ``configparser`` 的 ``converters`` 同义）。
 
-        只有在「构造函数语义不对」时才需要注册——普通 ``Enum`` / ``Path``
-        子类 / 带 ``X(str)`` 构造的类会被 ``_convert`` 默认回退直接构造，
-        不必登记。典型需要注册的场景：``Namespace`` 子类（``X("raw")`` 不是
-        你想要的）、需要外部上下文解析的类。
+        只有「构造函数语义不对」的类型才需要注册——普通 ``Enum`` / ``Path``
+        子类 / 带 ``X(str)`` 构造的类会被 ``_convert`` 默认回退直接构造。
 
         **写回同样重要**：不注册 ``writer`` 时 ``flush`` 只能 ``str(value)``。
-        ``QKeySequence`` 就是反例（``str()`` 在部分版本返回 NativeText，
-        macOS 上是 ``⌘S``），必须成对注册：
 
-        .. code-block:: python
-
-            register_converter(
-                QKeySequence,
-                lambda raw: QKeySequence(raw),
-                writer=lambda seq: seq.toString(QKeySequence.PortableText),
-            )
-
-        Args:
-            type_: 声明在 ``ConfigField`` / ``SettingItem.value_type`` 里的类型
-            converter: ``str -> 该类型实例``；抛异常会变成 ``ValueError``
-                （不再静默返回 ``None``）
-            writer: ``实例 -> INI 文本``；抛异常同样是 ``ValueError``，且必须
-                返回 ``str``。另一个选择是让类型自己实现 ``to_ini()``
-                （与 ``from_ini(raw)`` 类方法配对），那样完全不必注册
+        注册后已缓存的节点会失效重转，因此可以随时调用。
         """
         with self._lock:
             self._custom_converters[type_] = converter
@@ -345,7 +535,16 @@ class Resolver:
             for node in tuple(self._raw):
                 self.get_typed(*node)
 
-    #
+    def typed_nodes(self) -> frozenset[Node]:
+        """返回「有类型声明」的全部节点（``@configclass`` 或加载钩子登记过）。
+
+        供审计开关使用（``Configue.load(strict_undeclared=True)``）：文件里
+        出现、但既不被 ``@configclass`` 声明、也没有任何 hook 补过类型的
+        key，就是「幽灵配置」——它照常生效，但没有任何代码认识它。
+        """
+        with self._lock:
+            return frozenset(self._types)
+
     def types_of(self, section: str) -> dict[str, Any]:
         """返回 [{key: converter}]，供 UI / 校验 / 文档使用。"""
         with self._lock:

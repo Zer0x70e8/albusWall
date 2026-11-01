@@ -21,17 +21,22 @@ import io
 import json
 import logging
 import re
+import types
 import warnings
 from collections.abc import Mapping
-from enum import Enum
+from configparser import (
+    ConfigParser,
+    ExtendedInterpolation,
+    InterpolationError,
+    InterpolationMissingOptionError,
+    MissingSectionHeaderError,
+    NoOptionError,
+    NoSectionError,
+)
+from enum import Enum  # configue: _deconvert 的 Enum 分支需要，原本是注释掉的
 from pathlib import Path
 from pprint import pformat
-from typing import Optional, Dict, Callable, Any, Union, get_origin, get_args
-from configparser import (
-    ExtendedInterpolation, InterpolationMissingOptionError, ConfigParser,
-    MissingSectionHeaderError, InterpolationError,
-    NoSectionError, NoOptionError
-)
+from typing import Any, Callable, Dict, Optional, Union, get_args, get_origin
 
 try:
     import albuswall
@@ -52,6 +57,8 @@ logger.trace = lambda msg: logger.log(TRACE, msg)
 # 注意：这里曾是 ("true", "1", "yes", "boot")——"boot" 是 "on" 的笔误，
 # 已修正；`_deconvert` 的反向只产出 "true"/"false"，往返不受影响。
 _TRUE_STRINGS = frozenset({"true", "1", "yes", "on"})
+
+_UNION_ORIGINS = (Union, getattr(types, "UnionType", Union))
 
 
 def _needs_default_section(content: str) -> bool:
@@ -131,7 +138,7 @@ class DictInterpolation(ExtendedInterpolation):
         self._resolving.add(current_key)
         try:
             def replace(match):
-                key = match.group(1)  # 例如 "path:_config" 或 "files:log"
+                key = match.group(1)  # 例如 "path:_config" 或 "files:logger"
 
                 # 1. 优先从解析器已解析的内容中查找（支持跨节引用）
                 target_section, target_option = self._parse_key_for_parser(key, section)
@@ -507,38 +514,42 @@ def _convert(
         return result
 
     origin = get_origin(converter)
-    if origin is not None:
-        args = get_args(converter)
-        if origin is Union:
-            non_none = [t for t in args if t is not type(None)]
-            if not non_none:
+    args = get_args(converter)
+    if origin in _UNION_ORIGINS:
+        non_none = [t for t in args if t is not type(None)]
+        if not non_none:
+            return None
+        if len(non_none) == 1:
+            inner_type = non_none[0]
+            stripped = raw.strip()
+            if stripped == "":
+                logger.trace("[_convert] Empty string for Optional type, returning None")
                 return None
-            if len(non_none) == 1:
-                inner_type = non_none[0]
-                stripped = raw.strip()
-                if stripped == "":
-                    logger.trace("[_convert] Empty string for Optional type, returning None")
-                    return None
+            # noinspection PyBroadException
+            try:
+                result = _convert(stripped, inner_type, custom_converters)
+                logger.trace(f"[_convert] Optional conversion succeeded: {result!r}")
+                return result
+            except Exception:
+                logger.trace("[_convert] Optional conversion failed, returning None")
+                return None
+        else:
+            for t in non_none:
                 # noinspection PyBroadException
                 try:
-                    result = _convert(stripped, inner_type, custom_converters)
-                    logger.trace(f"[_convert] Optional conversion succeeded: {result!r}")
+                    result = _convert(raw.strip(), t, custom_converters)
+                    logger.trace(f"[_convert] Union member {t} succeeded: {result!r}")
                     return result
                 except Exception:
-                    logger.trace("[_convert] Optional conversion failed, returning None")
-                    return None
-            else:
-                for t in non_none:
-                    # noinspection PyBroadException
-                    try:
-                        result = _convert(raw.strip(), t, custom_converters)
-                        logger.trace(f"[_convert] Union member {t} succeeded: {result!r}")
-                        return result
-                    except Exception:
-                        logger.trace(f"[_convert] Union member {t} failed, trying next")
-                        continue
-                logger.trace("[_convert] All Union members failed, returning None")
-                return None
+                    logger.trace(f"[_convert] Union member {t} failed, trying next")
+                    continue
+            logger.trace("[_convert] All Union members failed, returning None")
+            return None
+    # 注意：container 分支必须放在 union 分支**外面**——它只处理
+    # ``dict[...] / list[...] / tuple[...] / set[...]``，与 Union 无关。
+    # （历史 bug：这些分支曾被缩进进 ``if origin in _UNION_ORIGINS``，
+    # 导致非 Union 的泛型永远走不到，``list[str]`` 会退化成逐字符。）
+    if origin is not None:
         if origin is dict:
             parsed = _json_object(raw)
             if len(args) != 2:
@@ -978,7 +989,7 @@ def _deconvert(
     origin = get_origin(converter)
     if origin is not None:
         args = get_args(converter)
-        if origin is Union:
+        if origin in _UNION_ORIGINS:
             non_none = [t for t in args if t is not type(None)]
             if not non_none:
                 return str(value)
@@ -1047,16 +1058,19 @@ if __name__ == "__main__":
     import types
     import unittest
     from enum import Enum
-    from typing import Optional, List, Tuple, Dict
+    from typing import Dict, List, Optional, Tuple
+
 
     class MyPath(Path):
         """自测用：``Path`` 子类走默认回退，不需要注册。"""
+
 
     class Colour(Enum):
         """自测用：未注册的 ``Enum`` 走默认回退。"""
 
         DARK = "dark"
         LIGHT = "light"
+
 
     # ----------------------------------------------------------------------
     # 模拟 albuswall 模块，确保能正常导入 configue 模块
@@ -1207,6 +1221,7 @@ if __name__ == "__main__":
 
         def test_custom_serializer(self):
             """写回方向的注册函数优先于 str(value)。"""
+
             class Seq(str):
                 pass
 

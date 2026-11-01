@@ -1,5 +1,17 @@
 #
-""""""
+"""插件发现层：内置包 / ``entry_points`` / 用户目录。
+
+三个来源都只做一件事：**把模块 import 进来**。真正的注册动作是 import 的
+副作用——模块顶层的 ``@plugin`` 装饰器会把插件对象塞进
+:data:`albuswall.core.plugins._pending`。因此本模块不返回插件列表，收集结果
+走 ``PluginManager.load_pending()``（或 ``load_builtin`` / ``load_entry_points``
+/ ``load_directory`` 这些发现入口）。
+
+顶层只依赖 stdlib，所以 ``discovery`` 相对 ``PluginManager`` 是「叶子」：后者
+在方法体里延迟 import 本模块，不会成环，也不会在 import 期产生副作用。
+"""
+
+from __future__ import annotations
 
 import importlib
 import importlib.metadata as md
@@ -9,18 +21,32 @@ import pkgutil
 import sys
 import types
 from pathlib import Path
+from typing import Any
+
+__all__ = [
+    "ENTRY_POINT_GROUP",
+    "discover_all",
+    "discover_directory",
+    "discover_entry_points",
+    "discover_package",
+]
 
 _logger = logging.getLogger(__name__)
 
+#: ``pyproject.toml`` 里第三方插件使用的 entry point 组名。
 ENTRY_POINT_GROUP = "albuswall.plugins"
 
 
 def discover_package(package: str) -> None:
-    """Built-in plugins: scan all submodules in the package and import them."""
+    """第一方插件：扫描包内所有子模块并 import（触发顶层 ``@plugin``）。
+
+    包不存在时只记 debug —— 一个被剥干净的安装不该因为「没有内置插件目录」
+    就启动失败。
+    """
     try:
         pkg = importlib.import_module(package)
     except ModuleNotFoundError:
-        _logger.debug("plugin package %r  is not available, skipping.", package)
+        _logger.debug("plugin package %r is not available, skipping.", package)
         return
 
     if not hasattr(pkg, "__path__"):
@@ -35,48 +61,57 @@ def discover_package(package: str) -> None:
 
 # noinspection broad-exception
 def discover_entry_points(group: str = ENTRY_POINT_GROUP) -> None:
-    """Third-party pip packages: declare plugin modules via entry_points.
+    """第三方 pip 包：通过 ``entry_points`` 声明插件模块。
 
-    Declare in pyproject.toml like this:
+    在 ``pyproject.toml`` 里这样声明::
 
         [project.entry-points."albuswall.plugins"]
         foo = "albuswall_foo"
 
-    The target can be a module (import it -> triggers the @declare inside),
-    or a callable (call it directly -> it declares itself internally).
+    target 可以是模块（import 即触发模块内的 ``@plugin``），也可以是 callable
+    （显式调用一次，由它自己完成声明）。
     """
     try:
-        eps = md.entry_points(group=group)
+        eps: Any = md.entry_points(group=group)
     except TypeError:
-        # Python 3.9 and earlier: entry_points() returns a dict
+        # Python 3.9 及更早：entry_points() 返回 dict
         # noinspection unresolved-references
-        eps = md.entry_points().get(group, [])
+        legacy: Any = md.entry_points()
+        eps = legacy.get(group, [])
 
     for ep in eps:
         try:
-            target = ep.load()
+            target: Any = ep.load()
         except Exception:
             _logger.exception("failed to load entry_point %r, skipped", ep.name)
             continue
 
-        # Case 1: target is a module -> module-level @declare already ran boot load
-        # Case 2: target is a callable -> explicitly call it so it registers itself
+        # 情形 1：模块 —— module 级 @plugin 已经在 import 期执行过，无需动作
+        # 情形 2：callable —— 显式调用一次，让它自己完成声明
         if isinstance(target, types.ModuleType):
-            # Module: module-level @declare already ran boot import, no action needed
             pass
         elif callable(target):
-            # Function/class: explicitly call it so it registers itself
             try:
                 target()
             except Exception:
                 _logger.exception("failed to execute entry_point %r, skipped", ep.name)
         else:
-            _logger.warning("entry_point %r points to an unsupported object %r", ep.name, type(target))
+            _logger.warning(
+                "entry_point %r points to an unsupported object, skipped",
+                ep.name,
+            )
 
 
-def discover_directory(path: Path,
-                       prefix: str = "_albuswall_user_plugin") -> None:
-    """User scripts: scan .py files in the directory and load them."""
+def discover_directory(
+        path: Path | None,
+        prefix: str = "_albuswall_user_plugin",
+) -> None:
+    """用户脚本：扫描目录下的 ``.py`` 并 import。
+
+    ``path`` 为 ``None`` 时直接跳过（用户插件目录默认关闭，见 D7）。
+    """
+    if path is None:
+        return
     if not path.is_dir():
         _logger.debug("plugin dir %s does not exist, skipping", path)
         return
@@ -91,20 +126,30 @@ def discover_directory(path: Path,
 
 
 def discover_all(
-    builtin_package: str,
-    user_dir: Path,
-    entry_group: str = ENTRY_POINT_GROUP,
+        builtin_package: str,
+        user_dir: Path | None = None,
+        entry_group: str = ENTRY_POINT_GROUP,
 ) -> None:
-    """Aggregate all sources in order; must be called before activate."""
+    """按「内置 → ``entry_points`` → 用户目录」顺序发现。
+
+    **不推荐**直接使用：它一次跑完三个来源，无法按来源做启用/禁用决策。
+    新代码优先用 ``PluginManager.load_builtin`` / ``load_entry_points`` /
+    ``load_directory``——它们 import 完立刻把 ``_pending`` 收进管理器，且返回
+    新收的插件数量。
+
+    无论走哪个入口，发现完都必须 ``PluginManager.load_pending()`` 才会真正
+    进入管理器；``user_dir=None``（默认）表示跳过用户目录。
+    """
     discover_package(builtin_package)
     discover_entry_points(entry_group)
     discover_directory(user_dir)
 
 
-# ---------- Internal ----------
+# ---------- 内部 ----------
 
 # noinspection broad-exception
 def _import_quietly(full_name: str) -> None:
+    """import 子模块；坏插件只记日志，不拖垮启动。"""
     try:
         importlib.import_module(full_name)
         _logger.debug("loaded plugin module %r", full_name)
@@ -114,6 +159,7 @@ def _import_quietly(full_name: str) -> None:
 
 # noinspection broad-exception
 def _import_from_path(mod_name: str, path: Path) -> None:
+    """按文件路径 import 用户插件；失败时把半成品从 ``sys.modules`` 摘掉。"""
     try:
         spec = importlib.util.spec_from_file_location(mod_name, path)
         if spec is None or spec.loader is None:

@@ -13,6 +13,7 @@ PATH_ALIASES = {
     "qss": "themes/default/main_window.qss",       # 文件
     "schema": "sql/media_library_schema.sql",       # 文件
     "app_icon": "icons/albuswall.svg",              # 文件：应用图标(窗口/桌面集成)
+    "shortcuts": "config/shortcuts.ini",            # 文件：默认快捷键绑定表
     # 可继续添加任意文件或文件夹
 }
 

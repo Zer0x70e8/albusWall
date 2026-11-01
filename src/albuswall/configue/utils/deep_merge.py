@@ -1,5 +1,7 @@
 from typing import Any, Dict
-from .namespace import Namespace, FrozenNamespace  # 根据实际模块路径导入
+
+from .namespace import FrozenNamespace, Namespace  # 根据实际模块路径导入
+
 
 def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     """

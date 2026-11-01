@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "albuswall"
-version = "1.0.0"
+version = "1.1.0"
 description = "A modular, plugin-driven image gallery for Hyprland ricing screenshots."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -57,7 +57,7 @@ all = [
 # GUI / 无 UI 主程序
 albuswall = "albuswall.__main__:main"
 # 进程外控制台：与正在运行的实例通信（不 import 应用本体）
-albusctl = "albuswall.client.cli:main"
+albusctl = "albuswall.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Zer0x70e8/albusWall"
@@ -87,6 +87,9 @@ include = [
 
 
 # tool
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.pyright]
 typeCheckingMode = "strict"
 

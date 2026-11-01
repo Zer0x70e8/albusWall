@@ -27,7 +27,7 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 from uuid import UUID
 
@@ -198,10 +198,14 @@ class CleanupReport:
       同源——物理清除报告已收敛为 uuid 面，见 ``dto/asset/events.py``）。
     * ``clock_jump``：本轮对系统时钟的诊断结论，见 ``ClockJump``。
     * ``state``：更新后的水位状态，方便上层直接展示。
+    * ``thumb_failures``：删缩略图目录失败的条目（``asset_id`` + 错误摘要）。
+      定时清理与 ``empty_trash`` 都要能把"删不掉几张"报上来，否则 UI 只能说
+      "清理完了"，用户看不到残留的缓存目录。
     """
     purged: List[UUID]
     clock_jump: ClockJump
     state: TrashState
+    thumb_failures: List["ThumbFailure"] = field(default_factory=list)
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Stage](https://img.shields.io/badge/stage-1.0-brightgreen.svg)]()
-[![Version](https://img.shields.io/badge/version-1.0.0-lightgrey.svg)]()
+[![Version](https://img.shields.io/badge/version-1.1.0-lightgrey.svg)]()
 
 > ⚠️ **Early Development Notice**  
 > AlbusWall is still in **active development**.  
@@ -36,8 +36,9 @@ This is not just a cleanup — the architecture is now much more flexible.
 - **UI is now replaceable**  
   The built-in UI is implemented as a plugin. The core application no longer forces PySide6 as a hard dependency.  
   Relevant modules:
-  - `albuswall.ui.protocol`
-  - `albuswall.ui.bootstrap`
+  - `albuswall.ui.application` (`Application` / `UIApplication`, the Qt `MainLoop`)
+  - `albuswall.ui.window` / `albuswall.ui.widgets` (pure views: they only emit intents)
+  - `albuswall.ui.presenter` (presentation layer: `MainPresenter` orchestrates every presenter's lifecycle and owns the window theme)
   - `albuswall.plugins.builtin_ui`
 
 - **Most technical debt addressed**  
@@ -56,6 +57,7 @@ AlbusWall is designed so the core is independent from any specific UI toolkit.
 ┌─────────────────────────────────────┐
 │              Frontends              │
 │   builtin_ui / third-party UI       │
+│   views  ──►  presenters (MainPresenter root)
 └──────────────────┬──────────────────┘
                    │ UI protocol
 ┌──────────────────▼──────────────────┐
@@ -75,6 +77,12 @@ AlbusWall is designed so the core is independent from any specific UI toolkit.
 ```
 
 The built-in UI is only one possible frontend. In principle, another Qt UI, GTK UI, TUI, web UI, or headless automation layer can be added as a plugin without rewriting the core.
+
+Inside the built-in UI, views (`ui/window`, `ui/widgets`) only emit intents; the
+`albuswall.ui.presenter` package turns those intents into service calls and writes
+results back. `MainPresenter` is the single root of that presenter tree — it builds
+every child presenter from the dependency container, wires them together, mirrors
+the configured window theme, and cascades `start()` / `stop()` to the whole tree.
 
 ---
 
@@ -157,8 +165,9 @@ AlbusWall now treats functionality and frontends as plugins.
 | `plugin/discovery.py` | Finding available plugins |
 | `plugin/manager.py` | Loading, initialising, and managing plugins |
 | `plugins/builtin_ui.py` | The default UI provided as a plugin |
-| `ui/protocol.py` | UI abstraction / protocol |
-| `ui/bootstrap.py` | UI startup and wiring |
+| `ui/application.py` | Qt `MainLoop` (`Application` / `UIApplication`) |
+| `ui/window/`, `ui/widgets/` | Pure views (they only emit intent signals) |
+| `ui/presenter/` | Presentation layer: `MainPresenter` + one presenter per screen |
 
 ### Why this matters
 
@@ -166,6 +175,35 @@ AlbusWall now treats functionality and frontends as plugins.
 - The built-in UI can be replaced without changing domain logic.
 - New features can be added as plugins.
 - Future CLI, headless tools, or alternative frontends are not blocked by the GUI architecture.
+
+### Theming & objectName inspection
+
+The built-in theme lives in `resources/themes/<name>/`:
+
+```text
+resources/themes/default/
+├─ main_window.qss     # 全量样式表（按 objectName / 类名选择器命中）
+└─ icons/              # 主题图标（标题栏按钮 / 收藏按钮 / 应用图标）
+```
+
+Widgets get their `objectName` automatically (`auto_set_object_names`), e.g.
+`#TitleBarAlbumButton`, `#AlbumAlbumView`, `#AlbumTrashView`,
+`#DetailFavouriteButton`. The style sheet can be inspected against the real
+widget tree with the bundled CLI — run it whenever you touch selectors:
+
+```bash
+QT_QPA_PLATFORM=offscreen python src/albuswall/ui/utils/qt_objectname_utils.py \
+    src/albuswall/ui/window/window.py --style tree      # 整棵控件树
+QT_QPA_PLATFORM=offscreen python src/albuswall/ui/utils/qt_objectname_utils.py \
+    src/albuswall/ui/window/window.py --style table     # 名字 ↔ 类名
+```
+
+`#objectName` selectors in `main_window.qss` must match what that CLI prints
+(`tests/test_ui_presenter_flow.py::test_theme_qss_selectors_match_widget_object_names`
+guards this). Icons are not referenced from QSS: the theme's `icons/*.svg` are
+installed programmatically by `WindowPresenter` (icon-only capsule buttons,
+text moved into tooltips), and fall back to plain text buttons when a theme
+ships no icons.
 
 ---
 
@@ -370,7 +408,7 @@ order is:
 
 ```bash
 # 1. bump version, commit, tag, push
-git tag -a v1.0.0 -m "AlbusWall 1.0.0" && git push origin v1.0.0
+git tag -a v1.1.0 -m "AlbusWall 1.1.0" && git push origin v1.1.0
 
 # 2. compute the tag tarball hash and regenerate .SRCINFO
 python scripts/aur_release.py            # --tarball <file> to use a local archive

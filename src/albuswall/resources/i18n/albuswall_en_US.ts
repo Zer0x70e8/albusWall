@@ -4,86 +4,78 @@
     <context>
         <name>Album</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/album.py" line="115" />
-            <source>edit</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/album.py" line="124" />
+            <source>编辑</source>
+            <translation>Edit</translation>
         </message>
     </context>
     <context>
         <name>Detail</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="336" />
-            <source>recover</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/detail.py" line="307" />
+            <source>恢复</source>
+            <translation>Restore</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="336" />
-            <source>trash</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/detail.py" line="307" />
+            <source>移入回收站</source>
+            <translation>Move to Trash</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="340" />
-            <source>choice</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/detail.py" line="325" />
+            <source>多选</source>
+            <translation>Select</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="341" />
-            <source>favourite</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/detail.py" line="326" />
+            <source>收藏</source>
+            <translation>Favorite</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="342" />
-            <source>info</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/detail.py" line="327" />
+            <source>信息</source>
+            <translation>Info</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/detail.py" line="343" />
-            <source>edit</source>
-            <translation type="unfinished" />
-        </message>
-    </context>
-    <context>
-        <name>ExtraRow</name>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/rows.py" line="357" />
-            <source>Edit</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/detail.py" line="328" />
+            <source>编辑</source>
+            <translation>Edit</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/setting/rows.py" line="364" />
-            <source>Reserved: this action is not wired yet.</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/detail.py" line="377" />
+            <source>空格退出 · K 播放 / 暂停</source>
+            <translation>Space to exit · K to play / pause</translation>
         </message>
     </context>
     <context>
         <name>FloatingSearchBar</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/widgets/floating_search_bar.py" line="249" />
+            <location filename="../../ui/widgets/floating_search_bar.py" line="249" />
             <source>命令模式（未实现）</source>
             <translation>Command mode (not implemented)</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/widgets/floating_search_bar.py" line="250" />
+            <location filename="../../ui/widgets/floating_search_bar.py" line="250" />
             <source>输入标签名筛选当前相册...</source>
-            <translation>Type a tag name to filter this album...</translation>
+            <translation>Type a tag name to filter the current album...</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/widgets/floating_search_bar.py" line="255" />
+            <location filename="../../ui/widgets/floating_search_bar.py" line="255" />
             <source>命令模式</source>
             <translation>Command mode</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/widgets/floating_search_bar.py" line="256" />
+            <location filename="../../ui/widgets/floating_search_bar.py" line="256" />
             <source>简单模式</source>
             <translation>Simple mode</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/widgets/floating_search_bar.py" line="273" />
+            <location filename="../../ui/widgets/floating_search_bar.py" line="273" />
             <source>搜索</source>
             <translation>Search</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/widgets/floating_search_bar.py" line="274" />
+            <location filename="../../ui/widgets/floating_search_bar.py" line="274" />
             <source>关闭搜索栏</source>
             <translation>Close search bar</translation>
         </message>
@@ -91,1412 +83,267 @@
     <context>
         <name>InformationPanel</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/panel.py" line="111" />
-            <source>Close</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/panel.py" line="111" />
+            <source>关闭</source>
+            <translation>Close</translation>
         </message>
     </context>
     <context>
         <name>IngestSource</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/core.py" line="162" />
-            <source>apply</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/core.py" line="173" />
+            <source>应用</source>
+            <translation>Apply</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/core.py" line="163" />
-            <source>add</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/core.py" line="174" />
+            <source>添加</source>
+            <translation>Add</translation>
         </message>
     </context>
     <context>
         <name>IngestSourceDetailWidget</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="313" />
-            <source>meta info</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="357" />
+            <source>元信息</source>
+            <translation>Meta info</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="314" />
-            <source>title</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="358" />
+            <source>标题</source>
+            <translation>Title</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="315" />
-            <source>new ingest source</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="359" />
+            <source>新建导入源</source>
+            <translation>New ingest source</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="316" />
-            <source>description</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="360" />
+            <source>描述</source>
+            <translation>Description</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="317" />
-            <source>example</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="361" />
+            <source>示例</source>
+            <translation>Example</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="318" />
-            <source>tag: </source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="362" />
+            <source>标签：</source>
+            <translation>Tags:</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="319" />
-            <source>tag1</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="363" />
+            <source>标签1</source>
+            <translation>Tag 1</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="320" />
-            <source>add</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="364" />
+            <source>添加</source>
+            <translation>Add</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="323" />
-            <source>Ingest Source</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="367" />
+            <source>导入源</source>
+            <translation>Ingest Source</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="324" />
-            <source>browser</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="368" />
+            <source>浏览</source>
+            <translation>Browse</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="325" />
-            <source>source path (library path)</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="369" />
+            <source>源路径（图库路径）</source>
+            <translation>Source path (library path)</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="326" />
-            <source>file type(s)</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="370" />
+            <source>文件类型</source>
+            <translation>File type(s)</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="329" />
-            <source>File type verification method</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="373" />
+            <source>文件类型校验方式</source>
+            <translation>File type verification method</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="331" />
-            <source>Suffix Check</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="374" />
+            <source>后缀检查</source>
+            <translation>Suffix check</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="333" />
-            <source>Magic Number Check</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="376" />
+            <source>魔数检查</source>
+            <translation>Magic number check</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="335" />
-            <source>Subfolder recursion</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="378" />
+            <source>子文件夹递归</source>
+            <translation>Subfolder recursion</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="337" />
-            <source>Subfolder recursion depth</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="380" />
+            <source>子文件夹递归深度</source>
+            <translation>Subfolder recursion depth</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="339" />
-            <source>no limit</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="381" />
+            <source>不限</source>
+            <translation>No limit</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="342" />
-            <source>Triggers</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="384" />
+            <source>触发器</source>
+            <translation>Triggers</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="343" />
-            <source>Scheduled Update</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="385" />
+            <source>定时更新</source>
+            <translation>Scheduled update</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="344" />
-            <source>mode</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="386" />
+            <source>模式</source>
+            <translation>Mode</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="346" />
-            <source>Scheduled Time</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="388" />
+            <source>定时时间</source>
+            <translation>Scheduled time</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="348" />
-            <source>Interval Time</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="390" />
+            <source>间隔时间</source>
+            <translation>Interval time</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="349" />
-            <source>e.g., 30m or 1h</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="391" />
+            <source>例如 30m 或 1h</source>
+            <translation>e.g., 30m or 1h</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="352" />
-            <source>Device Insertion Trigger</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="394" />
+            <source>设备插入触发器</source>
+            <translation>Device insertion trigger</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="354" />
-            <source>Target</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="395" />
+            <source>目标</source>
+            <translation>Target</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="356" />
-            <source>Auto-mount (Linux only, requires permissions)</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="397" />
+            <source>自动挂载（仅 Linux，需要权限）</source>
+            <translation>Auto-mount (Linux only, requires permissions)</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="358" />
-            <source>Mount point</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/source/detail_widget.py" line="398" />
+            <source>挂载点</source>
+            <translation>Mount point</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/source/detail_widget.py" line="439" />
+            <location filename="../../ui/window/source/detail_widget.py" line="475" />
             <source>选择源目录</source>
             <translation>Select source directory</translation>
         </message>
     </context>
     <context>
-        <name>IngestSourcePresenter</name>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="266" />
-            <source>未命名导入源</source>
-            <translation>Untitled ingest source</translation>
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="615" />
-            <source>enable</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="615" />
-            <source>disable</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="622" />
-            <source>recover</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="623" />
-            <source>ensure deleted</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/source_presenter.py" line="625" />
-            <source>delete</source>
-            <translation type="unfinished" />
-        </message>
-    </context>
-    <context>
-        <name>LazyGroupBox</name>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/lazy.py" line="120" />
-            <source>(This group failed to build; see the log for details.)</source>
-            <translation type="unfinished" />
-        </message>
-    </context>
-    <context>
         <name>Menu</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/menu.py" line="29" />
-            <source>source</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/menu.py" line="44" />
+            <source>导入源</source>
+            <translation>Import Source</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/menu.py" line="30" />
-            <source>setting</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/menu.py" line="45" />
+            <source>设置</source>
+            <translation>Settings</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/menu.py" line="31" />
-            <source>exit</source>
-            <translation type="unfinished" />
-        </message>
-    </context>
-    <context>
-        <name>SearchPresenter</name>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/search_presenter.py" line="125" />
-            <source>命令模式尚未实现</source>
-            <translation>Command mode is not implemented yet</translation>
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/search_presenter.py" line="137" />
-            <source>当前相册没有匹配的标签：{text}</source>
-            <translation>No matching tags in the current album: {text}</translation>
+            <location filename="../../ui/window/menu.py" line="46" />
+            <source>退出</source>
+            <translation>Quit</translation>
         </message>
     </context>
     <context>
         <name>SearchSuggestionPopup</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/widgets/floating_search_bar.py" line="77" />
+            <location filename="../../ui/widgets/floating_search_bar.py" line="77" />
             <source>无匹配标签</source>
             <translation>No matching tags</translation>
         </message>
     </context>
     <context>
-        <name>Setting</name>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/basic.py" line="127" />
-            <source>Settings</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="157" />
-            <source>Reload the setting tree (setting.schema)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="325" />
-            <source>{count} settings</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="329" />
-            <source>{count} groups</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="333" />
-            <source>writes {count} files</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="335" />
-            <source>same structure as albusctl setting.schema</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="340" />
-            <source>No setting tree available (the config system may not be ready yet).</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/main.py" line="350" />
-            <source>{key} updated</source>
-            <translation type="unfinished" />
-        </message>
-    </context>
-    <context>
-        <name>SettingRow</name>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/rows.py" line="161" />
-            <source>the value comes from a read-only source</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/rows.py" line="162" />
-            <source>this item is not editable</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/rows.py" line="255" />
-            <source>Written to:</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/setting/rows.py" line="258" />
-            <source>Written to the config</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>contains a ${…} placeholder; resolved once the related items are set</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>not written yet</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>(none)</source>
-            <translation type="unfinished" />
-        </message>
-    </context>
-    <context>
         <name>TagBar</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="175" />
+            <location filename="../../ui/window/tagbar.py" line="195" />
             <source>标签名，可用 / 分层</source>
             <translation>Tag name; use / for hierarchy</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="176" />
-            <source>apply</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/tagbar.py" line="196" />
+            <source>应用</source>
+            <translation>Apply</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="177" />
+            <location filename="../../ui/window/tagbar.py" line="197" />
             <source>添加到当前图片</source>
             <translation>Add to the current image</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="178" />
-            <source>layers</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/tagbar.py" line="198" />
+            <source>标签树</source>
+            <translation>Tag tree</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="179" />
-            <source>new</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/tagbar.py" line="199" />
+            <source>新建</source>
+            <translation>New</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="180" />
+            <location filename="../../ui/window/tagbar.py" line="200" />
             <source>新建标签</source>
             <translation>New tag</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="278" />
+            <location filename="../../ui/window/tagbar.py" line="302" />
             <source>新建子标签</source>
             <translation>New child tag</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="278" />
+            <location filename="../../ui/window/tagbar.py" line="302" />
             <source>新建根标签</source>
             <translation>New root tag</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="286" />
+            <location filename="../../ui/window/tagbar.py" line="308" />
             <source>重命名标签</source>
             <translation>Rename tag</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/tagbar.py" line="290" />
+            <location filename="../../ui/window/tagbar.py" line="311" />
             <source>删除标签</source>
             <translation>Delete tag</translation>
         </message>
     </context>
     <context>
-        <name>TagBarPresenter</name>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/tagbar_presenter.py" line="125" />
-            <source>标签已存在：{text}</source>
-            <translation>Tag already exists: {text}</translation>
-        </message>
-    </context>
-    <context>
-        <name>TagEditDialog</name>
-        <message>
-            <location filename="src/albuswall/ui/builtin/dialog/tag_edit_dialog.py" line="64" />
-            <source>新建标签</source>
-            <translation>New tag</translation>
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/dialog/tag_edit_dialog.py" line="66" />
-            <source>重命名标签</source>
-            <translation>Rename tag</translation>
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/dialog/tag_edit_dialog.py" line="68" />
-            <source>名称</source>
-            <translation>Name</translation>
-        </message>
-    </context>
-    <context>
-        <name>TagEditorPresenter</name>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/tag_editor_presenter.py" line="81" />
-            <source>标签含子节点</source>
-            <translation>Tag has child tags</translation>
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/tag_editor_presenter.py" line="82" />
-            <source>该标签下有 {count} 个子标签，是否连同子标签一起删除？</source>
-            <translation>This tag has {count} child tags. Delete them as well?</translation>
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/tag_editor_presenter.py" line="111" />
-            <source>父标签仍在回收站</source>
-            <translation>Parent tag is still in the trash</translation>
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/builtin/presenter/tag_editor_presenter.py" line="112" />
-            <source>标签已恢复，但父标签仍在回收站，当前为孤儿状态。</source>
-            <translation>The tag was restored, but its parent is still in the trash; it is currently orphaned.</translation>
-        </message>
-    </context>
-    <context>
         <name>TitleBar</name>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/titlebar.py" line="268" />
-            <source>album</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/titlebar.py" line="303" />
+            <source>相册</source>
+            <translation>Album</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/titlebar.py" line="269" />
-            <source>extra</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/titlebar.py" line="305" />
+            <source>搜索</source>
+            <translation>Search</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/builtin/window/titlebar.py" line="270" />
-            <source>search</source>
-            <translation type="unfinished" />
-        </message>
-    </context>
-    <context>
-        <name>MetadataModel</name>
-        <message>
-            <source>是</source>
-            <translation>Yes</translation>
-        </message>
-        <message>
-            <source>否</source>
-            <translation>No</translation>
-        </message>
-        <message>
-            <source>标题</source>
-            <translation>Title</translation>
-        </message>
-        <message>
-            <source>描述</source>
-            <translation>Description</translation>
-        </message>
-        <message>
-            <source>宽度</source>
-            <translation>Width</translation>
-        </message>
-        <message>
-            <source>高度</source>
-            <translation>Height</translation>
-        </message>
-        <message>
-            <source>文件大小</source>
-            <translation>File size</translation>
-        </message>
-        <message>
-            <source>MIME 类型</source>
-            <translation>MIME type</translation>
-        </message>
-        <message>
-            <source>拍摄时间</source>
-            <translation>Taken at</translation>
-        </message>
-        <message>
-            <source>加入时间</source>
-            <translation>Added at</translation>
-        </message>
-        <message>
-            <source>修改时间</source>
-            <translation>Modified at</translation>
-        </message>
-        <message>
-            <source>删除时间</source>
-            <translation>Deleted at</translation>
-        </message>
-        <message>
-            <source>已收藏</source>
-            <translation>Favorite</translation>
-        </message>
-        <message>
-            <source>已删除</source>
-            <translation>Deleted</translation>
-        </message>
-        <message>
-            <source>文件路径</source>
-            <translation>File path</translation>
-        </message>
-    </context>
-    <context>
-        <name>InfoCellDelegate</name>
-        <message>
-            <source>剩余 {days} 天</source>
-            <translation>{days} days left</translation>
-        </message>
-        <message>
-            <source>今天删除</source>
-            <translation>Deleted today</translation>
-        </message>
-        <message>
-            <source>已过期</source>
-            <translation>Expired</translation>
-        </message>
-    </context>
-    <context>
-        <name>SettingEditors</name>
-        <message>
-            <source>(default)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>This item is read-only here.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Expected an integer, got {text!r}</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Expected a number, got {text!r}</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>JSON parse error: {message}</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>A JSON object {…} is required here.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Partially checked = not set explicitly (follows the default).</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>(default directory)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>(default file)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Select directory</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Select file</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Browse…</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>(default / auto)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Default: {value}</source>
-            <translation type="unfinished" />
-        </message>
-    </context>
-    <context>
-        <name>KeymapPage</name>
-        <message>
-            <source>Every action of the application and the key it is bound to. Click a key field and press the new key, or clear it to unbind. Changes are saved immediately.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Close the current layer</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Close the topmost layer: suggestion list, search bar, information panel, detail view or overlay.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Open settings</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Open the settings overlay.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Open album list</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Open the album overlay and focus the album list.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Open import sources</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Open the import source overlay.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Open the More menu</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Open the title bar menu (import sources, settings, quit) and drive it with the arrow keys.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Back / close overlay</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Close the current overlay and return to the album grid.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Minimize window</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Minimize the main window.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Toggle maximize</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Maximize or restore the main window.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Quit albuswall</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Close the application.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Focus search</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Expand the search bar and put the cursor in it.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Close detail view</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Close the detail view (Esc also works).</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Previous image</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Show the previous asset while the detail view is open.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Next image</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Show the next asset while the detail view is open.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Toggle favourite</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Toggle the favourite state of the current asset.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Toggle information panel</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Show or hide the metadata panel of the detail view.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Trash / restore asset</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Move the current asset to the trash, or restore it when it is already trashed.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Activate focused control</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Press the focused button (the keyboard equivalent of clicking it).</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Activate focused control (keypad Enter)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Same as Activate focused control, for the numeric keypad Enter key.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Focus next region</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Move the keyboard focus to the next area (title bar, list, grid, tag bar…).</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Focus previous region</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Move the keyboard focus to the previous area.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Focus the image grid</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Put the keyboard focus on the thumbnail grid: arrow keys move the cursor, Enter opens the asset.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Focus tag input</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Focus the tag input of the detail view.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Enable key bindings</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>When off, the configured keys are ignored (the built-in button shortcuts still work).</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Search actions or keys…</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Reset all</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Unknown action (not registered anymore): {id}</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Default: {value}</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>customized</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Remove</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Only single-key shortcuts are supported; {value} has more than one key.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Remove this leftover binding</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Reset to default: {value}</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>(unbound)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>{shown} of {total} actions shown</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Key conflicts: {details}</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Saved to {path}</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Saved in memory only (the configuration system is not ready yet).</source>
-            <translation type="unfinished" />
-        </message>
-    </context>
-    <context>
-        <name>SettingSchema</name>
-        <message>
-            <source>Appearance</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Theme selection, interface language, window title, theme files and missing-file completion.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Theme details</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Files and directories of the selected theme. They are filled in automatically when a theme is picked above, so they rarely need a manual edit.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Missing completion</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Copy missing QSS / icons from the bundled theme into the user theme directory.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Thumbnails</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Where preview images are generated and cached.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Import</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>How aggressively new files are picked up.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Trash &amp; cleanup</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Removing thumbnails that no longer belong to any file.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Advanced</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Tuning knobs and paths. Wrong values can make the app behave badly; fold this group behind an 'Advanced' page.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Paths</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Where albuswall keeps its files. Changes take effect on the next start.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>File names</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Relative to the directory above.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Runtime</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Low-level switches; wrong values can break startup.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Logging</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Thumbnail tuning</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Import tuning</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Trash tuning</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Task service</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Concurrency and back-pressure of the task pool.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>IPC</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Cross-process control endpoint (albusctl).</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Database</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Theme</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Theme name; also selects resources/themes/&lt;name&gt; as the source directory.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Language</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Interface language. Switching applies immediately; texts without a translation keep their source wording.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Window title</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Overrides the window title. Empty = follow the album name.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Stylesheet</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>QSS file applied to the window. Empty = completed from the bundled theme.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Icon directory</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Absolute icon directory. Empty = derived from the stylesheet's parent.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Theme directory</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Root directory for themes.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Complete missing theme files</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Master switch; false = leave the theme alone.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Copy missing stylesheet</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Copy missing icons</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Only once</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>true = write a marker into the theme dir and never complete again; delete .albuswall_theme_initialized to re-arm.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Share thumbnails with the desktop</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>true = write into $XDG_CACHE_HOME/thumbnails so other freedesktop apps reuse them; false = keep them in albuswall's own cache.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Thumbnail cache directory</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Used when sharing with the desktop is off. ~ is expanded.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Thumbnails per batch</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Candidates per round</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Lower it if importing makes the UI stutter; raise it to drain a large library faster.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Clean orphaned thumbnails</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>true / false forces cleanup on or off; leave the value empty (default) to let the platform decide.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Clean up after an unclean shutdown</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>On boot, purge orphan thumbnails if the last run did not shut down cleanly.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Remove empty cache directories</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Trim now-empty spec directories after deleting thumbnails.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Config directory</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Data directory</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Cache directory</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Temp directory</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Stylesheet file name</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Preference file name</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Window state file name</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Key bindings file name</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>JSON file holding the key bindings overrides (live in the config directory).</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Database file name</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Log config file name</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Debug mode</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Print extra diagnostics on start. Does not change the log level.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>UI implementation</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Name of the UI plugin to load (restart required).</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Do not load bundled UI resources</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Skip type check on load</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Only useful when a hand-written value cannot be converted and you want the app to start anyway.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Log level</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Log config path</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Empty = &lt;config dir&gt;/&lt;files.log&gt;; consumed by logging.config.fileConfig.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Failure cooldown (s)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>How long a permanently failed file is skipped before it is tried again.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Write retries</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Write retry backoff (s)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Image format</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Reserved: output is always PNG.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Quality</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Reserved: PNG output ignores this.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Spec sizes</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>JSON object: spec name -&gt; pixel size, e.g. {"small": 128, "medium": 512, "large": 1024}. Keys must be existing spec names.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>XDG spec directory map</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>JSON object: spec name -&gt; share directory name (normal / x-large / xx-large). Empty = built-in map.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Per-file timeout (s)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>The worker stops waiting after this; the child process is not killed.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Initial backoff (s)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Max backoff (s)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Reconciler name</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Scheduling priority</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Debounce (s)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Orphan minimum age (s)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Protects thumbnails written moments ago.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Session marker path</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Empty = &lt;platform cache&gt;/albuswall/.session.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Initial concurrency</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Minimum concurrency</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Maximum concurrency</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Empty = derive from the CPU count.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Process workers</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>CPU high watermark (%)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>CPU low watermark (%)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Memory high watermark (%)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Memory low watermark (%)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Load check interval (s)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Scheduler threads</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Max queued tasks</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Submit timeout (s)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Low-load streak</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Consecutive idle checks before concurrency drops.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Wait warning threshold (s)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Enable the IPC endpoint</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Call timeout (s)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Max message size (bytes)</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Max connections</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Bridge internal signals as events</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Fail if the database is missing</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>false = create it on first start.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Edit</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Reserved action for a future theme editor: it will open the stylesheet and the icons of the selected theme for editing.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Key bindings</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Every action of the application and the key it is bound to. Click a key field and press the new key, or clear it to unbind. Changes are saved immediately.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>About</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Version, author and a short description of the project.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Pick one of the themes found on disk. Themes are directories that contain a QSS file: the bundled ones live in resources/themes/, user themes go either next to the current theme directory or under &lt;config dir&gt;/themes.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Restart required</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Directory of the selected theme. Picking a theme above fills this in automatically; the stylesheet and the icon directory are derived from it.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Stylesheet file of the selected theme. Empty = derived from the theme directory (${path:theme}/${files:qss}).</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Icon directory of the selected theme. Empty = icons/ cover/ imgs/ assets/ next to the stylesheet.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Title</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Version</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Author</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>Thanks for using it.</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <source>AlbusWall - Hyprland Image Gallery
-Your wall of memories, frame by frame.
-A clean grid gallery for your ricing shots.
-
-Additional subtitles:
-...</source>
-            <translation type="unfinished" />
+            <location filename="../../ui/window/titlebar.py" line="307" />
+            <source>更多</source>
+            <translation>More</translation>
         </message>
     </context>
 </TS>

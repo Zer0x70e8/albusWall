@@ -89,26 +89,26 @@ SQLite 的 `CHECK` 约束**无法 ALTER**，所以"加一个枚举值"必然同�
 
 ### 归属判据
 
-- **schema 契约**（列名、spec 映射、表/列清单）→ `common`；
+- **schema 契约**（列名、spec 映射、表/列清单）→ `types.py`；
 - 单模块私有配置 / 默认值 → 留在原模块；
 - 只被单域显式 import 的域常量（如 `MANUAL_SOURCE_ID`）→ 留在原域，
   被 repo/service 显式 import 属正常依赖，不构成倒挂。
   现状：`MANUAL_SOURCE_ID` 定义在 `dto/source/query.py`，由 `dto/source/__init__.py` 显式再导出，
-  消费方仍写 `from albuswall.dto.source import MANUAL_SOURCE_ID`（拆分后不迁 `common`，避免为单个
+  消费方仍写 `from albuswall.dto.source import MANUAL_SOURCE_ID`（拆分后不迁 `types.py`，避免为单个
   常量新增域文件）。
 
 ### 现状
 
 - `common/constants/thumbnail.py`：`ALL_SPECS` / `SPEC_TO_COLUMN` / `COLUMN_TO_SPEC` /
   `BASE_COLUMN` / `ALL_THUMB_COLUMNS`。
-- 依赖方向：repo / service / 迁移脚本 → `common`；**禁止**反向 import `albuswall.dto` 取这些常量。
+- 依赖方向：repo / service / 迁移脚本 → `types.py`； **禁止**反向 import `albuswall.dto` 取这些常量。
 
 ## 四、并发工具边界
 
 - `common/futures.py` 只放**跨域复用**的并发原语（当前 `wait_with_timeout`）。
 - 单域使用的辅助函数不得上提到 common：`_safe_call` / `_normalize_trigger_dict` 目前只服务
   source 域，留在 `dto/source.py`。
-- 任务提交、背压、线程池策略归 `infrastructure.task`；`common` 不依赖 `dto` / `infrastructure` /
+- 任务提交、背压、线程池策略归 `infrastructure.task`；`types.py` 不依赖 `dto` / `infrastructure` /
   `services`。
 
 ## 五、待定（单一正文）
@@ -145,11 +145,11 @@ SQLite 的 `CHECK` 约束**无法 ALTER**，所以"加一个枚举值"必然同�
 
 ## 六、文档维护
 
-- **每条规则只有一个正文**：正文在 `common` 的规则，`dto/CONVENTIONS.md` 只写
+- **每条规则只有一个正文**：正文在 `types.py` 的规则，`dto/CONVENTIONS.md` 只写
   `见 common/CONVENTIONS.md · 条目名` 指针。
 - **DTO 归属与命名**（Command / Query / 事件与结果 / 共享值对象、交叉引用白名单、分包门槛）
   的正文在 `dto/CONVENTIONS.md` · 一、DTO 归属与命名；本文件不复述。
-- **`common` 变更优先**：先改本文件，再改 `dto/CONVENTIONS.md` 的指针。
+- **`types.py` 变更优先**：先改本文件，再改 `dto/CONVENTIONS.md` 的指针。
 - 两份文档**平级交叉引用**，不搞父子层级；**不给 service / repo / ui 建 CONVENTIONS.md**。
 - 指针写法统一为：`见 common/CONVENTIONS.md · 条目名`（条目名用二级/三级标题原文）。
 
@@ -159,7 +159,7 @@ SQLite 的 `CHECK` 约束**无法 ALTER**，所以"加一个枚举值"必然同�
 
 - 六、文档维护：新增一条"DTO 归属与命名的正文在 `dto/CONVENTIONS.md`"，明确本文件不复述。
 - 三、常量 · 归属判据：`MANUAL_SOURCE_ID` 的"原处"随 `dto/source/` 分包改为 `dto/source/query.py`
-  + `__init__` 再导出，并写明不迁 `common` 的理由。
+  + `__init__` 再导出，并写明不迁 `types.py` 的理由。
 - 一、候选缓存批量插入的返回值口径：`AssetCandidateCacheDTO` → `AssetCandidateCache`，
   并补充"该类属 Command 侧"的提示。
 - grep-checklist：`_missing_` 一条改为 `def _missing_`（原模式会命中 `find_missing_paths` /

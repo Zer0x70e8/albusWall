@@ -4,7 +4,8 @@
 放在 ``albuswall.ui`` 根下而不是 UI 实现里，是因为它必须能被「不保证
 PySide6 已安装」的代码使用 —— 例如 ``services/command.py`` 登记设置树时
 需要语言候选值。真正的翻译器管理（``QTranslator``）在
-``albuswall.ui.builtin.i18n`` 里，只由 GUI 侧导入。
+``albuswall.ui.i18n`` 里（:class:`~albuswall.ui.i18n.TranslationManager` 与
+``set_language`` 接口），只由 GUI 侧导入。
 
 新增语言只需要在这里加一行：
 
@@ -31,7 +32,7 @@ __all__ = [
 
 #: 默认界面语言：中文（设置页可切换到英文）。
 #: 同时也是「没有可用翻译 / 没有配置」时的回落语言。
-DEFAULT_LANGUAGE = "zh_CN"
+DEFAULT_LANGUAGE = "en_US"
 
 
 @dataclass(frozen=True, slots=True)

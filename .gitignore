@@ -23,8 +23,8 @@ eggs/
 *.db-shm
 *.db-wal
 
-# my tool
-tree.py
+# my tool（只忽略仓库根下的本地脚本；src/albuswall/configue/tree.py 是源码，必须可被追踪）
+/tree.py
 
 # local debugging leftovers (never part of a release)
 tmp_probe.py

@@ -7,8 +7,8 @@ dict values into sub-namespaces. FrozenNamespace is an immutable variant that ca
 frozen to prevent further modifications.
 """
 
-from typing import Any, Dict, TYPE_CHECKING
 from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Dict
 
 __all__ = ["Namespace", "FrozenNamespace"]
 

@@ -9,10 +9,10 @@ Additional subtitles:
 """
 from importlib.metadata import version, PackageNotFoundError
 
-__title__ = "albuswall"
+__title__ = "AlbusWall"
 __author__ = "Zer0x70e8"
 __license__ = "MIT"
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 try:
     __version__ = version("albuswall")
 except PackageNotFoundError:

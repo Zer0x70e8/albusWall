@@ -24,7 +24,7 @@ from uuid import UUID
 from albuswall.dto.album import Asset
 from albuswall.dto.sentinel import UNSET
 from albuswall.dto.tag.command import TagCreate, TagUpdate
-from albuswall.dto.tag.query import Tag
+from albuswall.dto.tag.query import Tag, TagAlias
 from albuswall.dto.utils import normalize_tag_name, to_uuid
 from albuswall.utils.time import now_str
 
@@ -94,6 +94,28 @@ def _tag_sql(*, where: str, joins: str = "", order: str = "") -> str:
     if order:
         sql += f" ORDER BY {order}"
     return sql
+
+
+_ALIAS_COLUMNS = """
+           al.uuid,
+           p.uuid AS parent_uuid,
+           al.name,
+           al.norm_name,
+           tgt.uuid AS target_uuid,
+           al.created_at,
+           al.modified_at"""
+
+
+def _alias_sql(*, where: str, order: str = "al.id ASC") -> str:
+    """拼装别名读查询（列清单只有 ``_ALIAS_COLUMNS`` 一份）。"""
+    return f"""
+    SELECT {_ALIAS_COLUMNS}
+      FROM tag_aliases AS al
+      LEFT JOIN tags AS p ON p.id = al.parent_tag_id
+      JOIN tags AS tgt ON tgt.uuid = al.target_tag_uuid
+     WHERE {where}
+     ORDER BY {order}
+    """
 
 
 class TagRepository(BaseRepository):
@@ -687,3 +709,115 @@ class TagRepository(BaseRepository):
                 (value,),
             )
         return row is not None
+
+    # ==================================================================
+    # 标签别名（tag_aliases）—— 路径解析用，不参与资产绑定
+    # ==================================================================
+    #
+    # 语义边界（与 schema 第 7 节一致）：
+    #   · 别名只用于把"路径段名"解析到规范标签 uuid；
+    #   · asset_tags.tag_uuid 永远指向 tags.uuid，绝不可写别名 uuid；
+    #   · 同层唯一靠 idx_tag_aliases_parent_norm_uq，重名同样降级为
+    #     None / False，由 service 翻译成显式异常。
+
+    def list_aliases(
+            self, parent_uuid: Optional[_UUIDLike] = None,
+    ) -> list[TagAlias]:
+        """枚举别名；``parent_uuid`` 为 None 时返回**全部**别名。
+
+        注意 `None` 的两种语义在这里是分开的：``parent_uuid=None`` 表示
+        "不按父过滤"；要看根层别名请传哨兵值（见 :meth:`list_root_aliases`）。
+        """
+        if parent_uuid is None:
+            rows = self._fetchall(_alias_sql(where="1 = 1"))
+        else:
+            rows = self._fetchall(
+                _alias_sql(where="p.uuid = ?"),
+                (as_uuid_str(parent_uuid),),
+            )
+        return [TagAlias.from_row(r) for r in rows]
+
+    def list_root_aliases(self) -> list[TagAlias]:
+        """根层（``parent_tag_id IS NULL``）别名。"""
+        rows = self._fetchall(
+            _alias_sql(where="al.parent_tag_id IS NULL"))
+        return [TagAlias.from_row(r) for r in rows]
+
+    def get_alias(self, alias_uuid: _UUIDLike) -> Optional[TagAlias]:
+        """按 uuid 取单个别名（不存在返回 None）。"""
+        rows = self._fetchall(
+            _alias_sql(where="al.uuid = ?"), (as_uuid_str(alias_uuid),),
+        )
+        return TagAlias.from_row(rows[0]) if rows else None
+
+    def find_alias_by_name(
+            self,
+            parent_uuid: Optional[_UUIDLike],
+            name: str,
+    ) -> Optional[TagAlias]:
+        """同层按名称查别名（``norm_name`` 归一化后比较）。"""
+        norm = normalize_tag_name(name)
+        if parent_uuid is None:
+            rows = self._fetchall(
+                _alias_sql(where="al.parent_tag_id IS NULL AND al.norm_name = ?"),
+                (norm,),
+            )
+        else:
+            rows = self._fetchall(
+                _alias_sql(where="p.uuid = ? AND al.norm_name = ?"),
+                (as_uuid_str(parent_uuid), norm),
+            )
+        return TagAlias.from_row(rows[0]) if rows else None
+
+    def create_alias(
+            self,
+            name: str,
+            target_uuid: _UUIDLike,
+            parent_uuid: Optional[_UUIDLike] = None,
+    ) -> Optional[UUID]:
+        """创建别名，返回新 uuid；父/目标不存在或同层重名返回 None。"""
+        new_uuid = str(uuid.uuid4())
+        norm = normalize_tag_name(name)
+        target = as_uuid_str(target_uuid)
+        parent = None if parent_uuid is None else as_uuid_str(parent_uuid)
+
+        try:
+            if parent is None:
+                cursor = self._execute(
+                    """
+                    INSERT INTO tag_aliases (uuid, parent_tag_id, name,
+                                             norm_name, target_tag_uuid)
+                    SELECT ?, NULL, ?, ?, t.uuid
+                      FROM tags AS t
+                     WHERE t.uuid = ? AND t.is_deleted = 0
+                    """,
+                    (new_uuid, name, norm, target),
+                )
+            else:
+                cursor = self._execute(
+                    """
+                    INSERT INTO tag_aliases (uuid, parent_tag_id, name,
+                                             norm_name, target_tag_uuid)
+                    SELECT ?, p.id, ?, ?, t.uuid
+                      FROM tags AS p, tags AS t
+                     WHERE p.uuid = ? AND p.is_deleted = 0
+                       AND t.uuid = ? AND t.is_deleted = 0
+                    """,
+                    (new_uuid, name, norm, parent, target),
+                )
+            if cursor.rowcount == 0:
+                return None          # 父或目标不存在 / 已软删
+            return to_uuid(new_uuid)
+        except IntegrityError as e:
+            # idx_tag_aliases_parent_norm_uq → 同层重名
+            if "unique" in str(e).lower():
+                return None
+            raise
+
+    def delete_alias(self, alias_uuid: _UUIDLike) -> bool:
+        """删别名（硬删：别名没有"软删"语义，也不承载数据）。"""
+        cursor = self._execute(
+            "DELETE FROM tag_aliases WHERE uuid = ?",
+            (as_uuid_str(alias_uuid),),
+        )
+        return cursor.rowcount > 0

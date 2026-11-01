@@ -1,413 +1,277 @@
 #
-"""Bootstrap configuration.
+"""加载阶段的 boot 门面。
 
-两阶段：
-  - setup_static_config: 主 INI（可含 include 子树）→ Resolver → StaticConfig（只读）
-  - setup_dynamic_config: import 状态模块 → DynamicConfig（运行时可变、可持久化）
+两部分，边界很清楚：
 
-动态子树的导入期登记
-====================
+1. **通用部分**：``load_file(finfo)`` —— ``FileInfo`` → 原始字典。只做「分派给
+   后端并读盘」，**不碰 Resolver**：注入、排序、类型注册、默认值都是
+   ``Configue.load()`` 的事。格式实现全部在 ``backends/``（INI / JSON）。
+2. **应用装配（albuswall 专用）**：``setup_config(container)`` —— 替代旧包
+   ``setup_static_config`` 的那一步：登记配置文件、声明 ``[path]`` / ``[files]``
+   内建段、``load()``、把单例注册进依赖容器。
 
-``@dynamic_state`` 与 ``ConfigField`` 一样只在**导入期写登记表**（不读配置、
-不读盘），``base_key`` / ``filename`` 到 ``config.dynamic.<name>`` 首次访问时
-才解析。所以插件可以在配置 phase 之前就声明状态子树：
-
-.. code-block:: python
-
-    from albuswall.configue import dynamic_state, StateField, StatefulNamespace
-
-    @dynamic_state("window", ("path", "cache"), ("files", "window_state"))
-    class WindowState(StatefulNamespace):
-        width = StateField(int, default=800)
-
-真正的 import 时机交给配置 phase：``setup_dynamic_config(container)`` 不传
-``modules`` 时，会 import 所有 ``register_dynamic_module("pkg.mod")`` 登记过的
-模块（显式传 ``modules=[...]`` 则以显式列表为准），再按 ``preload`` 预热。
-
-多文件加载
-==========
-
-主 INI 的 ``[configue]`` 段可声明：
-
-.. code-block:: ini
-
-    [configue]
-    include    = ./machine.ini, ./profile.d/*.ini
-    include.ro = ./defaults.ini
-
-合并顺序（低 → 高优先级，高优先级覆盖低优先级）：
-
-1. ``include.ro`` 列出的文件（按出现顺序，靠后的赢；这些文件天然只读）
-2. ``include`` 列出的文件（同上；文件系统不可写的视同只读）
-3. 主文件自身
-
-约定：
-
-- 逗号分隔（与 ``_convert`` 的 list 语义一致）；
-- 路径含 ``*`` / ``?`` / ``[`` 时用 ``glob.glob`` 展开，结果按字典序；
-- 相对路径相对主文件所在目录解析；
-- 子文件自己的 ``include`` 被忽略（扁平结构，不做递归 include），
-  避免复杂度和不可预期的加载顺序；
-- ``pkg://`` 前缀暂不支持（抛 ``ConfigError``，TODO: importlib.resources）；
-- include 指向的文件不存在 → ``ConfigError``（严格）；
-- ``[configue] include`` 系字段不会进入 Resolver，StaticConfig 看不到它们。
+第 2 部分是按 review 决定放在「配置器自己的 boot 代码」里的：它把 albuswall 的
+路径约定（``get_user_config_dir`` 等）带进了这个包。如果将来出现第二个使用方，
+把它整段搬到 app 侧模块即可（对外只有 ``setup_config`` 一个入口，搬迁是一处
+import 的改动）。
 """
 
-import glob
-import importlib
-import os
+from __future__ import annotations
+
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence
-
-from albuswall.log import getLogger
-
-from .configue import Configue
-from .declaration import ConfigField
-from .exceptions import ConfigError, ConfigueErrorSource
-from .utils import *
-from .utils.ini_parser import RawINIParser
+from typing import Any
 
 import albuswall
+from albuswall.log import getLogger
 
-if TYPE_CHECKING:
-    from albuswall.core import Container
+from .backends import get_backend
+from .errors import ConfigError
+from .registry import (
+    AutosavePolicy,
+    ConfigFile,
+    FileInfo,
+    configclass,
+    reg,
+)
+from .utils.platform_dir import (
+    get_cache_dir,
+    get_temp_dir,
+    get_user_config_dir,
+    get_user_data_dir,
+)
 
-_Missing = object()
-_logger = getLogger(f"{albuswall.__name__}.configue")
+__all__ = [
+    "load_file",
+    "setup_config",
+    "CONFIG_FILE_NAME",
+    "MAIN_FILE_NAME",
+    # 应用级段的类视图（业务代码从这里 import，见各自的 docstring）
+    "Files",
+    "Paths",
+]
 
-# [configue] 段里由 load_config_tree 消费、不进 Resolver 的键
-_CONFIGURE_SECTION = "configue"
-_INCLUDE_KEY = "include"
-_INCLUDE_RO_KEY = "include.ro"
-_INCLUDE_KEYS = frozenset({_INCLUDE_KEY, _INCLUDE_RO_KEY})
+#: 用户配置文件（放 ``base_dir`` 下）。
+CONFIG_FILE_NAME = "config.ini"
 
-# glob 元字符
-_GLOB_CHARS = ("*", "?", "[")
+#: 主配置的注册名——``c.tree.main`` / ``c.flush(file="main")`` 用它。
+MAIN_FILE_NAME = "main"
 
-
-# noinspection bad-assignment
-class _ConfigueConfig:
-    """配置器自己用自己"""
-    disable_type_check: bool = ConfigField("configue", "disable_type_check", default=False)
-
-    # include 系字段只作声明（供文档 / IDE 补全），不注入 Resolver：
-    # 它们由 load_config_tree 从原始文件里消费，不应出现在 StaticConfig 里。
-    include: str = ConfigField(
-        _CONFIGURE_SECTION, _INCLUDE_KEY, default="", inject_default=False,
-    )
-    include_ro: str = ConfigField(
-        _CONFIGURE_SECTION, _INCLUDE_RO_KEY, default="", inject_default=False,
-    )
-
-
-_conf = _ConfigueConfig()
-
-
-# ── 阶段一：静态配置 ────────────────────────────────
-def setup_static_config(container, config_file_path: Path) -> Configue:
-    from albuswall.core import Application
-    from albuswall.configue import ConfigDeclaration
-
-    config: "Configue" = Application.instance().configure
-
-    container.reg("config", lambda: config, returns=Configue)
-    container.reg("configue", lambda: config, returns=Configue)
-
-    # ── 内建字段：直接注册到类 ─────────────────
-    app_name = albuswall.__title__
-    app_author = albuswall.__author__
-
-    builtins = {
-        "path._config": (("path", "config"), get_user_config_dir(app_name, app_author), Path),
-        "path.data": (("path", "data"), get_user_data_dir(app_name, app_author), Path),
-        "path.cache": (("path", "cache"), get_cache_dir(app_name), Path),
-        "path.temp": (("path", "temp"), get_temp_dir(app_name), Path),
-        "files": (("files",), {}, Dict[str, Path]),
-    }
-    for key, (path, default, typ) in builtins.items():
-        ConfigDeclaration.add_builtin(key, path, default, typ)
-
-    # ── 读 INI 树 → raw dict（含 origin）───────
-    raw, readonly_files = load_config_tree_ex(config_file_path)
-    for (sec, key), (value, origin) in raw.items():
-        config.resolver.inject_raw(sec, key, value, origin=origin)
-    for path in readonly_files:
-        config.resolver.mark_readonly_file(path)
-
-    # 回写默认落点：主 INI（运行期新 key / 只读来源的兜底）
-    config.configure_persistence(default_write_file=config_file_path)
-
-    # ── 注册类型 + 注入缺失默认值 ──────────────
-    ConfigDeclaration.load(config.resolver)
-
-    _logger.info(
-        "Static _config loaded: file=%s sections=%d keys=%d types=%d",
-        config_file_path,
-        len(config.resolver.sections()),
-        sum(1 for _ in config.resolver.nodes()),
-        len(config.resolver.schema()),
-    )
-    # check
-    if not _conf.disable_type_check:
-        config.resolver.check_all()
-    return config
+logger = getLogger(__package__)
 
 
-# ── 阶段二：动态配置 ────────────────────────────────
-def setup_dynamic_config(
-        container,  # type: Container
-        *,
-        modules: Optional[Sequence[str]] = None,
-        preload: Optional[Sequence[str]] = None,
-) -> None:
-    """只负责 import 状态模块，把懒加载下沉到 ``DynamicConfig.__getattr__``。
+# ===========================================================================
+# 1. 通用：FileInfo → 原始字典
+# ===========================================================================
 
-    参数：
-      modules: 需要 import 的状态模块列表，保证 ``@dynamic_state`` 装饰器先跑过。
-               例如 ["app.state", "app.ui"]。传 ``None``（默认）时改为 import
-               **全部** ``register_dynamic_module`` 登记过的模块（配置期统一导入）；
-               显式传列表（含空列表）时以显式列表为准。
-      preload: 需要立刻触发加载的挂载名（默认保持懒加载）。
+def load_file(finfo: FileInfo) -> dict[tuple[str, str], Any]:
+    """按 ``finfo.backend`` 分派后端读盘。
 
-    导入失败只记日志、不中断启动（与 ``plugin.discovery`` 的宽松策略一致）；
-    真正访问不到子树的错误会由 ``DynamicConfig.__getattr__`` 抛出。
+    Args:
+        finfo: 必须已经有 ``resolved_path``（``Configue.load()`` 在解析之后才
+            构造它；未加载的 ``FileInfo`` 直接调用是编程错误）。
+
+    Raises:
+        ConfigError: 未解析路径 / 后端未注册 / 各后端自己的读盘错误。
     """
-    from albuswall.core import Application
-    from .dynamic_declaration import DYNAMIC_MODULES, DYNAMIC_REGISTRY
-
-    targets = list(DYNAMIC_MODULES) if modules is None else list(modules)
-    for mod in targets:
-        try:
-            importlib.import_module(mod)
-        except Exception:  # noqa: BLE001  导入期模块不该炸掉整个启动
-            _logger.exception(
-                "failed to import dynamic state module %r, skipped", mod,
-            )
-
-    config: Configue = Application.instance().configure
-    for name in (preload or ()):
-        getattr(config.dynamic, name)  # 强制触发加载（DYNAMIC_REGISTRY fallback）
-
-    _logger.info(
-        "Dynamic _config mounts registered: %s (modules=%s)",
-        list(DYNAMIC_REGISTRY), targets,
-    )
-
-
-def _walk_static(static, path_key, *, what: str = "base_key"):
-    """从 StaticConfig 按元组逐段取值，缺失时抛带完整 key 的 ``ConfigError``。
-
-    ``@dynamic_state`` 的 ``base_key`` / ``filename`` 都走这里：打错名字时
-    消息里带完整路径与已走到的前缀，而不是裸 ``AttributeError``。
-    """
-    node = static
-    walked: list[str] = []
-    for part in path_key:
-        walked.append(part)
-        try:
-            node = getattr(node, part)
-        except AttributeError as exc:
-            raise ConfigError(
-                f"dynamic_state {what} {'/'.join(walked)} "
-                f"not found in StaticConfig",
-                source=ConfigueErrorSource.FILE,
-                key=".".join(path_key),
-                value=f"{what}={'/'.join(path_key)}",
-                cause=exc,
-            ) from exc
-    return node
-
-
-def _resolve_path(static, path_key) -> Path:
-    """从 StaticConfig 按元组取路径。例如 ('path','cache','user.json')。"""
-    return Path(_walk_static(static, path_key, what="base_key"))
-
-
-# ── 文件读取 ────────────────────────────────────────
-def load_file(file: Path) -> dict[tuple[str, str], str]:
-    match file.suffix[1:]:
-        case "ini":
-            return load_ini_(file)
-        case _:
-            raise RuntimeError(f"Not supported file suffix: {file.suffix}")
-
-
-def load_ini_(file: Path) -> dict[tuple[str, str], str]:
-    parser = RawINIParser()
-    if not file.exists():
-        parser.read_string("", source=str(file))
-    else:
-        with file.open("r", encoding="utf-8") as f:
-            parser.read_file(f, source=str(file))
-    return parser.to_raw_dict()
-
-
-# ── 多文件加载 ──────────────────────────────────────
-def _split_include_list(value: Any) -> list[str]:
-    """把 include 字段拆成路径列表（空格忽略、空项丢弃）。
-
-    逗号是硬分隔符，路径里不能含逗号（``./a,b.ini`` 会被拆成
-    ``["./a", "b.ini"]``，与 ``_convert`` 的 list 语义一致）。
-    含逗号的文件名请改用 glob 匹配。
-    """
-    if value is None:
-        return []
-    return [part.strip() for part in str(value).split(",") if part.strip()]
-
-
-def _expand_include_spec(spec: str, base_dir: Path, *, key: str) -> list[Path]:
-    """展开单个 include 条目为具体文件列表。
-
-    - ``pkg://`` 前缀：未实现，抛 ConfigError（TODO: importlib.resources）
-    - 含 glob 元字符：``glob.glob`` 展开后按字典序（无匹配视为空）；
-      匹配到的目录被过滤掉（只合并文件），每个被跳过的目录记一条 debug
-    - 其余：视为单个文件路径（不存在由调用方报错）
-    """
-    if spec.startswith("pkg://"):
-        # TODO: 用 importlib.resources 映射到包内只读资源
+    if finfo.resolved_path is None:
         raise ConfigError(
-            "pkg:// include is not implemented yet",
-            source=ConfigueErrorSource.FILE,
-            key=key,
-            value=spec,
+            f"file {finfo.name!r} has no resolved_path; "
+            f"it must be resolved before reading"
         )
-
-    candidate = Path(spec)
-    if not candidate.is_absolute():
-        candidate = base_dir / candidate
-
-    if any(ch in str(candidate) for ch in _GLOB_CHARS):
-        matches = sorted(glob.glob(str(candidate)))
-        if not matches:
-            _logger.debug("Include glob matched nothing: %s", candidate)
-        files: list[Path] = []
-        for m in matches:
-            path = Path(m)
-            if path.is_file():
-                files.append(path)
-            else:
-                _logger.debug("Include glob skipped non-file: %s", path)
-        return files
-    return [candidate]
+    backend = get_backend(finfo.backend)
+    return backend.read(finfo.resolved_path)
 
 
-def _strip_include_keys(raw: dict[tuple[str, str], Any]) -> dict[tuple[str, str], Any]:
-    """剔除 [configue] include 系（它们不该出现在 Resolver 里）。"""
-    return {
-        (sec, key): value for (sec, key), value in raw.items()
-        if not (sec == _CONFIGURE_SECTION and key in _INCLUDE_KEYS)
-    }
+# ===========================================================================
+# 2. 应用装配：albuswall 的内建段 + setup_config
+# ===========================================================================
 
+class Paths:
+    """``[path]``：应用自己的目录。
 
-def load_config_tree_ex(
-        main: Path,
-) -> tuple[dict[tuple[str, str], tuple[str, Path]], list[Path]]:
-    """``load_config_tree`` 的完整版：额外返回只读来源文件列表。
+    **字段不带默认值**：四个目录依赖 ``portable`` / ``base_dir``，只能在
+    ``setup_config`` 运行期算出来，由它 ``resolver.inject_raw`` 注入（效果与
+    ``@configclass`` 默认值等价——``load()`` 注入文件值时用 ``overwrite=True``，
+    文件里写了的段照样赢）。
 
-    Returns:
-        (merged, readonly_files)：
-          merged: {(section, key): (value, origin_path)}，origin 为生效值所在文件；
-          readonly_files: 只读来源（include.ro 中的文件 + 文件系统不可写的 include 文件）。
+    ``@configclass`` 装饰发生在 :func:`_declare_app_sections`（装配期）而不是
+    模块导入期，有两个原因：
+
+    - 登记键是 ``(file, class_path)``，``file`` 来自 ``setup_config(name=...)``
+      参数，导入期还不知道；
+    - 导入 ``configue`` 不往全局登记表里塞节点（未装配时 ``load()`` 不会因为
+      「引用了未 reg 的 file」而报错）。
+
+    **同名 section 允许多份声明**：别的模块想写一份「只读视图」是合法的，
+    只要字段的类型与默认值与本类一致（不一致会在装饰期抛
+    ``ConfigDeclarationConflict``，声明不一致时应当直接 import 本类）。
+
+    业务代码用法（**必须在 ``setup_config`` 之后**）::
+
+        from albuswall.configue.bootstrap import Paths
+
+        db_file = Paths().data / "db.db"
     """
-    main = Path(main)
-    main_abs = main.resolve()
-    base_dir = main_abs.parent
 
-    if not main.exists():
-        _logger.warning("Main _config file not found: %s", main)
-        return {}, []
+    config: Path
+    data: Path
+    cache: Path
+    temp: Path
 
-    main_full = load_file(main)
-    include_ro = _split_include_list(
-        main_full.get((_CONFIGURE_SECTION, _INCLUDE_RO_KEY))
-    )
-    include = _split_include_list(
-        main_full.get((_CONFIGURE_SECTION, _INCLUDE_KEY))
-    )
-    main_raw = _strip_include_keys(main_full)
 
-    # ── 展开顺序 = 合并顺序（低 → 高）────────────
-    # (path, readonly)
-    ordered: list[tuple[Path, bool]] = []
-    for key, specs, forced_ro in (
-            (_INCLUDE_RO_KEY, include_ro, True),
-            (_INCLUDE_KEY, include, False),
+class Files:
+    """``[files]``：文件名，相对 ``[path]`` 使用。
+
+    默认值与平台无关，所以直接写在字段上（``load()`` 时由 ``@configclass``
+    注入）；装饰时机与用法同 :class:`Paths`。
+    """
+
+    log: str = "log_config.ini"
+    db: str = "db.db"
+    qss: str = "qss.qss"
+    icons: str = "*.svg"
+
+
+def _declare_app_sections(name: str) -> None:
+    """把 :class:`Paths` / :class:`Files` 登记到 ``file=name`` 名下。
+
+    幂等：``configclass`` 对同一 ``(file, class_path)`` 是覆盖注册，测试清空
+    全局表之后仍能重建。两个类是**模块级对象**，所以业务代码 import 到的
+    就是被登记的那个类（装饰是原地修改，不产生新类）。
+    """
+    configclass("path", name)(Paths)
+    configclass("files", name)(Files)
+
+
+def _inject_path_defaults(
+        config: Any,
+        path_config: Path,
+        path_data: Path,
+        path_cache: Path,
+        path_temp: Path,
+) -> None:
+    """注入 ``[path]`` 四段的默认值（替代 ``@configclass`` 字段默认值）。
+
+    必须在 ``load()`` **之前**调用：``load()`` 注入文件值的 ``overwrite=True``，
+    文件里写了的段会盖掉这里，语义与「默认值只在缺值时补位」一致；同时默认值
+    在 ``check_all`` / 加载钩子之前就已就位（与改前逐字段默认值的时机相同）。
+
+    ``inject_raw`` 不带 origin，所以这些值不会被当成「用户改过的」而回写——
+    与 ``@configclass`` 默认值完全一致。
+    """
+    resolver = config.resolver
+    for key, value in (
+            ("config", path_config),
+            ("data", path_data),
+            ("cache", path_cache),
+            ("temp", path_temp),
     ):
-        for spec in specs:
-            for path in _expand_include_spec(spec, base_dir, key=key):
-                if not path.exists():
-                    raise ConfigError(
-                        f"include target not found: {path}",
-                        source=ConfigueErrorSource.FILE,
-                        key=key,
-                        value=str(path),
-                    )
-                ordered.append((path, forced_ro))
+        resolver.inject_raw("path", key, value)
 
-    # ── 循环检测：主文件不能出现在自己的 include 列表里 ──
-    for path, _ in ordered:
-        if path.resolve() == main_abs:
-            raise ConfigError(
-                f"include cycle: {main_abs} includes itself",
-                source=ConfigueErrorSource.FILE,
-                key=_INCLUDE_KEY,
-                value=str(path),
-            )
 
-    # ── 去重：``a.ini`` 与 ``./a.ini``（或 glob + 显式重复）指向同一文件时，
-    # 只保留首次出现（forced_ro 也取首次值），避免 definitions_of /
-    # readonly_files 出现重复项。必须在循环检测之后——自包含检测要看到
-    # 所有显式列出的项。
-    seen: set[Path] = set()
-    deduped: list[tuple[Path, bool]] = []
-    for path, forced_ro in ordered:
-        key = path.resolve()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append((path, forced_ro))
-    ordered = deduped
+def setup_config(
+        container,
+        *,
+        base_dir: Path | str | None = None,
+        file_name: str = CONFIG_FILE_NAME,
+        name: str = MAIN_FILE_NAME,
+        autosave: AutosavePolicy = "atexit",
+        order: int = 10,
+        register_aliases: bool = True,
+        ignore_missing: bool = False,
+        portable: bool = False,
+):
+    """装配 albuswall 的配置并注册进依赖容器，返回 ``Configue`` 单例。
 
-    merged: dict[tuple[str, str], tuple[str, Path]] = {}
-    readonly_files: list[Path] = []
+    等价于旧包的 ``setup_static_config(container, config_file_path)``，但：
 
-    # 1. include.ro（天然只读）
-    # 2. include（文件系统不可写 → 视同只读）
-    for path, forced_ro in ordered:
-        raw = _strip_include_keys(load_file(path))
-        is_ro = forced_ro or not os.access(path, os.W_OK)
-        if is_ro:
-            readonly_files.append(path)
-        for node, value in raw.items():
-            merged[node] = (value, path)
-        _logger.debug(
-            "Merged include: file=%s keys=%d readonly=%s", path, len(raw), is_ro
+    - **不再处理 include**（旧包的 ``[configue] include`` 多文件合并尚未移植）；
+    - **不再有全局 persistence 策略**，改为 ``reg(..., autosave=...)`` 的文件级策略；
+    - ``[path]`` / ``[files]`` 是**声明默认值**（``@configclass``），不再靠
+      ``ConfigDeclaration.add_builtin``；
+    - 配置文件不存在时 ``load()`` **直接抛** ``ConfigFileNotFound``
+      （旧的 ``load_ini_`` 容错为空——本阶段明确改为要求文件存在）。
+
+    Args:
+        container: 依赖容器（``Container``）。注册两个别名：
+            ``config`` 与 ``configue``，都是本单例。
+        base_dir: 配置文件所在目录；``None`` → ``get_user_config_dir()``。
+        file_name: 配置文件名；``None`` 不合法。
+        name: 注册名（``tree.<name>``）。
+        autosave: 文件级回写策略；默认 ``"atexit"``（与旧包全局默认一致）。
+        order: ``FileInfo.order``；单文件无所谓，留给将来加覆盖文件。
+        register_aliases: 是否注册容器别名（测试可直接关掉）。
+        ignore_missing: 透传给 ``reg(optional=...)``——``True`` 时「配置文件
+            不存在」不算错误：``load()`` 以 ``base_dir/file_name`` 占位把文件
+            标成已加载，默认值照常可读，首次 ``save()`` 时创建文件。
+            ``False``（默认）缺文件直接抛 ``ConfigError``。**歧义仍然报错**。
+        portable: 决定 ``[path]`` 四段的默认值从哪来（详见下方「portable」）。
+
+    portable:
+        ``False``（默认）：``[path]`` 四段全部走 ``get_user_config_dir`` /
+        ``get_user_data_dir`` / ``get_cache_dir`` / ``get_temp_dir``，与
+        ``base_dir`` 无关。
+        ``True``：``[path]`` 四段全部落在 ``base_dir`` 下（``config = base_dir``，
+        ``data`` / ``cache`` / ``temp`` 为 ``base_dir/data`` 等子目录），用于测试
+        隔离或便携部署。
+        **只改 ``[path]`` 四段，不改 ``config.ini`` 的落点**（仍为
+        ``base_dir / file_name``）。另外 ``portable=True`` 时**不预先创建**
+        ``data`` / ``cache`` / ``temp`` 目录，首次写入时按需创建；``False`` 时
+        ``get_temp_dir()`` 会顺带 ``mkdir`` 出 temp 目录（现有行为）。
+
+    Raises:
+        ValueError: ``portable=True`` 但未给 ``base_dir``。
+        ConfigError: 缺文件（``ignore_missing=False``）/ 声明 / 类型 / 钩子错误。
+    """
+    from .configue import Configue
+
+    if portable and base_dir is None:
+        raise ValueError(
+            "setup_config: portable=True requires an explicit base_dir "
+            "(portable means 'everything under base_dir')"
         )
 
-    # 3. 主文件自身（最高优先级）
-    for node, value in main_raw.items():
-        merged[node] = (value, main_abs)
-    _logger.debug("Merged main: file=%s keys=%d", main_abs, len(main_raw))
-
-    _logger.debug(
-        "Config tree merged: files=%d nodes=%d readonly=%d",
-        len(ordered) + 1, len(merged), len(readonly_files),
+    target_dir = (
+        Path(base_dir).resolve() if base_dir is not None
+        else get_user_config_dir(albuswall.__name__, albuswall.__author__).resolve()
     )
-    return merged, readonly_files
 
+    if portable:
+        # 便携 / 测试隔离：四段全部收在 base_dir 下，不碰用户目录。
+        # 注意不预先 mkdir（data/cache/temp 在首次写入时按需创建）。
+        path_config = target_dir
+        path_data = target_dir / "data"
+        path_cache = target_dir / "cache"
+        path_temp = target_dir / "temp"
+    else:
+        path_config = get_user_config_dir(
+            albuswall.__name__, albuswall.__author__,
+        ).resolve()
+        path_data = get_user_data_dir(
+            albuswall.__name__, albuswall.__author__,
+        ).resolve()
+        path_cache = get_cache_dir(albuswall.__name__).resolve()
+        path_temp = get_temp_dir(albuswall.__name__).resolve()
 
-def load_config_tree(main: Path) -> dict[tuple[str, str], tuple[str, Path]]:
-    """读取主 INI 及其 include 子树，返回 ``{(section, key): (value, origin)}``。
+    _declare_app_sections(name)
 
-    合并顺序（低 → 高优先级）：
-      1. 主文件 include.ro 列出的文件（按出现顺序，靠后的赢）
-      2. 主文件 include 列出的文件（同上）
-      3. 主文件自身
+    reg(
+        ConfigFile.INI, file_name, name=name, autosave=autosave, order=order,
+        optional=ignore_missing,
+    )
+    config: Configue = Configue(target_dir)
+    # [path] 默认值先注入再 load()：文件里写了的段由 load() 的 overwrite 赢。
+    _inject_path_defaults(
+        config, path_config, path_data, path_cache, path_temp,
+    )
+    config.load()
+    # 用 ``target_dir`` 而不是 ``base_dir``：``base_dir`` 可能是 ``None``
+    # （回退用户配置目录）或 ``str``（调用方直接传字符串），两者做 ``/`` 都会
+    # 失败 —— 前者 ``TypeError``，后者拼出错误的 ``str / str``。
+    logger.info("Conf loaded: %s", target_dir / file_name)
 
-    子文件自己的 include 会被忽略（扁平结构，不做递归 include）。
+    if register_aliases:
+        container.reg("config", lambda: config, returns=Configue)
+        container.reg("configue", lambda: config, returns=Configue)
 
-    失败语义：include 文件不存在 / 出现 pkg:// 前缀 → ``ConfigError(source=FILE)``；
-    主文件不存在时返回空 dict（与旧行为一致）。
-    """
-    merged, _ = load_config_tree_ex(main)
-    return merged
+    return config

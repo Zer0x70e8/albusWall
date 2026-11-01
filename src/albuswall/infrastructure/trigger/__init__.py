@@ -71,4 +71,4 @@ def register_trigger_service(
         except Exception:
             _logger.exception("Failed to stop trigger facade")
 
-    Application.on_final(_shutdown_trigger)
+    Application.on_exit(_shutdown_trigger)
