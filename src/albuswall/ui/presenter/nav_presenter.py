@@ -84,8 +84,9 @@ push 到它的域（必要时先 ``exit_back`` 回到能到达的位置）。于
 * **命中的节点当前不可见**（页面没开、HUD 收起）→ **不动光标**：焦点按理
   不会跑到隐藏控件上，Qt 的焦点链 / 程序化 ``setFocus`` 偶尔会；
 * **祖先链上没有注册节点** → 焦点跑出了 nav 的地盘（背景层、临时浮层、
-  别的窗口的控件）→ 把焦点**拉回**当前光标（``_restore_nav_focus``）。
-  这一步用 ``_restoring`` 标志防递归，且只在「有一个光标可以回」时做。
+  别的窗口的控件）→ **只告警，不拉回**（``_report_stray_focus``）。硬接管
+  之后 nav 不跟 Qt 抢焦点：拉回曾在「叠层刷新后焦点跳回主窗口」里当帮凶，
+  现在焦点去向由控件树自己决定，结构问题靠这条 warning 暴露。
 
 跨区域 push 会先把**父帧的 current 设成区域入口**（``set_current`` 是 nav
 唯一的公开「选中」入口），所以「点进某个区域再按 Esc」会回到入口而不是
@@ -102,8 +103,8 @@ push 到它的域（必要时先 ``exit_back`` 回到能到达的位置）。于
 * ``NavRegistry.suspend(page_id)`` / ``resume()``——挡的是 **nav 动作方法**，
   给「绕过分发器直接调 nav」的调用方（命令 / 插件）也加上保险。
 
-窗口失活（``WindowDeactivate``）只冻结「回灌与恢复焦点」，不冻结分派：失活
-窗口收不到按键，硬挂起反而会在窗口重新激活前一直吞键。
+窗口失活（``WindowDeactivate``）只记录状态（``_window_active``），不冻结分派：
+失活窗口收不到按键，硬挂起反而会在窗口重新激活前一直吞键。
 
 已知缺口
 ========
@@ -181,9 +182,6 @@ _MODIFIER_KEYS: frozenset[Qt.Key] = frozenset({
 #: ``focusChanged`` 反向同步时最多 push 多少层（防注册表有环时死循环）。
 _MAX_PUSH_DEPTH = 8
 
-#: 焦点「拉回」一次之后的重入深度上限（``_restore_nav_focus`` 防递归）。
-_MAX_RESTORE_DEPTH = 2
-
 
 class NavPresenter(Presenter):
     """把键盘事件接到 nav 注册表上（nav 的 Qt 侧分发器）。"""
@@ -212,8 +210,6 @@ class NavPresenter(Presenter):
         #: 正在执行我们自己发起的 ``focus_node``：期间的 focusChanged 不该被
         #: 当成「用户用鼠标点了别处」再反推一次（否则退出区域会立刻弹回去）。
         self._applying_focus = False
-        #: 正在把焦点「拉回」nav 的光标：期间的 focusChanged 同样忽略。
-        self._restoring = False
         #: 窗口当前是否处于激活状态（失活时冻结回灌，见模块 docstring）。
         self._window_active = True
 
@@ -251,6 +247,7 @@ class NavPresenter(Presenter):
         nav.set_backend(QtFocusBackend(
             focus_getter=self.target_widget,
             node_id_resolver=self.node_id_for_widget,
+            is_landing_widget=self.is_leaf_widget,
         ))
 
         app = QApplication.instance()
@@ -332,8 +329,8 @@ class NavPresenter(Presenter):
             return True
         if kind in (QEvent.Type.WindowActivate, QEvent.Type.WindowDeactivate) \
                 and watched is self._window:
-            # 窗口失活时冻结「回灌 / 拉回焦点」：失活窗口的焦点变化不代表用户
-            # 在别处点了什么（见模块 docstring「暂停」小节）。
+            # 记录窗口激活状态：失活窗口的焦点变化不代表用户在别处点了什么
+            # （见模块 docstring「暂停」小节）。
             self._window_active = kind is QEvent.Type.WindowActivate
         return super().eventFilter(watched, event)
 
@@ -394,25 +391,35 @@ class NavPresenter(Presenter):
     ) -> bool:
         """Tab / Shift+Tab。两者的语义分工见模块 docstring 的规则 4。
 
-        返回 ``True``（消费）的情况只有两种：
+        返回 ``True``（消费）的情况：
 
         * **成功进 / 出域**：光标进了子域或弹回了父域；
         * **域内遍历**：``tab_next`` / ``tab_prev`` 挪了光标，或者已经到头
           （``None``）——到头也消费，因为 Qt 的焦点链已经被 nav 接管，再让它
           跑一遍会和 nav 的光标打架（v1 不跨域，见 D2）。
 
-        只有「光标停在区域入口、且 ``exit_back`` 无处可弹」这种情形才冒泡：
-        那时事件该交给调用方（比如用它来关页）。
+        **任何** Shift+Tab 都不冒泡（硬接管）：根帧上没有可弹的域时消费掉，并
+        请求关闭当前 overlay 页（见 :meth:`_close_current_overlay`）；绝不让
+        Qt 的 ``QWidget::focusNextPrevChild`` 接手 —— 那正是「根帧 Shift+Tab
+        把焦点甩给主窗口」的来路。
         """
         shift = self._is_shift_tab(event)
         if self._is_container(nav, page_id):
             # 容器踏板 / 区域入口 / 虚拟根：Tab 进域、Shift+Tab 出域
             if shift:
                 if self._at_root(nav, page_id):
-                    return False     # 根帧之上没有可弹的域（关页由调用方判定）
-                return self._act(
-                    nav, page_id, "exit_back",
-                    lambda: nav.exit_back(page_id))
+                    # 已到页面根帧：再 ``exit_back`` 会把根域帧本身也弹掉，
+                    # 导航从此失据。这里消费按键 + 有页就关页，绝不冒泡给
+                    # Qt 的焦点链（``focusNextPrevChild`` 会把焦点甩给主窗口）。
+                    self._close_current_overlay()
+                    return True
+                if self._act(
+                        nav, page_id, "exit_back",
+                        lambda: nav.exit_back(page_id)):
+                    return True
+                # 弹不动（``allow_exit=False``）：同样消费。
+                self._close_current_overlay()
+                return True
             return self._act(
                 nav, page_id, "enter(tab)",
                 lambda: nav.enter(page_id, how="tab"))
@@ -422,8 +429,11 @@ class NavPresenter(Presenter):
             if self._act(nav, page_id, "tab_prev",
                          lambda: nav.tab_prev(page_id)):
                 return True
-            return self._act(
-                nav, page_id, "exit_back", lambda: nav.exit_back(page_id))
+            if self._act(nav, page_id, "exit_back",
+                         lambda: nav.exit_back(page_id)):
+                return True
+            # 也弹不动（域声明了 ``allow_exit=False``）：同样消费。
+            return True
         consumed = self._act(
             nav, page_id, "tab_next", lambda: nav.tab_next(page_id))
         if consumed:
@@ -440,11 +450,41 @@ class NavPresenter(Presenter):
         node = nav.get_node(frame.current)
         return node is not None and node.child_domain is not None
 
+    def _close_current_overlay(self) -> None:
+        """根帧 Shift+Tab：若窗口暴露了关页钩子，关掉当前 overlay 页。
+
+        「可选钩子」是刻意的：presenter 不假设窗口一定有 ``close_overlay``
+        （派生窗口 / 用例替身可能没有）。没有钩子、或者当前本来就是空白层
+        时只消费按键，不做任何动作。
+        """
+        window = self._window
+        if window is None:
+            return
+        overlay = getattr(window, "overlay", None)
+        is_blank = getattr(overlay, "is_blank", None)
+        try:
+            if callable(is_blank) and is_blank():
+                return
+        except Exception:  # noqa: BLE001 - 观测失败就当没有开页
+            return
+        close = getattr(window, "close_overlay", None)
+        if not callable(close):
+            logger.debug(
+                "nav presenter: no close_overlay hook on window; "
+                "root Shift+Tab consumed only")
+            return
+        try:
+            close()
+        except Exception:  # noqa: BLE001 - 关页失败不该吃掉按键处理
+            logger.debug("nav presenter: close_overlay failed", exc_info=True)
+            return
+        logger.debug("nav presenter: root Shift+Tab closed the overlay page")
+
     # ------------------------------------------------------------------ #
     # 反向同步：焦点控件 → nav.current
     # ------------------------------------------------------------------ #
     def _on_focus_changed(self, _old: Any, new: Any) -> None:
-        if self._applying_focus or self._restoring:
+        if self._applying_focus:
             # 自因焦点：nav 刚刚决定的就是它，不必再反推（否则区域入口的
             # ``focus_fn`` 会立刻把光标重新推进区域，退出动作「弹不出去」）。
             return
@@ -453,44 +493,34 @@ class NavPresenter(Presenter):
             return
         if self.sync_to_widget(new):
             return
-        self._restore_nav_focus(new)
+        self._report_stray_focus(new)
 
-    def _restore_nav_focus(self, stray: Any) -> bool:
-        """焦点跑出了 nav 的地盘 → 拉回当前光标；返回是否拉回。
+    def _report_stray_focus(self, stray: Any) -> None:
+        """焦点跑出了 nav 的地盘 → 只留证据，**不拉回**、不改 nav 状态。
 
-        触发条件（全部满足才动手）：
+        这里的克制是硬接管的一部分：nav 管的是「跨区域焦点该落在哪个叶域」，
+        一旦焦点离开 nav 的控件树（背景层、临时浮层、别的窗口），把它拽回旧
+        光标只会和真正该拿焦点的东西打架 —— 「叠层刷新后焦点跳回主窗口」就是
+        这么来的（刷新中途 Qt 会临时把焦点挪走，拉回逻辑随即把它往旧光标拽）。
 
-        1. 不是我们自己发起的聚焦（那边已经 return 了）；
-        2. 窗口处于激活状态（失活窗口设焦点没有意义，还会打断别的应用）；
-        3. 这个控件属于本页窗口（别的窗口的焦点不归我们管）；
-        4. nav 有一个可见的光标可以回（``current`` 非 ``None`` 且可见）。
-
-        拉回用 ``focus_node``（``focus_fn`` 优先），期间置 ``_restoring`` 防
-        ``focusChanged`` 递归；再上层还有 ``_MAX_RESTORE_DEPTH`` 兜底。
+        所以这里只 ``warning``：控件类型 + ``nav.current`` 快照，方便诊断
+        「哪个控件不在注册表里」这个结构问题。
         """
-        if not self._window_active:
-            return False
         nav = self._nav
         if nav is None:
-            return False
+            return
         page_id = self._page_id_for_widget(stray)
         if page_id is None:
-            return False
+            # 别的窗口 / 还没登记的控件：完全不属于本页，连告警都不必
+            return
         frame = nav.current_frame(page_id)
-        if frame is None or frame.current is None:
-            return False
-        node = nav.get_node(frame.current)
-        if node is None or not nav.is_visible(node):
-            return False
-        logger.debug(
-            "nav presenter: focus escaped to %r; pulling it back to %s",
-            type(stray).__name__, node.id)
-        self._restoring = True
-        try:
-            ok = self._focus(nav, node, "restore")
-        finally:
-            self._restoring = False
-        return ok is not False
+        logger.warning(
+            "nav presenter: focus landed on unregistered widget %r "
+            "(page=%s, domain=%s, nav.current=%r); focus left untouched",
+            type(stray).__name__, page_id,
+            None if frame is None else frame.domain_id,
+            None if frame is None else frame.current,
+        )
 
     def sync_to_widget(self, widget: Any) -> bool:
         """把光标对齐到 ``widget``（``focusChanged`` 的出口）；返回是否同步成功。
@@ -545,6 +575,23 @@ class NavPresenter(Presenter):
                 return None
             current = parent()
         return None
+
+    def is_leaf_widget(self, widget: Any) -> bool:
+        """``widget`` 是否同时是某个**叶节点**（``child_domain is None``）的落点控件。
+
+        给 ``QtFocusBackend.ensure_focusable`` 用：容器节点一律 ``NoFocus``，
+        但「容器与叶共用同一个控件」时（内容层：``window.content`` 与
+        ``content.body`` 都是 ``Content``）容器规则让位于叶——否则叶域的键盘
+        光标无处可落。注册表在 presenter 手里，判定只能在这里派生。
+        """
+        nav = self._nav
+        if nav is None or widget is None:
+            return False
+        for domain in nav.domains():
+            for node in domain.nodes.values():
+                if node.child_domain is None and node.widget is widget:
+                    return True
+        return False
 
     def sync_current(self, page_id: str, node_id: str) -> None:
         """把 ``nav.current`` 对齐到 ``node_id``（必要时逐层 push / 弹栈）。"""

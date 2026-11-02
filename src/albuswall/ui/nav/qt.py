@@ -19,8 +19,10 @@
 * ``apply_focus``：``setFocus(Qt.FocusReason.OtherFocusReason)`` —— 显式给出
   焦点原因，避免 Qt 把这次聚焦当成 Tab 导航而触发它自己的焦点链（我们就是要
   让 Qt 的 Tab 链失效）；
-* ``ensure_focusable``：**只**把 ``NoFocus`` 提升成 ``StrongFocus``。绝不反向
-  设置 ``NoFocus``（那会破坏 IME、spinbox、无障碍——见包文档「不要做的事」）；
+* ``ensure_focusable``：两种相反的意图——**容器节点**（``child_domain``
+  非空）永远设 ``NoFocus``（Qt 焦点链不该碰到区域容器，这是有意的反向特例）；
+  **落点控件**只把 ``NoFocus`` 提升成 ``StrongFocus``，绝不反向设置
+  ``NoFocus``（那会破坏 IME、spinbox、无障碍——见包文档「不要做的事」）；
 * ``current_focus_chain``：``QApplication.focusWidget()`` 起沿 ``parentWidget``
   向上。**空元组 = 观测不到焦点**（无 WM / 平台不支持 / 窗口未激活），调用方
   据此跳过验证；
@@ -59,6 +61,10 @@ class QtFocusBackend:
             ``None``）。
         node_id_resolver: 控件 → 节点 id 的解析器（沿祖先链向上探测），默认
             ``None`` = 不做回灌映射。分发器注入自己的索引。
+        is_landing_widget: 「这个控件是不是某个叶节点的落点控件」的判定，
+            默认 ``None`` = 一律不是。只有「容器与叶共用同一个控件」时才会
+            用到（见 :meth:`ensure_focusable`）；由分发器从注册表派生，本模块
+            不 import 注册表。
     """
 
     def __init__(
@@ -66,9 +72,11 @@ class QtFocusBackend:
             *,
             focus_getter: Callable[[], Any] | None = None,
             node_id_resolver: Callable[[Any], str | None] | None = None,
+            is_landing_widget: Callable[[Any], bool] | None = None,
     ) -> None:
         self._focus_getter = focus_getter or _default_focus_getter
         self._node_id_resolver = node_id_resolver
+        self._is_landing_widget_fn = is_landing_widget
 
     # -- 执行 ----------------------------------------------------------
     def apply_focus(self, node) -> None:
@@ -85,13 +93,38 @@ class QtFocusBackend:
             set_focus()
 
     def ensure_focusable(self, node) -> None:
-        """``NoFocus`` 的控件提升为 ``StrongFocus``（只升不降）。
+        """容器节点永远 ``NoFocus``；落点控件 ``NoFocus`` → ``StrongFocus``。
 
-        多数注册节点本来就是按钮 / 视图（焦点策略够用），所以这通常是空操作；
-        真正需要它的是「自定义控件忘了设焦点策略」的情形——那时方向键能算到
-        它、焦点却落不上去，表现成「按了没反应」。
+        这是两种**不同**的意图，不要合并：
+
+        * **容器节点**（``child_domain`` 非空：标题栏、内容层、overlay 的三
+          个页、HUD 容器、信息面板）是反向特例——**永远是** ``NoFocus``。
+          设 ``NoFocus`` 在这里是有意行为：Qt 的焦点链（Tab 遍历、
+          ``focusNextPrevChild``、``setTabOrder``）不该碰到区域容器；跨区域
+          的焦点归属由 nav 决定，nav 把焦点交给容器内部的**落点控件**
+          （``node.focus_fn`` / 子域 entry）。
+        * **落点控件**（``child_domain`` 为空）只升不降：``NoFocus`` →
+          ``StrongFocus``，绝不反向设置 ``NoFocus``（那会破坏 IME、spinbox、
+          无障碍——见包文档「不要做的事」）。
+
+        「容器与叶共用同一个控件」的例外（内容层：``window.content`` 与
+        ``content.body`` 都是 ``Content``）：容器规则必须让位于叶，否则叶域
+        的键盘光标无处可落。判定由注入的 ``is_landing_widget`` 完成，本模块
+        不持有注册表。
         """
         widget = node.widget
+        set_policy = getattr(widget, "setFocusPolicy", None)
+
+        if getattr(node, "child_domain", None) is not None:
+            if not callable(set_policy) or self._is_landing_widget(widget):
+                return
+            try:
+                set_policy(Qt.FocusPolicy.NoFocus)
+            except RuntimeError:  # 底层 C++ 对象已销毁
+                return
+            logger.debug("ensure_focusable %s: container → NoFocus", node.id)
+            return
+
         get_policy = getattr(widget, "focusPolicy", None)
         if not callable(get_policy):
             return
@@ -101,12 +134,24 @@ class QtFocusBackend:
             return
         if policy != Qt.FocusPolicy.NoFocus:
             return
-        set_policy = getattr(widget, "setFocusPolicy", None)
         if not callable(set_policy):
             return
         logger.debug(
             "ensure_focusable %s: NoFocus → StrongFocus", node.id)
         set_policy(Qt.FocusPolicy.StrongFocus)
+
+    def _is_landing_widget(self, widget: Any) -> bool:
+        """``widget`` 是否同时是某个叶节点（非容器）的落点控件。
+
+        默认没有注入判定函数 → 一律 ``False``（容器规则照常生效）。
+        """
+        check = self._is_landing_widget_fn
+        if check is None:
+            return False
+        try:
+            return bool(check(widget))
+        except RuntimeError:  # 控件已销毁
+            return False
 
     # -- 观测 ----------------------------------------------------------
     def current_focus_chain(self) -> tuple[Any, ...]:

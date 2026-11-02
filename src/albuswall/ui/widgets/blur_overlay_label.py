@@ -131,8 +131,11 @@ class BlurLabel(QLabel):
             self._updating = False
             return
 
-        # Temporarily hide ourselves so we don't appear in the snapshot
+        # Temporarily hide ourselves so we don't appear in the snapshot.
+        # 隐藏会让 Qt 把焦点从子树里挪走（子树内的控件一隐藏就失去焦点），
+        # 刷新结束后必须还回去 —— 否则每刷一次模糊，键盘光标就跳出这一页。
         was_visible = self.isVisible()
+        focus_before = self._focus_within() if was_visible else None
         if was_visible:
             self.setVisible(False)
 
@@ -141,6 +144,7 @@ class BlurLabel(QLabel):
 
         if was_visible:
             self.setVisible(True)
+            self._restore_focus_within(focus_before)
 
         if pixmap:
             self._blurred_pixmap = self._apply_blur(pixmap, self._blur_radius)
@@ -172,6 +176,50 @@ class BlurLabel(QLabel):
         #
         # self.update()
         # self._updating = False
+
+    # ---------- 焦点守恒（自隐藏不该让焦点跑掉）----------
+
+    def _focus_within(self) -> Optional[QWidget]:
+        """当前焦点控件若在本控件子树内，返回它；否则 ``None``。
+
+        只认「自己的」焦点：焦点在别的区域（标题栏、另一层浮层、别的控件树）
+        时返回 ``None``，刷新完什么都不做 —— 不去抢别人的焦点。
+        """
+        app = QApplication.instance()
+        if not isinstance(app, QApplication):
+            return None
+        widget = app.focusWidget()
+        current = widget
+        while current is not None:
+            if current is self:
+                return widget
+            parent = getattr(current, "parentWidget", None)
+            if not callable(parent):
+                return None
+            try:
+                current = parent()
+            except RuntimeError:  # 祖先已销毁
+                return None
+        return None
+
+    def _restore_focus_within(self, widget: Optional[QWidget]) -> None:
+        """把焦点还给 ``widget``（前提：它仍在子树内、且当前焦点不是它）。
+
+        ``widget`` 为 ``None``（刷新前焦点就不在本子树内）时不做任何事。
+        """
+        if widget is None:
+            return
+        app = QApplication.instance()
+        if not isinstance(app, QApplication):
+            return
+        try:
+            if app.focusWidget() is widget:
+                return
+            if not widget.isVisible():
+                return
+            widget.setFocus(Qt.FocusReason.OtherFocusReason)
+        except RuntimeError:  # 控件已销毁
+            return
 
     @staticmethod
     def _apply_blur(pixmap: QPixmap, radius: float) -> QPixmap:

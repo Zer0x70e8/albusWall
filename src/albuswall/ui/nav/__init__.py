@@ -104,10 +104,12 @@ Popup 菜单、标签树弹出）由 Qt 控件自治，nav 只负责进入 / 退
    机器保证：挂起期间这些方法一律返回 ``None`` 且不改状态。
 
 2. **焦点回流由分发器自动完成，手工 ``set_current`` 只在绕过它时才需要**
-   装了 ``NavPresenter`` 之后，鼠标点击 / 程序化 ``setFocus`` / Qt 焦点链
-   跳转都会被 ``QApplication.focusChanged`` 捕获并回灌到 ``nav.current``
-   （祖先链上找不到节点时还会把焦点拉回当前光标）。此时**不要**再手工调
-   ``set_current``，那是重复劳动，而且会在分发器回灌之前插一脚。
+   装了 ``NavPresenter`` 之后，鼠标点击 / 程序化 ``setFocus`` 都会被
+   ``QApplication.focusChanged`` 捕获并回灌到 ``nav.current``。祖先链上找不到
+   注册节点时（焦点离开了 nav 的地盘）分发器**只记 warning、不拉回焦点**：
+   跨区域焦点由 nav 硬接管，跑出地盘的焦点去向由控件树自己决定。此时
+   **不要**再手工调 ``set_current``，那是重复劳动，而且会在分发器回灌之前
+   插一脚。
    只有两种情况需要手工：① 没有装分发器（headless / 单测 / CLI 内省）；
    ② 要求「逻辑光标先于真实焦点」移位（例如关页前预置落点）。
 
@@ -174,14 +176,17 @@ Popup 菜单、标签树弹出）由 Qt 控件自治，nav 只负责进入 / 退
                  → Tab / Shift+Tab：容器上进出域，域内走 tab_next/tab_prev
                  → move / enter / esc → 落点 → focus_node
                  → focus_node 失败 → nav.restore() 回滚 + 放行
-    QApplication.focusChanged → 回灌 set_current（找不到节点 → 拉回焦点）
+    QApplication.focusChanged → 回灌 set_current（找不到节点 → 只 warning）
     activeModalWidget / activePopupWidget → suspend
 
 ``QShortcut`` 做不到这件事：它只在有窗口上下文时触发，一旦启用就**吃掉**
 按键，没有「算完发现没落点再冒泡」这条路径。而方向键必须能「先决策、有进展
 才消费」——这正是叶域里滚动网格能自己翻页、边界上空间留白又不被吞的原因。
 同理，**不要**把所有控件 ``setFocusPolicy(NoFocus)`` 再手工 ``sendEvent``：
-那会同时废掉 IME、spinbox 的键盘输入和无障碍焦点。
+那会同时废掉 IME、spinbox 的键盘输入和无障碍焦点。唯一的反向特例是**区域
+容器**——``QtFocusBackend.ensure_focusable`` 把 ``child_domain`` 非空的节点
+固定成 ``NoFocus``（Qt 的焦点链不该碰到容器），焦点由 ``focus_fn`` / 子域
+entry 落到容器内部的控件上；落点控件仍然只升不降。
 """
 
 from __future__ import annotations

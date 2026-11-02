@@ -263,21 +263,28 @@ def test_tab_does_not_move_focus_inside_a_leaf_domain(rig):
     assert rig.focused_widget() is before
 
 
-# ==================== 焦点被抢走 → 拉回 ====================
+# ==================== 焦点跑到地盘外 → 只告警，不拉回 ====================
 
-def test_focus_escaped_to_a_foreign_widget_is_pulled_back(rig):
-    """``setFocus`` 到一个没有 nav 节点的控件：焦点被拉回当前光标。"""
+def test_focus_escaped_to_a_foreign_widget_is_not_pulled_back(rig, caplog):
+    """``setFocus`` 到没有 nav 节点的控件：焦点留着，nav 状态不动，只 warning。"""
+    import logging
+
     rig.land("titlebar.album")
 
     stray = QPushButton(rig.window)
     stray.setGeometry(0, 0, 10, 10)
     stray.show()
     try:
-        stray.setFocus(Qt.FocusReason.OtherFocusReason)
-        rig.app.processEvents()
+        with caplog.at_level(logging.WARNING,
+                             logger="albuswall.ui.presenter"):
+            stray.setFocus(Qt.FocusReason.OtherFocusReason)
+            rig.app.processEvents()
 
         assert rig.current == "titlebar.album"
-        assert rig.focused_widget() is rig.window.title_bar.album_button
+        # 硬接管：nav 不跟 Qt 抢焦点（旧实现会把它拽回 album_button）
+        assert rig.focused_widget() is stray
+        assert any("unregistered widget" in record.getMessage()
+                   for record in caplog.records)
     finally:
         stray.deleteLater()
         rig.app.processEvents()
