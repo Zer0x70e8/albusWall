@@ -466,11 +466,17 @@ def test_sync_across_regions(rig):
 
 
 def test_sync_from_deeper_region_pops_first(rig):
-    """从详情页点回内容层：先弹栈再落到正确区域。"""
+    """从详情页点回内容层：先弹栈再落到正确区域。
+
+    叠层开着时内容层被盖住、不可落点（``wiring._overlay_blank``），所以先把
+    页收起来 —— 真实交互里也只有这时候才点得到内容层。
+    """
     rig.open_page("detail")
     rig.focus(rig.window.detail.image_viewer)
     assert rig.frame.domain_id == "detail"
 
+    rig.window.close_overlay()
+    rig.app.processEvents()
     rig.focus(rig.window.content)
     assert rig.frame.domain_id == "content"
     assert rig.current == "content.body"

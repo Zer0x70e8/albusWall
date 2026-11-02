@@ -333,21 +333,38 @@ def test_disabled_button_is_not_a_landing_point(nav, window):
 
 
 def test_leaf_nodes_focus_inner_control(nav, window):
+    """复合叶节点（落点控件 ≠ 节点控件）装 ``focus_fn`` 指到内部控件。"""
     register_window_nav(window, registry=nav)
 
     form = nav.get_node("source.form")
     assert form is not None and form.focus_fn is not None
     form.focus_fn()
-    window.source.detail_widget.title_line_edit.focus_calls == 1
+    assert window.source.detail_widget.title_line_edit.focus_calls == 1
 
     tagbar = nav.get_node("detail.tagbar")
     assert tagbar is not None and tagbar.focus_fn is not None
     tagbar.focus_fn()
     assert window.detail.tag_bar.tag_line_edit.focus_calls == 1
 
+
+def test_plain_leaf_nodes_have_no_focus_fn(nav, window):
+    """普通叶节点（落点控件就是节点控件）不装 ``focus_fn``。
+
+    这样 ``focus_node`` 走 ``apply_focus`` + 验证路径：焦点没落上去能被发现
+    并回滚（装了 ``focus_fn`` 的节点按契约 4 不验证）。
+    """
+    register_window_nav(window, registry=nav)
+
+    for node_id in ("content.body", "album.cover", "album.trash",
+                    "source.cards", "detail.image", "detail.strip",
+                    "panel.meta"):
+        node = nav.get_node(node_id)
+        assert node is not None, node_id
+        assert node.focus_fn is None, node_id
+
     body = nav.get_node("content.body")
-    assert body is not None and body.focus_fn is not None
-    body.focus_fn()
+    window.overlay.current = None          # 叠层收起：内容层可落点
+    assert nav.focus_node(body) is True
     assert window.content.focus_calls == 1
 
 
@@ -413,7 +430,8 @@ def test_wiring_is_idempotent(nav, window):
     domain_count = len(nav.domains())
     node_count = sum(len(domain.nodes) for domain in nav.domains())
 
-    # 模拟「上一轮已经进入过某个区域」
+    # 模拟「上一轮已经进入过某个区域」（内容层要先收起叠层才可落点）
+    window.overlay.current = None
     nav.set_current(NAV_PAGE_ID, "window.content")
     nav.enter(NAV_PAGE_ID, how="tab")
     assert nav.current_frame(NAV_PAGE_ID).domain_id == "content"
@@ -503,6 +521,7 @@ def test_esc_pops_region_back_to_root(nav, window):
 def test_should_pass_through_in_leaf_domain(nav, window):
     """进了内容层叶域，方向键与回车让渡给控件，Esc / Tab 仍归 nav。"""
     register_window_nav(window, registry=nav)
+    window.overlay.current = None                   # 叠层收起：内容层可落点
     nav.set_current(NAV_PAGE_ID, "window.content")
     nav.enter(NAV_PAGE_ID, how="tab")               # → content.body
 

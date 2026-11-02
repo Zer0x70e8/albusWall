@@ -57,7 +57,7 @@
                             归控件滚动，←/→ 留给 nav
 ==========================  ======================================
 
-``visible_fn`` 的三个真实用途
+``visible_fn`` 的四个真实用途
 =============================
 
 * overlay 的三个页（相册 / 导入源 / 详情）**共用同一格** ``(2, 0)``，用
@@ -66,7 +66,10 @@
 * **整页不可见时页内节点一律不可落点**（``_all_of`` 把「页面开着」与各自的
   额外条件合起来）：否则方向键 / 焦点回流会把人带进看不见的页；
 * 详情页的信息面板只在 ``panel.isVisible()`` 时可达；
-* 详情页的 HUD（含关闭按钮）在快速预览模式下被隐藏，那时不该能落上去。
+* 详情页的 HUD（含关闭按钮）在快速预览模式下被隐藏，那时不该能落上去；
+* **叠层可见时，被它盖住的内容层不可落点**（``_overlay_blank``）：内容层的
+  区域入口（``window.content``）与页内叶节点（``content.body``）都加上这条
+  闸门。标题栏不加 —— 它盖在叠层之上，仍然可达，符合现有交互。
 
 按钮节点的 ``action`` 一律是 ``widget.click``
 =============================================
@@ -165,6 +168,25 @@ def _overlay_shows(window: Any, page_attr: str) -> Any:
     return visible
 
 
+def _overlay_blank(window: Any) -> Any:
+    """``visible_fn``：overlay 当前**没有**显示任何页（空白层）。
+
+    叠层可见时，被它盖住的内容层不该还能被落点：否则方向键 / 焦点回流会把
+    光标送到一个被遮住的控件上，用户看到的是「选中了看不见的东西」。
+    标题栏不受影响——它在叠层之上仍然可达。
+    """
+    def visible() -> bool:
+        overlay = _get(window, "overlay")
+        is_blank = _get(overlay, "is_blank")
+        if callable(is_blank):
+            return bool(is_blank())
+        # 没有 ``is_blank`` 的替身：退回「当前页是不是空白」的最小判定
+        current = _get(overlay, "currentWidget")
+        return bool(callable(current) and current() is None)
+
+    return visible
+
+
 def _all_of(*checks: Any) -> Any:
     """把若干 ``visible_fn`` 合成一个：全部可见才可见（``None`` 视为恒可见）。"""
     active = [check for check in checks if check is not None]
@@ -238,6 +260,12 @@ def _leaf_node(
     ``focus_on`` 是复合控件的「内部焦点目标」（如标签栏的输入框）；不给时焦点
     直接落在 ``attr`` 那个控件上。
 
+    ``focus_fn`` **只在「落点控件与节点控件不同」时安装**（``focus_on`` 不是
+    ``None`` 且不是同一个控件）。普通叶节点不装：让
+    :meth:`~albuswall.ui.nav.registry.NavRegistry.focus_node` 走
+    ``apply_focus`` + **验证** 路径——焦点没落上去能被发现并回滚；装了
+    ``focus_fn`` 的节点按契约 4 视为「nav 猜不出来」，不验证。
+
     ``pass_through`` 声明这个控件真正能自己消化的键（见模块 docstring 的三档
     约定）；``None`` → :data:`LEAF_PASS_THROUGH_KEYS`（滚动网格全集）。
     """
@@ -246,11 +274,13 @@ def _leaf_node(
         return None
     keys = set(
         LEAF_PASS_THROUGH_KEYS if pass_through is None else pass_through)
+    landing = focus_on if focus_on is not None else widget
+    install_focus_fn = focus_on is not None and focus_on is not widget
     return Node(
         id=node_id,
         widget=widget,
         grid=GridPlacement(row, col),
-        focus_fn=_focus_fn(focus_on if focus_on is not None else widget),
+        focus_fn=_focus_fn(landing) if install_focus_fn else None,
         pass_through_keys=keys,
         visible_fn=visible_fn,
     )
@@ -265,6 +295,13 @@ def _gateway_node(
 
     ``focus_on`` 是这个区域「进来该把焦点交给谁」（通常是它的第一个控件）；
     不给时焦点落在入口节点自己的 widget 上。
+
+    ``focus_fn`` 在这里**保留**（与 ``_leaf_node`` 的策略不同）：容器的
+    ``widget`` 是区域容器本体，而容器在 Qt 侧被
+    :meth:`~albuswall.ui.nav.qt.QtFocusBackend.ensure_focusable` 固定成
+    ``NoFocus``（Qt 的焦点链不该碰到区域容器），所以「落点」只能靠
+    ``focus_fn`` 交给内部控件。``Node.focusable`` 仍为 ``True``：nav 侧照旧
+    可以把光标落在这个区域入口上（方向键 / Tab 的落点语义不变）。
     """
     widget = _get(owner, attr)
     if widget is None:
@@ -365,11 +402,14 @@ def _register_domains(nav: NavRegistry) -> None:
 def _register_root(nav: NavRegistry, window: Any) -> None:
     """``window`` 域：三个区域入口（overlay 的三个页共用一格，靠可见性区分）。"""
     _register(nav, ROOT_DOMAIN, [
+        # 标题栏不因叠层开着而不可达：它盖在叠层之上，仍然能点、能按。
         _gateway_node("window.titlebar", window, "title_bar", "titlebar",
                       row=_ROW_TITLEBAR,
                       focus_on=_get(_get(window, "title_bar"), "album_button")),
+        # 内容层被叠层盖住时不可落点（见 _overlay_blank 的 docstring）。
         _gateway_node("window.content", window, "content", "content",
-                      row=_ROW_CONTENT),
+                      row=_ROW_CONTENT,
+                      visible_fn=_overlay_blank(window)),
         _gateway_node("window.album", window, "album", "album",
                       row=_ROW_PAGE,
                       focus_on=_get(_get(window, "album"), "album_view"),
@@ -405,7 +445,9 @@ def _register_titlebar(nav: NavRegistry, window: Any) -> None:
 def _register_content(nav: NavRegistry, window: Any) -> None:
     """内容层：整块虚拟滚动网格是一个叶节点（它自带光标与翻页）。"""
     _register(nav, "content", [
-        _leaf_node("content.body", window, "content", row=0),
+        # 叠层可见时内容层被盖住：页内的叶节点也不该可落点。
+        _leaf_node("content.body", window, "content", row=0,
+                   visible_fn=_overlay_blank(window)),
     ])
 
 

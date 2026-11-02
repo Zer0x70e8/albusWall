@@ -339,7 +339,19 @@ reg.register_domain(Domain(
   提升 / 解析器与销毁容错）+ 注册表端到端验证；
 - `test_dispatcher.py`：后端注入与 `stop` 还原、方向键落点与真实焦点一致、
   `focus_node` 失败回滚且不消费、Tab 进域 / 域内遍历 / 末尾消费、Shift+Tab
-  回退再出域、焦点被抢走后拉回、挂起时 nav 动作返回 `None`。
+  回退再出域、焦点跑到地盘外只告警不拉回、挂起时 nav 动作返回 `None`；
+- `test_blur_update_keeps_focus.py`：叠层自隐藏刷新（`BlurLabel._update_blur`）
+  之后焦点仍在页内、`nav.current` 仍在同一域；
+- `test_root_shift_tab_consumed.py`：根帧 Shift+Tab 被消费（焦点头不动、无
+  未注册控件拿到焦点），页内 Shift+Tab 正常弹回父帧；
+- `test_container_focus_policy.py`：容器节点永远 `NoFocus`（唯一例外是
+  容器与叶共用控件的 `window.content`），区域入口在 nav 侧仍可落点；
+- `test_focus_changed_no_pullback.py`：杂散焦点只 warning、不拉回、不改 nav；
+- `test_leaf_focus_fn_not_installed.py`：普通叶节点不装 `focus_fn`（走
+  `apply_focus` + 验证），复合叶节点仍装；
+- `test_overlay_gates_content.py`：叠层可见时被盖住的内容层不可落点；
+- `test_focus_lands_within_nav.py`：结构性断言——`focus_node` 成功时焦点必须
+  落在 nav 认知内的控件上。
 
 **覆盖率底线**：`registry.py` 的方法级覆盖 ≥ 95%。低于这个数意味着某条决策分支没人走过。
 
@@ -499,7 +511,7 @@ nav 接管），但 v1 **不跨域**。
 | B3 | `focus_node` 受控执行（返回 `bool`，验证失败 warning） | `registry.py` |
 | B4 | `last_action_ok` + `snapshot` / `restore` + `suspend` / `resume` | `registry.py` |
 | C1 | `QtFocusBackend`（`nav/qt.py`）与分发器侧执行语义 | `nav/qt.py` / `nav_presenter.py` |
-| C2 | 焦点回灌：命中对齐、不可见跳过、不命中拉回 | `nav_presenter.py` |
+| C2 | 焦点回灌：命中对齐、不可见跳过、不命中只 warning（不拉回） | `nav_presenter.py` |
 | C3 | 挂起 / 恢复（presenter 计数 + 注册表页面级挂起） | 两处 |
 | D1 | `Domain.tab_order` | `model.py` |
 | D2 | `tab_next` / `tab_prev`（v1 不跨域） | `registry.py` |
