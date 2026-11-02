@@ -483,6 +483,78 @@ class NavRegistry:
 
         return self._grid_scan(page_id, domain, frame, direction)
 
+    # -- 域内 Tab 语义 --------------------------------------------------
+    @_acting
+    def tab_next(self, page_id: str) -> Node | None:
+        """域内 Tab：在当前域里按顺序前进一个落点；返回落点或 ``None``。
+
+        顺序来源：``Domain.tab_order`` 给出时严格按它，否则按
+        :class:`~albuswall.ui.nav.model.GridPlacement` 的 ``(row, col)`` 排序
+        （无 grid 的节点排在后面，彼此按注册顺序）。``focusable=False`` 与当前
+        不可见的节点一律跳过。
+
+        - ``current is None`` → 落域入口，等价于 ``enter(how="tab")``；
+        - ``current`` 不在可落点列表里（停在隐藏节点上）→ 落到该顺序的第一个
+          可见节点（不 ``None``，否则一次隐藏就把 Tab 卡死）；
+        - 已经是最后一个可见节点 → 返回 ``None``。
+
+        **v1 不跨域**：末尾返回 ``None`` 之后要不要跨到别的区域由分发器决定
+        （当前实现是不跨，把按键冒泡出去 / 由调用方另行编排）。进 / 出一个域
+        仍然走 :meth:`enter` / :meth:`exit_back`。
+        """
+        return self._tab_step(page_id, forward=True)
+
+    @_acting
+    def tab_prev(self, page_id: str) -> Node | None:
+        """域内 Shift+Tab：:meth:`tab_next` 的反方向（同样 v1 不跨域）。
+
+        已经在第一个可见落点上时返回 ``None``，由分发器决定是冒泡还是
+        :meth:`exit_back`。
+        """
+        return self._tab_step(page_id, forward=False)
+
+    def _tab_step(self, page_id: str, *, forward: bool) -> Node | None:
+        frame = self.current_frame(page_id)
+        if frame is None:
+            return None
+        domain = self._domains[frame.domain_id]
+        if frame.current is None:
+            # 虚拟根 / 域首：落域入口（与 enter(how="tab") 同一套三级 fallback）
+            return self.enter(page_id, how="tab")
+
+        order = [node.id for node in self._tab_order(domain)]
+        if not order:
+            return None
+        if frame.current not in order:
+            target = order[0] if forward else order[-1]
+            frame.current = target
+            return self._nodes[target]
+
+        idx = order.index(frame.current)
+        nxt = idx + 1 if forward else idx - 1
+        if not 0 <= nxt < len(order):
+            return None
+        frame.current = order[nxt]
+        return self._nodes[order[nxt]]
+
+    def _tab_order(self, domain: Domain) -> list[Node]:
+        """域内 Tab 顺序：``tab_order`` 优先，否则按网格坐标排序。"""
+        registered = [n for n in domain.nodes.values()
+                      if n.focusable and self._is_visible(n)]
+        if domain.tab_order is not None:
+            by_id = {n.id: n for n in registered}
+            return [by_id[node_id] for node_id in domain.tab_order
+                    if node_id in by_id]
+        position = {node_id: i for i, node_id in enumerate(domain.nodes)}
+        return sorted(
+            registered,
+            key=lambda n: (
+                (0, n.grid.row, n.grid.col, position[n.id])
+                if n.grid is not None
+                else (1, 0, 0, position[n.id])
+            ),
+        )
+
     # -- 内部判定 ------------------------------------------------------
     @staticmethod
     def _widget_flag(node: Node, name: str) -> bool:

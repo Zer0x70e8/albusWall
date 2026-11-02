@@ -173,6 +173,17 @@ class Domain:
     exit_directions: set[Direction] = field(default_factory=set)
     """沿这些方向找不到网格邻居时弹栈回父域（navbar 用 ``{UP, DOWN}``）。"""
 
+    tab_order: list[str] | None = None
+    """域内 Tab 顺序（节点 id 列表）。
+
+    ``None`` = 按 :class:`GridPlacement` 的 ``(row, col)`` 排序，无 grid 的节点
+    排在最后（彼此按注册顺序）；非 ``None`` = **严格**按此列表（没列出的节点
+    不参与域内 Tab，但仍可被方向键命中）。
+
+    只在域内遍历时有意义——进入 / 退出一个域仍走
+    :meth:`NavRegistry.enter` / :meth:`NavRegistry.exit_back`。
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class NavPlacement:
