@@ -91,6 +91,41 @@ Popup 菜单、标签树弹出）由 Qt 控件自治，nav 只负责进入 / 退
 紧随其后的 phase 3c 负责**首焦点**（落根域第一个可见入口）：wiring 只把页面
 复位到虚拟根，虚拟根上方向键没有落点，所以「第一次按键往哪走」归 boot 决定。
 
+硬接管的验证语义
+================
+
+**nav 硬接管的是决策，不是 Qt 的每一次 ``setFocus``。**
+
+在这一层，跨区域焦点该落在哪个节点，由 nav 的栈语义决定；Qt 的焦点链（Tab
+遍历、``focusNextPrevChild``、``setTabOrder``、点击取焦）**不参与导航决策**
+—— 这是「硬接管」的准确含义。
+
+但 nav **不承诺**「Qt 永远不会把焦点放到未注册控件上」。原因是架构性的：Qt
+的**内部焦点管理**会在自己认为合适的时候程序化 ``setFocus``，而程序化
+``setFocus`` 无视 ``focusPolicy``、也绕过 ``QFocusEvent`` 拦截。已知会这么做的
+有 ``QStackedLayout`` 换页（把焦点转给新页）、``QTabWidget`` 切页、
+``QDockWidget`` 停靠等。nav 的 ``NoFocus`` 策略 + 事件消费挡得住 "Tab / 点击"
+这条焦点链，**挡不住**这类内部行为 —— 这不是缺陷，是 nav 与 Qt 的边界。
+
+所以验证机制是**事后探针**，不是事前禁止：
+
+* 探针 = ``NavPresenter._report_stray_focus``（在 ``ui/presenter`` 包外，
+  可以 import Qt；nav 核心模块只描述语义，不引用它）；
+* 探针检测到「焦点落在未注册控件上」时，``logger.warning`` 记录控件类型 +
+  ``page`` / ``domain`` / ``nav.current`` 快照；
+* 探针**不拉回焦点、不改 nav 状态**：拉回是掩盖（它曾把焦点硬拽回旧光标，
+  反过来制造了「焦点跳回主窗口」），warning 是诚信。
+
+**判断「闭环」的判据是：探针未触发。** 探针一旦触发，说明出现了 nav 未预见的
+Qt 内部行为，处理方式是 **case-by-case**（给那个控件加 ``NoFocus``、在切页前
+主动交出焦点、或改落点策略），而不是质疑硬接管本身，更不是把探针调松。
+
+``TODO(v2)``：若要做「事前禁止」，需要在 ``QApplication`` 层拦截
+``QFocusEvent``、对未注册控件 ``ignore``。当前不做：代价大（要复刻 Qt 的焦点
+转移语义）、易碎（Qt 版本差异）、可能破坏 IME / 无障碍，而且**不一定挡得住**
+程序化 ``setFocus``。等出现「探针触发频率高到无法 case-by-case 处理」的场景再
+重新评估。
+
 调用方契约
 ==========
 
@@ -101,15 +136,17 @@ Popup 菜单、标签树弹出）由 Qt 控件自治，nav 只负责进入 / 退
    事件循环期间，调用方不得调 ``move`` / ``enter`` / ``exit_back`` / ``esc`` /
    ``shift_esc`` / ``jump_to_page_root`` / ``tab_next`` / ``tab_prev``。
 
-   **机器保证分两层，口径以本节为准**：
+   **当前有两条防线，口径以本节为准；其中第一层是调用方责任，nav 不会
+   自动感知模态 —— 所以别把这一节读成「框架替你保证了」。**
 
-   * ``NavRegistry.suspend(page_id)`` / ``resume(page_id)`` —— 挂起期间上述
-     动作方法一律返回 ``None`` 且不改状态。**这一步由调用方显式触发**：谁
-     开模态，谁负责挂起（如命令处理里 ``with presenter.suspended():``）；
-   * ``NavPresenter._is_blocked()`` —— 分发器的**统一短路**：``_suspended``
-     计数 > 0、或 Qt 当前有 ``activeModalWidget()`` / ``activePopupWidget()``
-     时，分派直接放行（不消费、不动光标）。这是「调用方忘了挂起」时的第二
-     道防线。
+   * **第一层：调用方显式挂起。** ``NavRegistry.suspend(page_id)`` /
+     ``resume(page_id)`` —— 挂起期间上述动作方法一律返回 ``None`` 且不改
+     状态。**这一步是调用方的责任**：谁开模态，谁负责挂起（如命令处理里
+     ``with presenter.suspended():``）。nav 不会自己感知模态。
+   * **第二层：分发器兜底短路。** ``NavPresenter._is_blocked()`` ——
+     ``_suspended`` 计数 > 0、或 Qt 当前有 ``activeModalWidget()`` /
+     ``activePopupWidget()`` 时，分派直接放行（不消费、不动光标）。它兜的是
+     「调用方忘了挂起」，**不改变**「挂起是调用方责任」这条事实。
 
    ``TODO(v2)``：把第二道防线升级成**统一 suspend**（出现模态 / 弹窗时自动
    ``nav.suspend(page_id)``、消失时 ``resume``，删掉 ``_is_blocked`` 的分派

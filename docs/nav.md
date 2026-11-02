@@ -226,6 +226,42 @@ navbar 设 `{RIGHT: "enter"}` 时，`move(RIGHT)` 走的是 `enter(how="enter")`
 所以实现是 `collections.namedtuple(...)` 派生 + 裸调 `_GridPlacementBase.__new__`：
 保持不可变元组 / 可哈希 / 可解包，代价是多两行样板。**别「顺手」改回 `typing.NamedTuple`**，那会让整个包 import 失败。
 
+### 5.8 硬接管的边界（能保证什么、不能保证什么）
+
+**能保证的**：
+
+- 跨区域焦点该落在哪个节点，**决策归 nav**（域栈语义），Qt 的焦点链
+  （Tab 遍历、`focusNextPrevChild`、`setTabOrder`、点击取焦）不参与决策；
+- Tab / Shift+Tab / 方向键 / 回车 / Esc 在 nav 管辖范围内被 nav 消费，不会被
+  Qt 的焦点链接手（`_handle_tab` 任何分支都不冒泡）；
+- 程序化 `setFocus` 只发生在 nav 自己决定落点的地方（`focus_node` →
+  `apply_focus` / `focus_fn`），以及 `wiring` 之后 boot 的「首焦点」。
+
+**不能保证的**：Qt 的**内部焦点管理**会程序化 `setFocus`，而程序化
+`setFocus` 无视 `focusPolicy`、也绕过 `QFocusEvent` 拦截。已知会这么做的有
+`QStackedLayout` 换页（把焦点转给新页）、`QTabWidget` 切页、`QDockWidget` 停靠
+等。nav 的 `NoFocus` + 事件消费挡得住 Tab / 点击这条焦点链，**挡不住**这些内部
+行为。这不是缺陷，是 nav 与 Qt 的边界（包文档「硬接管的验证语义」一节是全文
+口径）。
+
+**兜底机制**：事后探针。`NavPresenter._report_stray_focus` 检测到焦点落在未注册
+控件上时 `logger.warning`（控件类型 + `page` / `domain` / `nav.current` 快照），
+**不拉回、不改 nav 状态**。「闭环」的判据是**探针未触发**；探针触发即意味着出现
+了 nav 未预见的 Qt 内部行为，处理方式是 case-by-case（给控件加 `NoFocus`、切页
+前主动交出焦点、或改落点策略）——**不允许调松探针**。
+
+**已处理的案例**：
+
+| 场景 | 处理 | 位置 |
+|---|---|---|
+| 关 overlay 页时 `QStackedLayout` 把焦点转给空白占位页 | 切页前 `clearFocus()` 交出焦点（占位页本身就是 `NoFocus`，策略挡不住程序化 `setFocus`） | `widgets/passthrough_stack_widget.py::PassthroughStack._release_focus` |
+| 关页之后焦点该去哪 | 经 nav 弹回根帧 + 落确定的区域入口，不直接 `setFocus` | `nav_presenter.py::NavPresenter._on_overlay_page_changed` |
+| 容器节点被 Qt 焦点链碰到 | 容器永远 `NoFocus`；「容器与叶共用控件」时让位给叶 | `nav/qt.py::QtFocusBackend.ensure_focusable` + `is_landing_widget` |
+
+**事前禁止（v2）**：要在 `QApplication` 层拦 `QFocusEvent`、对未注册控件
+`ignore`。当前不做：代价大（要复刻 Qt 的焦点转移语义）、易碎（Qt 版本差异）、
+可能破坏 IME / 无障碍，且不一定挡得住程序化 `setFocus`。见 §7。
+
 ---
 
 ## 6. 修改这里的决策 checklist
@@ -296,6 +332,7 @@ reg.register_domain(Domain(
 | `switch_page` 页面列表 | `switch_page` | v1 返回 `(page_id, page_id)`，实际切换未实现 |
 | `jump_to_page_root` 键位 | 调用方 | 方法已实现，未绑快捷键 |
 | `unregister_*` 级联 | 注册表 | v1 不级联清理 `child_domain` / `PageState` 引用 |
+| 硬接管的「事前禁止」 | 未来：`QApplication` 层 | 拦 `QFocusEvent`、对未注册控件 `ignore`。代价大 / 易碎 / 可能破坏 IME 与无障碍，且不一定挡得住程序化 `setFocus`；当前用事后探针（§5.8） |
 
 **已实现（从 v2 待办移出）**：叶域类型仍留待 v2；`FocusBackend` 受控执行（B）、
 模态 `suspend` / `resume`（C3）、域内 Tab 语义（D）、焦点执行验证与回滚、
@@ -461,6 +498,25 @@ loop        → show_ui：显示容器里的 main_window
 按钮节点的 `action` 一律是 `widget.click` —— 与「焦点在按钮上按回车」的 Qt 原生
 行为一致，也顺带满足契约 5：`detail.trash_button` 那种「一控件两语义」的按钮，
 点下去由控件自己的槽按状态分流，nav 不需要知道状态。
+
+### overlay 关页落点（默认策略，非唯一正确落点）
+
+overlay 页关闭时，分发器经 nav 决定焦点落点（`_on_overlay_page_changed`）：
+先 `exit_back` 一路弹回页面根帧，再按下面的顺序挑落点 ——
+
+1. 根帧上残留的光标仍然可见 → 就落它；
+2. **内容层入口**：`window.content` 可见时进内容域、落 `content.body`（叠层收起
+   后被揭开的那一层，也是用户视觉上「回到的地方」）；
+3. **标题栏入口**：`window.titlebar`（内容层不可见时兜底，例如未来出现「关页后
+   内容层仍被遮住」的场景）。
+
+**这是默认策略，不是唯一正确落点。** 要改就改
+`NavPresenter._on_overlay_page_changed` 里的落点顺序；`tests/ui/nav/qt/`
+里锁 `content.body` 的断言是**策略锁定**，策略一变要跟着改断言。
+
+为什么不直接 `setFocus`：落点必须由 nav 决定（`set_current` / `entry` /
+`focus_node`），直接 `setFocus` 会绕过栈语义与验证，制造「逻辑光标与真实焦点
+各走各的」——正是硬接管要消灭的状态。
 
 实测（真实 `Window`）：**8 个域 / 35 个节点**（`nav domains` 里还会多出
 `main::page_focus` —— 那是 `ensure_page` 自动建的页面焦点域），`Tab` 先落
