@@ -112,6 +112,8 @@ def test_closing_a_nested_page_lands_on_the_revealed_content(nav_rig):
     rig.window.close_overlay()
     rig.app.processEvents()
 
+    # 策略锁定（不是语义锁定）：当前默认落点是内容层入口 → content.body，
+    # 见 docs/nav.md「overlay 关页落点（默认策略）」。策略变更时同步改断言。
     assert rig.frame.domain_id == "content"
     assert rig.current == "content.body"
     assert rig.app.focusWidget() is rig.window.content

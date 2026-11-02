@@ -106,7 +106,8 @@ def test_shift_tab_closes_the_overlay_page_at_the_root(nav_rig):
     assert rig.press(Qt.Key.Key_Backtab, _SHIFT) is True
     rig.app.processEvents()
     assert rig.window.overlay.is_blank() is True
-    # 关页之后焦点交给确定的父区域入口（内容层），光标随之离开虚拟根
+    # 关页之后焦点交给确定的父区域入口（内容层），光标随之离开虚拟根。
+    # 策略锁定：默认落点 content.body，见 docs/nav.md「overlay 关页落点」。
     assert rig.frame.domain_id == "content"
     assert rig.current == "content.body"
     assert rig.focused_widget() is rig.window.content

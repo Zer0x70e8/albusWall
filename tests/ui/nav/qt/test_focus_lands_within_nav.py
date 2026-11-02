@@ -26,6 +26,7 @@ def assert_focus_within_nav(nav, backend, node):
 
 
 def test_every_visible_node_lands_its_focus_within_nav(nav_rig):
+    """对 wiring 后每个可见节点跑 ``focus_node``，逐条校验落点在 nav 认知内。"""
     rig = nav_rig
     backend = rig.nav.backend
     assert isinstance(backend, QtFocusBackend)
