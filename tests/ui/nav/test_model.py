@@ -139,3 +139,19 @@ def test_node_hash_ignores_unhashable_fields():
     b = Node(id="n", widget=W, pass_through_keys={"down"})
     assert hash(a) == hash(b)
     assert a == b  # 行为配置不参与相等性
+
+
+def test_domain_tab_order_defaults_to_none():
+    """D1：``tab_order`` 缺省 ``None`` = 按网格坐标排序，且不共享可变默认值。"""
+    first = Domain(id="a")
+    second = Domain(id="b")
+    assert first.tab_order is None
+    assert second.tab_order is None
+
+    first.tab_order = ["a.x"]
+    assert second.tab_order is None       # 每个域一份，不是类级共享
+
+
+def test_domain_tab_order_accepts_explicit_list():
+    domain = Domain(id="d", tab_order=["x", "y"])
+    assert domain.tab_order == ["x", "y"]

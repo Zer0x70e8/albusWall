@@ -1,23 +1,32 @@
 #
-"""``albuswall.ui.nav`` —— 界面导航的**注册层**。
+"""``albuswall.ui.nav`` —— 界面导航的**受控执行层**。
 
 :mod:`albuswall.ui.keymap` 回答「哪个键触发哪条命令」；本包回答「按了方向键 /
-Tab / Enter 之后，光标该落到哪个控件上」。两件事都只需要**声明**，不需要
-Qt 事件，所以拆成独立子包：
+Tab / Enter 之后，光标该落到哪个控件上」，并**验证**这句话有没有兑现。两件事
+都只需要**声明**，不需要 Qt 事件，所以拆成独立子包：
 
-====================================  ======================================
-模块                                  职责
-====================================  ======================================
-``model``                             节点 / 域 / 网格坐标 / 页面状态
-``registry``                          域与节点的注册表 + 全部导航决策
-``errors``                            本层异常
-====================================  ======================================
+===================================  =====================================
+模块                                 职责
+===================================  =====================================
+``model``                            节点 / 域 / 网格坐标 / 页面状态
+``backend``                          焦点执行后端协议（``FocusBackend``）
+``registry``                         域与节点的注册表 + 全部导航决策 +
+                                     受控执行（``focus_node`` / 回滚 / 挂起）
+``wiring``                           把主窗口控件树翻译成域与节点
+``errors``                           本层异常
+===================================  =====================================
 
-职责边界（三条硬约束）：
+同包里另有一个 **Qt 适配器** ``nav/qt.py``（``QtFocusBackend``）：它是本包
+唯一 import Qt 的模块，**不被上面任何模块 import**——只由包外的分发器
+（:class:`albuswall.ui.presenter.nav_presenter.NavPresenter`）注入。所以下面
+三条硬约束对它**不适用**，对其余模块一律成立。
 
-* **不 import Qt**、不安装事件过滤器、不接 ``QShortcut``；
+职责边界（三条硬约束，仍有效）：
+
+* ``model`` / ``errors`` / ``backend`` / ``registry`` / ``wiring``
+  **不 import Qt**、不安装事件过滤器、不接 ``QShortcut``；
 * **不主动 ``setFocus()``**——焦点执行只通过
-  :meth:`NavRegistry.focus_node` 由调用方触发；
+  :meth:`NavRegistry.focus_node`，且执行能力外包给 ``FocusBackend``；
 * 与 ``albuswall.ui.keymap`` 是**单向**依赖：只在 ``TYPE_CHECKING`` 下
   import ``ShortcutSlot``，运行时按属性鸭子取 ``nav`` 声明。
 
@@ -32,7 +41,29 @@ Qt 事件，所以拆成独立子包：
     nav.register_node(Node(id="viewer.canvas", widget=canvas), domain_id="viewer")
     state = nav.ensure_page("main", root_domain="viewer")
     node = nav.enter("main", how="tab")     # → viewer.canvas
-    nav.focus_node(node)
+    nav.focus_node(node)                    # → True（执行并验证）
+
+受控执行：三个部件，三条职责
+============================
+
+=====================  ==============================================
+部件                   只做这件事
+=====================  ==============================================
+``NavRegistry``        决策 + 状态：算落点、维护域栈与 ``current``、
+                       判断落点是否可见、记录「这次动作有没有进展」
+                       （``last_action_ok``）、提供 ``snapshot`` /
+                       ``restore`` / ``suspend`` / ``resume``
+``FocusBackend``       执行 + 观测：``apply_focus`` / ``ensure_focusable``
+                       真的动焦点，``current_focus_chain`` 把结果读回来，
+                       ``widget_to_node_id`` 支持反向回灌
+``NavDispatcher``      编排 + 收口：拦按键、决定消费还是冒泡、失败时回滚、
+（= ``NavPresenter``）  把 ``focusChanged`` 回灌进 ``current``、模态期间
+                       ``suspend``
+=====================  ==============================================
+
+于是「逻辑光标」和「Qt 真实焦点」不会各走各的：nav 说落了，就一定验证过；
+验证不过，分发器把状态回滚并让事件冒泡。nav **仍然**不 import Qt——执行能力
+是通过协议借来的，不是自己长出来的。
 
 定位：区域级路由器
 ====================
@@ -45,15 +76,20 @@ Popup 菜单、标签树弹出）由 Qt 控件自治，nav 只负责进入 / 退
 
 1. ``Domain(has_root=False, entry="容器节点id")``
 2. 容器节点注册为 ``focusable=True``（不是 ``False``），widget 指向容器本身
-3. 容器节点 ``pass_through_keys=DEFAULT_PASS_THROUGH_KEYS``
-   （或 ``widget.keymap_passthrough = True``）
+3. 容器节点 ``pass_through_keys=`` **按控件实际能吞的键**声明（或
+   ``widget.keymap_passthrough = True`` 表达「让渡全集」）。**禁止一刀切全集**：
+   单行输入让渡 ←/→ 就够了（↑/↓ 与回车要留给 nav），滚动网格才值得拿全集。
+   主窗口的现成模板是 ``wiring.LEAF_PASS_THROUGH_KEYS`` /
+   ``LEAF_PASS_THROUGH_HORIZONTAL`` / ``LEAF_PASS_THROUGH_VERTICAL``
 4. 进入该域后 ``nav.current`` 停在容器节点上；后续按键由调用方先问
    :meth:`NavRegistry.should_pass_through` → 命中则 ``event.ignore()``
    让控件自治
 5. 退出该域由调用方根据控件信号触发 ``exit_back`` / ``esc``
 
 主窗口的实际接线在 :mod:`albuswall.ui.nav.wiring`（``register_window_nav``），
-由界面 boot 的 phase 3 调用（见 :func:`albuswall.ui.bootstrap.setup_ui`）。
+由界面 boot 的 phase 3 调用（见 :func:`albuswall.ui.bootstrap.setup_ui`），
+紧随其后的 phase 3c 负责**首焦点**（落根域第一个可见入口）：wiring 只把页面
+复位到虚拟根，虚拟根上方向键没有落点，所以「第一次按键往哪走」归 boot 决定。
 
 调用方契约
 ==========
@@ -63,13 +99,17 @@ Popup 菜单、标签树弹出）由 Qt 控件自治，nav 只负责进入 / 退
 1. **模态期间不调 nav 动作方法**
    ``QDialog.exec`` / ``QMenu.exec`` / Popup / ``QFileDialog`` 等阻塞式嵌套
    事件循环期间，调用方不得调 ``move`` / ``enter`` / ``exit_back`` / ``esc`` /
-   ``shift_esc`` / ``jump_to_page_root``。模态返回后调一次 ``set_current``
-   同步状态（见契约 2）。
+   ``shift_esc`` / ``jump_to_page_root`` / ``tab_next`` / ``tab_prev``。
+   用 ``NavRegistry.suspend(page_id)`` / ``resume(page_id)`` 把这条契约变成
+   机器保证：挂起期间这些方法一律返回 ``None`` 且不改状态。
 
-2. **焦点变化必须回调 ``set_current``**
-   鼠标点击、程序化 ``setFocus``、Qt 焦点链跳转，都必须在之后调
-   ``nav.set_current(page_id, node_id | None)``。nav 不做两向同步，调用方
-   不做就是 bug——下次按键会从过期位置跳。
+2. **焦点回流由分发器自动完成，手工 ``set_current`` 只在绕过它时才需要**
+   装了 ``NavPresenter`` 之后，鼠标点击 / 程序化 ``setFocus`` / Qt 焦点链
+   跳转都会被 ``QApplication.focusChanged`` 捕获并回灌到 ``nav.current``
+   （祖先链上找不到节点时还会把焦点拉回当前光标）。此时**不要**再手工调
+   ``set_current``，那是重复劳动，而且会在分发器回灌之前插一脚。
+   只有两种情况需要手工：① 没有装分发器（headless / 单测 / CLI 内省）；
+   ② 要求「逻辑光标先于真实焦点」移位（例如关页前预置落点）。
 
 3. **静态布局用 ``GridPlacement``，动态网格用叶域**
    列数会变（Ctrl+滚轮、进详情模式）/ 行数未知（资产数量）/ 虚拟化（只绘制
@@ -80,6 +120,9 @@ Popup 菜单、标签树弹出）由 Qt 控件自治，nav 只负责进入 / 退
 4. **``focus_fn`` 内部负责「聚焦 + 确保可见」**
    nav 不提供独立 ``scroll_fn``；需要滚动的控件在 ``focus_fn`` 里自己调
    ``scrollTo`` / ``ensureWidgetVisible``。nav 只负责决策「给哪个节点」。
+   ``focus_fn`` 一旦给出，其执行结果**被视为成功**（自定义执行可能落到的
+   是控件的后代，nav 猜不出来）；没有 ``focus_fn`` 时才走
+   ``backend.apply_focus`` 并读焦点链验证。
 
 5. **同一 widget 多语义用 ``action`` 内部分支**
    trash/restore、favourite 切换、checkable Enter 等，一律在 ``action`` 内按
@@ -92,15 +135,20 @@ Popup 菜单、标签树弹出）由 Qt 控件自治，nav 只负责进入 / 退
    ``widget.keymap_passthrough=True``，否则方向键会被 nav 抢走（叶域内无节点
    可跳，返回 ``None``，光标卡死）。
 
-   适用范围：``should_pass_through`` 只对**无修饰键**有意义。
+   适用范围：``should_pass_through`` **只对无修饰键**有意义。
 
    * 带 Ctrl / Alt / Meta 修饰的按键不查 ``should_pass_through``，直接走 nav
      正常流程（Ctrl+方向键通常是跨域跳跃或别的高层语义，不属于叶域控件自治
      范围）。
-   * Shift 是例外：Shift+Tab（Qt：``Key_Backtab``）语义是 ``exit_back``，不
-     属于「让渡」。分发器应把 Shift+Tab 优先映射到 ``exit_back``，而不是查
-     ``should_pass_through``。叶域容器仍可在 ``pass_through_keys`` 里声明
-     ``"tab"`` 让渡普通 Tab，但分发器需区分 Tab 与 Shift+Tab。
+   * Shift 是例外：Shift+Tab（Qt：``Key_Backtab``）语义是 ``exit_back`` /
+     ``tab_prev``，不属于「让渡」。分发器应把 Shift+Tab 优先映射到出域 /
+     域内后退，而不是查 ``should_pass_through``。叶域容器仍可在
+     ``pass_through_keys`` 里声明 ``"tab"`` 让渡普通 Tab，但分发器需区分
+     Tab 与 Shift+Tab。
+   * **命中之后就不再管**：让渡的键交给控件，控件自己也不要（``ignore()``）
+     时事件继续向窗口冒泡，nav **不再介入**这一次按键——让渡是「我这一层
+     放弃」，不是「我先问一句再看要不要抢回来」。需要 nav 接手的键，就不要
+     写进 ``pass_through_keys``。
 
 7. **隐藏节点用 ``visible_fn`` 声明，不要靠 unregister**
    ``visible_fn`` 返回 ``False`` 的节点不参与 move / enter / 落点判定。不要
@@ -112,10 +160,33 @@ Popup 菜单、标签树弹出）由 Qt 控件自治，nav 只负责进入 / 退
    调用方先后编排：先 keymap 处理（快捷键命中则消费），再 nav 动作（导航键
    命中则消费），最后冒泡给控件。``keymap_passthrough=True`` 的控件两者都不
    抢（nav 通过 ``should_pass_through`` 让渡，keymap 通过自身机制让渡）。
+
+分发器参考架构（为什么不用 ``QShortcut``）
+=========================================
+
+.. code-block:: text
+
+    QApplication.installEventFilter(dispatcher)      ← 唯一入口
+        KeyPress → 模态/挂起？→ 放行
+                 → keymap 先消费（带修饰键的快捷键）
+                 → 转 nav 键位名（qt_event_to_nav）
+                 → should_pass_through？→ 放行（控件自治）
+                 → Tab / Shift+Tab：容器上进出域，域内走 tab_next/tab_prev
+                 → move / enter / esc → 落点 → focus_node
+                 → focus_node 失败 → nav.restore() 回滚 + 放行
+    QApplication.focusChanged → 回灌 set_current（找不到节点 → 拉回焦点）
+    activeModalWidget / activePopupWidget → suspend
+
+``QShortcut`` 做不到这件事：它只在有窗口上下文时触发，一旦启用就**吃掉**
+按键，没有「算完发现没落点再冒泡」这条路径。而方向键必须能「先决策、有进展
+才消费」——这正是叶域里滚动网格能自己翻页、边界上空间留白又不被吞的原因。
+同理，**不要**把所有控件 ``setFocusPolicy(NoFocus)`` 再手工 ``sendEvent``：
+那会同时废掉 IME、spinbox 的键盘输入和无障碍焦点。
 """
 
 from __future__ import annotations
 
+from albuswall.ui.nav.backend import FocusBackend, NullFocusBackend
 from albuswall.ui.nav.errors import (
     DuplicateNavDomain,
     DuplicateNavNode,
@@ -147,9 +218,12 @@ from albuswall.ui.nav.registry import (
     NavRegistry,
     get_default_registry,
     registry_nav_registry,
+    set_default_backend,
 )
 from albuswall.ui.nav.wiring import (
+    LEAF_PASS_THROUGH_HORIZONTAL,
     LEAF_PASS_THROUGH_KEYS,
+    LEAF_PASS_THROUGH_VERTICAL,
     NAV_PAGE_ID,
     ROOT_DOMAIN,
     register_window_nav,
@@ -157,7 +231,9 @@ from albuswall.ui.nav.wiring import (
 
 __all__ = [
     "DEFAULT_PASS_THROUGH_KEYS",
+    "LEAF_PASS_THROUGH_HORIZONTAL",
     "LEAF_PASS_THROUGH_KEYS",
+    "LEAF_PASS_THROUGH_VERTICAL",
     "NAV_PAGE_ID",
     "ROOT_DOMAIN",
     "Direction",
@@ -165,6 +241,7 @@ __all__ = [
     "DomainFrame",
     "DuplicateNavDomain",
     "DuplicateNavNode",
+    "FocusBackend",
     "GridPlacement",
     "InvalidNavGrid",
     "NAV_DOWN",
@@ -179,6 +256,7 @@ __all__ = [
     "NavPlacement",
     "NavRegistry",
     "Node",
+    "NullFocusBackend",
     "PageState",
     "UnknownNavDomain",
     "UnknownNavNode",
@@ -189,6 +267,7 @@ __all__ = [
     "register_node",
     "register_window_nav",
     "registry_nav_registry",
+    "set_default_backend",
 ]
 
 

@@ -315,3 +315,24 @@ def test_slot_without_any_id_raises(reg):
     reg.register_domain(Domain(id="d", has_root=False, entry="x"))
     with pytest.raises(UnknownNavNode):
         reg.register_from_slot(NoIdSlot())
+
+
+def test_public_api_names_all_resolve():
+    """``nav.__all__`` 里的名字都得真的存在，且不重复（公开 API 完整性）。"""
+    import albuswall.ui.nav as nav_pkg
+
+    assert len(nav_pkg.__all__) == len(set(nav_pkg.__all__))
+    missing = [name for name in nav_pkg.__all__ if not hasattr(nav_pkg, name)]
+    assert missing == []
+    # 受控执行名面在包顶层可见
+    for name in ("FocusBackend", "NullFocusBackend", "set_default_backend",
+                 "LEAF_PASS_THROUGH_HORIZONTAL", "LEAF_PASS_THROUGH_VERTICAL"):
+        assert name in nav_pkg.__all__
+
+
+def test_qt_adapter_is_not_exported_by_the_package():
+    """``nav/__init__.py`` 不得导出 Qt 适配器（否则 import 包就拉起 Qt）。"""
+    import albuswall.ui.nav as nav_pkg
+
+    assert "QtFocusBackend" not in nav_pkg.__all__
+    assert not hasattr(nav_pkg, "QtFocusBackend")
