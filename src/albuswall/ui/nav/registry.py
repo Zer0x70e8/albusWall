@@ -1,9 +1,15 @@
 #
 """``albuswall.ui.nav`` 的注册表：注册（域 / 节点）+ 决策（返回落点）。
 
-本模块是纯决策层：不 import Qt、不装事件过滤器、不接 ``QShortcut``、不主动
-``setFocus``。所有「查到哪个节点」的答案都以返回值 / ``PageState`` 的形式交给
-调用方，焦点执行通过 :meth:`NavRegistry.focus_node` 由调用方触发。
+本模块是**受控执行层**：不 import Qt、不装事件过滤器、不接 ``QShortcut``。
+「往哪跳」的答案以返回值 / ``PageState`` 的形式交给调用方；「真的跳过去」
+通过 :meth:`NavRegistry.focus_node` 执行，执行能力外包给
+:class:`~albuswall.ui.nav.backend.FocusBackend`：
+
+- 决策（本模块）决定落点、维护域栈与 ``current``；
+- 执行（后端）负责 ``setFocus`` / 焦点策略 / 焦点链读取；
+- 于是 ``focus_node`` 可以**验证**执行结果，并在调用方（分发器）需要时被
+  回滚——逻辑光标与 Qt 真实焦点不再各自为政。
 
 动作返回 ``None`` 的多种含义，调用方需结合 ``stack`` / ``current`` 区分：
 
@@ -15,6 +21,10 @@
 - ``esc``：``esc_clears_current`` 命中（取消选中），或栈深 ≤ 1；
 - ``shift_esc`` / ``jump_to_page_root``：停在该域虚拟根或栈深 1。
 
+返回 ``None`` 不等于「什么都没发生」（例如 Esc 取消选中、Tab 推入一个有根
+子域）。要区分「动作是否有进展」请读 :attr:`NavRegistry.last_action_ok`：
+它在每次动作后记录「拿到了落点，或页面状态真的变了」。
+
 v2 待办（本次不实现，代码里不留 stub）：
 
 - 叶域类型 ``Domain.is_leaf``：把「叶域」约定升级为一等类型（见
@@ -23,15 +33,20 @@ v2 待办（本次不实现，代码里不留 stub）：
 - 页面栈管理层：从 ``WindowPresenter`` 手写 ``setFocus`` 兜底中抽象；
 - 页面↔域声明绑定：``PAGE_ROOTS = {page_id: root_domain}`` 显式声明表；
 - ``unregister_*`` 级联：换图 / 换模型时清理悬空 ``current``；
-- 模态 suspend / resume：可选 API，v1 由调用方契约 1 承担；
-- 网格 span 出口、网格碰撞检测、跨域跳跃。
+- 网格 span 出口、网格碰撞检测、跨域 Tab 跳跃。
+
+已实现（v1 收尾）：``FocusBackend`` 受控执行（``backend.py``）、模态
+suspend / resume、域内 Tab 语义（``Domain.tab_order`` /
+:meth:`NavRegistry.tab_next` / :meth:`NavRegistry.tab_prev`）。
 """
 
 from __future__ import annotations
 
+import functools
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal, TypeVar
 
+from albuswall.ui.nav.backend import FocusBackend, NullFocusBackend
 from albuswall.ui.nav.errors import (
     DuplicateNavDomain,
     DuplicateNavNode,
@@ -59,6 +74,38 @@ logger = logging.getLogger(__package__)
 
 _MAX_PEDAL_DEPTH = 4
 
+_T = TypeVar("_T")
+
+#: 一次动作的快照：``((domain_id, current), ...)``。
+Snapshot = tuple[tuple[str, str | None], ...]
+
+
+def _acting(method: Callable[..., Node | None]) -> Callable[..., Node | None]:
+    """装饰 nav 动作方法：处理 ``suspend`` + 记录 :attr:`last_action_ok`。
+
+    动作方法一律 ``(page_id, ...) -> Node | None``，所以这里能统一包起来，
+    不必在每个方法里手写一遍「有没有进展」的判定。
+
+    * 页面被 :meth:`NavRegistry.suspend` 挂起 → 直接 ``None``（不决策、不动
+      状态），调用方据此把按键冒泡出去；
+    * 否则先取状态快照，动作后判定：返回了落点，或快照变了 → ``True``。
+    """
+    @functools.wraps(method)
+    def wrapper(self: NavRegistry, page_id: str, *args: Any,
+                **kwargs: Any) -> Node | None:
+        if page_id in self._suspended:
+            self._last_action_ok = False
+            logger.debug(
+                "%s(%s) skipped: page suspended", method.__name__, page_id)
+            return None
+        before = self.snapshot(page_id)
+        node = method(self, page_id, *args, **kwargs)
+        self._last_action_ok = node is not None or self.snapshot(page_id) != before
+        return node
+
+    return wrapper
+
+
 def _slot_node_id(slot: "ShortcutSlot") -> str:
     """取槽的 id 作为节点 id。
 
@@ -77,12 +124,54 @@ def _slot_node_id(slot: "ShortcutSlot") -> str:
 
 
 class NavRegistry:
-    """导航注册表。单一实例用 :func:`get_default_registry`。"""
+    """导航注册表。单一实例用 :func:`get_default_registry`。
 
-    def __init__(self) -> None:
+    ``backend`` 是焦点执行后端（:class:`~albuswall.ui.nav.backend.FocusBackend`）。
+    不给就是 :class:`~albuswall.ui.nav.backend.NullFocusBackend`：只调
+    ``widget.setFocus()``、不做验证，行为与 v1 一致（无 Qt 的用例无需改动）。
+    真实 Qt 应用由 ``NavPresenter`` 注入
+    :class:`~albuswall.ui.nav.qt.QtFocusBackend`，于是 :meth:`focus_node`
+    能验证执行结果。
+    """
+
+    def __init__(self, backend: FocusBackend | None = None) -> None:
         self._domains: dict[str, Domain] = {}
         self._nodes: dict[str, Node] = {}
         self._pages: dict[str, PageState] = {}
+        self._backend: FocusBackend = backend or NullFocusBackend()
+        #: 被挂起的页面（模态 / 窗口失活期间）：动作方法直接返回 ``None``。
+        self._suspended: set[str] = set()
+        self._last_action_ok = False
+
+    # -- 执行后端 ------------------------------------------------------
+    @property
+    def backend(self) -> FocusBackend:
+        """当前的焦点执行后端（只读；替换走 :meth:`set_backend`）。"""
+        return self._backend
+
+    def set_backend(self, backend: FocusBackend | None) -> None:
+        """替换焦点执行后端；``None`` 恢复默认的 ``NullFocusBackend``。
+
+        由 bootstrap / 分发器在界面起来之后调用（那时才知道 Qt 侧怎么读焦点
+        链）。替换不影响已注册的域 / 节点 / 页面状态。
+        """
+        self._backend = backend or NullFocusBackend()
+        logger.debug(
+            "nav backend set to %r", type(self._backend).__name__)
+
+    @property
+    def last_action_ok(self) -> bool:
+        """最近一次动作方法是否有进展（拿到落点，或页面状态真的变了）。
+
+        动作方法仍返回 ``Node | None``（兼容旧调用方），但「返回 ``None``」
+        有多种含义（边界、虚拟根、Esc 取消选中、推入有根子域……）。分发器要
+        判断「这一下该不该消费事件」时读这个属性，不要去猜返回值。
+
+        被 :meth:`suspend` 挂起时恒 ``False``。
+        """
+        return self._last_action_ok
+
+
     # -- 注册 ----------------------------------------------------------
     def register_domain(self, domain: Domain, *, replace: bool = False) -> Domain:
         """注册域。id 重复且 ``replace=False`` → :class:`DuplicateNavDomain`。
@@ -258,6 +347,74 @@ class NavRegistry:
         state = self._pages.get(page_id)
         return state.stack[-1] if state else None
 
+    def snapshot(self, page_id: str) -> Snapshot:
+        """页面栈的可比快照：``((domain_id, current), ...)``（自底向顶）。
+
+        只读视图，用于两件事：判断动作有没有进展（:attr:`last_action_ok`），
+        以及执行失败时回滚（:meth:`restore`）。
+        """
+        state = self._pages.get(page_id)
+        if state is None:
+            return ()
+        return tuple((frame.domain_id, frame.current) for frame in state.stack)
+
+    def restore(self, page_id: str, snapshot: Snapshot) -> bool:
+        """把页面栈恢复成 :meth:`snapshot` 拿到的那一刻；返回是否恢复成功。
+
+        分发器在「焦点执行失败」时用它回滚逻辑光标——决策已经动了状态（挪了
+        ``current``、推了帧、弹了帧），但控件没接住焦点，两者必须一起退回去。
+
+        恢复是**重建**而不是只截断：动作可能把帧弹掉了（Esc / 边界退出），
+        快照里那几帧的数据还在，用 ``(domain_id, current)`` 原样补回来。所以
+        唯一会拒绝的情况是快照里的某个域**已经被反注册**——那时补回去会造出
+        指向不存在域的栈帧，宁可让光标留在新位置并返回 ``False``。
+        """
+        state = self._pages.get(page_id)
+        if state is None:
+            return False
+        for domain_id, _ in snapshot:
+            if domain_id not in self._domains:
+                logger.debug(
+                    "restore(%s) failed: domain %s no longer registered",
+                    page_id, domain_id)
+                return False
+        while len(state.stack) > len(snapshot):
+            state.stack.pop()
+        while len(state.stack) < len(snapshot):
+            domain_id, current = snapshot[len(state.stack)]
+            state.stack.append(
+                DomainFrame(domain_id=domain_id, current=current))
+        for frame, (domain_id, current) in zip(state.stack, snapshot):
+            frame.domain_id = domain_id
+            frame.current = current
+        return True
+
+    # -- 挂起 / 恢复（模态） --------------------------------------------
+    def suspend(self, page_id: str) -> None:
+        """挂起页面的导航动作（可重入：与 :meth:`resume` 成对使用）。
+
+        挂起期间 :meth:`move` / :meth:`enter` / :meth:`exit_back` /
+        :meth:`esc` / :meth:`shift_esc` / :meth:`jump_to_page_root` /
+        :meth:`tab_next` / :meth:`tab_prev` 直接返回 ``None``，**不改动任何
+        状态**。用于模态对话框 / 窗口失活：那时按键属于模态控件，nav 不该
+        在旁边偷偷挪光标。
+
+        注册 / 查询 / :meth:`set_current` / :meth:`focus_node` 不受影响（它们
+        不是「按键动作」，而是调用方的显式编排）。
+        """
+        self._suspended.add(page_id)
+        logger.debug("nav page %s suspended", page_id)
+
+    def resume(self, page_id: str) -> None:
+        """解除 :meth:`suspend`（多余的 ``resume`` 是安全的空操作）。"""
+        if page_id in self._suspended:
+            self._suspended.discard(page_id)
+            logger.debug("nav page %s resumed", page_id)
+
+    def is_suspended(self, page_id: str) -> bool:
+        """该页面当前是否被 :meth:`suspend` 挂起。"""
+        return page_id in self._suspended
+
     # -- 动作 ----------------------------------------------------------
     def should_pass_through(
             self, page_id: str, key: Direction | str,
@@ -295,6 +452,7 @@ class NavRegistry:
             return key_str in DEFAULT_PASS_THROUGH_KEYS
         return False
 
+    @_acting
     def move(self, page_id: str, direction: Direction) -> Node | None:
         """沿 ``direction`` 移动。
 
@@ -487,6 +645,7 @@ class NavRegistry:
                     else n.grid.col) == m]
         return edge[0] if edge else None
 
+    @_acting
     def enter(
             self, page_id: str, *, how: Literal["tab", "enter"],
     ) -> Node | None:
@@ -633,6 +792,7 @@ class NavRegistry:
             DomainFrame(domain_id=child.id, current=target))
         return node
 
+    @_acting
     def exit_back(self, page_id: str) -> Node | None:
         """Shift+Tab。栈深 ≤ 1 或当前域 ``allow_exit=False`` → ``None``。
 
@@ -648,6 +808,7 @@ class NavRegistry:
         parent = state.stack[-1]
         return self._nodes.get(parent.current) if parent.current else None
 
+    @_acting
     def esc(self, page_id: str) -> Node | None:
         """Esc。
 
@@ -668,6 +829,7 @@ class NavRegistry:
         parent = state.stack[-1]
         return self._nodes.get(parent.current) if parent.current else None
 
+    @_acting
     def shift_esc(self, page_id: str) -> Node | None:
         """Shift+Esc。反复弹栈直到 ``is_real_page`` / ``is_page_focus`` /
         栈深 1。
@@ -687,6 +849,7 @@ class NavRegistry:
         frame = state.stack[-1]
         return self._nodes.get(frame.current) if frame.current else None
 
+    @_acting
     def jump_to_page_root(self, page_id: str) -> None:
         """连续弹栈到 ``is_real_page`` / ``is_page_focus`` / 栈深 1，
         ``current`` 强制置 ``None``。
@@ -740,19 +903,54 @@ class NavRegistry:
 
     # -- 生命周期 / 焦点 ----------------------------------------------
     def clear(self) -> None:
+        """清空域 / 节点 / 页面状态，并解除所有挂起。
+
+        执行后端**不**重置：它是运行期注入的（重新 wiring 之后仍然是同一个
+        Qt 后端）。需要回到默认后端时显式 ``set_backend(None)``。
+        """
         self._domains.clear()
         self._nodes.clear()
         self._pages.clear()
+        self._suspended.clear()
+        self._last_action_ok = False
 
-    def focus_node(self, node: Node) -> None:
-        """执行焦点：``focus_fn`` 优先，否则 ``widget.setFocus()``。
+    def focus_node(self, node: Node) -> bool:
+        """执行焦点并**验证**结果；返回焦点是否真的落到了这个节点上。
 
-        v1 不做类型检查（nav 层不知道 widget 是什么）。
+        执行路径有两条，验证策略不同：
+
+        1. ``node.focus_fn is not None`` —— 调用方自定义的执行（复合控件指到
+           内部输入框、需要 ``scrollTo`` 后聚焦……）。**视为成功**，不验证：
+           真实落点可能是 ``widget`` 的后代，甚至根本不是它的后代，nav 猜不
+           出来（见包文档契约 4）。
+        2. 否则走 ``backend.apply_focus(node)``，然后读
+           ``backend.current_focus_chain()`` 确认 ``node.widget`` 在链上。
+           链为空 = 这台环境观测不到焦点（无 WM / offscreen），**按成功处理**
+           ——观测不到不等于失败，否则无头环境里整条导航都会退化成回滚。
+
+        验证失败时返回 ``False`` 并 ``warning``（这是真正的执行事故）。调用方
+        （分发器）负责把逻辑光标回滚到动作前，见 :meth:`snapshot` /
+        :meth:`restore`。
+
+        nav 层不知道 ``widget`` 是什么类型：聚焦失败由后端 / 控件抛出的异常
+        直接向上冒泡，本方法不吞异常。
         """
+        self._backend.ensure_focusable(node)
         if node.focus_fn is not None:
             node.focus_fn()
-            return
-        node.widget.setFocus()
+            return True
+        self._backend.apply_focus(node)
+        chain = self._backend.current_focus_chain()
+        if not chain:
+            logger.debug(
+                "focus_node %s: focus chain unobservable; assuming success",
+                node.id)
+            return True
+        if any(item is node.widget for item in chain):
+            return True
+        logger.warning(
+            "focus_node %s failed; focus chain=%r", node.id, chain[:1])
+        return False
 
 
 # -- 模块级单例（唯一） -----------------------------------------------
@@ -761,6 +959,17 @@ _default = NavRegistry()
 
 def get_default_registry() -> NavRegistry:
     return _default
+
+
+def set_default_backend(backend: FocusBackend | None) -> None:
+    """给进程级默认注册表注入焦点执行后端（``None`` → 恢复默认后端）。
+
+    界面 boot 之后由分发器调用：那时才有 Qt 侧的实现（
+    :class:`~albuswall.ui.nav.qt.QtFocusBackend`）可注入。返回 ``None`` 的语义
+    是「退回到 :class:`~albuswall.ui.nav.backend.NullFocusBackend`」，不是
+    「什么都不做」——无头 / 测试环境里必须能把注入撤回来。
+    """
+    _default.set_backend(backend)
 
 
 def registry_nav_registry(container: Any) -> None:
@@ -778,4 +987,9 @@ def registry_nav_registry(container: Any) -> None:
     register("nav_registry", get_default_registry, returns=NavRegistry)
 
 
-__all__ = ["NavRegistry", "get_default_registry", "registry_nav_registry"]
+__all__ = [
+    "NavRegistry",
+    "get_default_registry",
+    "registry_nav_registry",
+    "set_default_backend",
+]
