@@ -107,10 +107,17 @@ class QtFocusBackend:
           ``StrongFocus``，绝不反向设置 ``NoFocus``（那会破坏 IME、spinbox、
           无障碍——见包文档「不要做的事」）。
 
-        「容器与叶共用同一个控件」的例外（内容层：``window.content`` 与
-        ``content.body`` 都是 ``Content``）：容器规则必须让位于叶，否则叶域
-        的键盘光标无处可落。判定由注入的 ``is_landing_widget`` 完成，本模块
-        不持有注册表。
+        **例外：当容器本身是落点时，容器 NoFocus 规则让位。**
+        当某个控件同时是**容器节点的 widget** 与**叶节点的落点 widget**（当前
+        唯一案例：``window.content`` 网关与 ``content.body`` 叶节点都指向
+        ``Content``），把 ``NoFocus`` 强加给它等于让叶域没有可落点 —— 内容层
+        的键盘光标会无处可去。这是「区域入口与叶落点重合」的**已定义边界**，
+        不是实现漏洞：判定由注入的 ``is_landing_widget`` 完成（presenter 从
+        注册表派生，纯 Python），本模块不持有注册表。
+
+        ``TODO(v2)``：合并 ``window.content`` 网关与 ``content.body`` 叶节点
+        （让区域入口与叶落点不再共用同一个控件），届时这条例外自然消失，
+        ``is_landing_widget`` 注入也可以删掉。
         """
         widget = node.widget
         set_policy = getattr(widget, "setFocusPolicy", None)

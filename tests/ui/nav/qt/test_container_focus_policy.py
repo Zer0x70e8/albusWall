@@ -28,9 +28,18 @@ def _container_nodes(nav):
 
 
 def test_every_container_node_is_unfocusable(nav_rig):
+    """遍历**全部** ``child_domain`` 非空节点：要么 ``NoFocus``，要么走已定义例外。
+
+    覆盖范围是自检过的：``Content``（``window.content`` 的 widget）确实在遍历
+    集合里，它走的是「容器与叶共用控件」的例外分支（断言见
+    ``test_content_keeps_its_focus_policy_because_it_is_also_a_leaf``），不是被
+    漏掉。
+    """
     rig = nav_rig
     containers = _container_nodes(rig.nav)
     assert containers, "wiring 之后应有区域入口节点"
+    assert "window.content" in {node.id for node in containers}, (
+        "遍历必须包含内容层入口，否则例外路径没被覆盖")
 
     exempt = {node.id for node in containers
               if rig.presenter.is_leaf_widget(node.widget)}
@@ -42,6 +51,35 @@ def test_every_container_node_is_unfocusable(nav_rig):
             continue
         assert node.widget.focusPolicy() == Qt.FocusPolicy.NoFocus, (
             f"容器节点 {node.id} 拿到了 Qt 焦点（应为 NoFocus）")
+
+
+def test_content_keeps_its_focus_policy_because_it_is_also_a_leaf(nav_rig):
+    """``Content`` 是双身份控件：容器 NoFocus 规则让位于叶（已定义边界）。
+
+    ``window.content``（容器）与 ``content.body``（叶）指向同一个控件，把
+    ``NoFocus`` 强加给它等于让内容层没有可落点。让位之后**两条都要成立**：
+    Qt 侧仍然可聚焦，nav 侧照旧可选（容器规则让位 ≠ 从 nav 移除）。
+    """
+    rig = nav_rig
+    gateway = rig.nav.get_node("window.content")
+    leaf = rig.nav.get_node("content.body")
+
+    assert gateway.widget is leaf.widget is rig.window.content
+
+    # 容器规则跑一遍之后，Content 仍然可聚焦（例外生效）
+    assert rig.nav.focus_node(gateway) is True
+    rig.app.processEvents()
+    assert rig.window.content.focusPolicy() != Qt.FocusPolicy.NoFocus
+    assert rig.presenter.is_leaf_widget(rig.window.content) is True
+
+    # nav 侧：入口仍然可选、仍然可见、仍然能进域落 entry
+    assert gateway.focusable is True
+    rig.close_page()
+    assert rig.nav.is_visible(gateway) is True
+    rig.nav.jump_to_page_root(NAV_PAGE_ID)
+    rig.nav.set_current(NAV_PAGE_ID, gateway.id)
+    entered = rig.nav.enter(NAV_PAGE_ID, how="tab")
+    assert entered is not None and entered.id == "content.body"
 
 
 def test_the_only_exempt_container_shares_its_widget_with_a_leaf(nav_rig):

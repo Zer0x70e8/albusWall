@@ -351,7 +351,12 @@ reg.register_domain(Domain(
   `apply_focus` + 验证），复合叶节点仍装；
 - `test_overlay_gates_content.py`：叠层可见时被盖住的内容层不可落点；
 - `test_focus_lands_within_nav.py`：结构性断言——`focus_node` 成功时焦点必须
-  落在 nav 认知内的控件上。
+  落在 nav 认知内的控件上；
+- `test_passthrough_page_no_focus.py`：关 overlay 页后焦点由 nav 决定落点
+  （不在 `_PassthroughPage` 等占位页、落在注册节点上、光标离开被关的页域），
+  且不触发 `_report_stray_focus` 的 warning；
+- `test_is_landing_widget_isolation.py`：`is_landing_widget` 判定纯注册表
+  （`ast` 审查，零 Qt 名字）+ 注入链路（presenter → `QtFocusBackend`）。
 
 **覆盖率底线**：`registry.py` 的方法级覆盖 ≥ 95%。低于这个数意味着某条决策分支没人走过。
 
@@ -365,9 +370,16 @@ reg.register_domain(Domain(
 - 按键事件 → 调 `move` / `enter` / `exit_back` / `esc` / `shift_esc` /
   `jump_to_page_root` / `tab_next` / `tab_prev`
 - 拿到返回的 `Node` 后调 `focus_node(node)`（返回 `bool`）；失败时用
-  `snapshot()` / `restore()` 回滚。模态期间用 `suspend()` / `resume()`，
-  或用 `last_action_ok` 判断这一下有没有进展
+  `snapshot()` / `restore()` 回滚。模态期间用 `suspend()` / `resume()`
+  （分发器另有 `_is_blocked()` 兜底：挂起 / 模态 / 弹窗时直接放行；统一
+  suspend 留 `TODO(v2)`，见包文档契约 1），或用 `last_action_ok` 判断这一下
+  有没有进展
 - 根据 `restore_page(page_id).stack` 长度判断是否关页
+- **overlay 关页后的焦点落点由分发器经 nav 决定**：`PassthroughStack` 切页前
+  先把焦点从旧页交出去（`_release_focus`，否则 Qt 的 `QStackedLayout` 会把焦点
+  显式转给新页——占位页也会被程序化 `setFocus` 命中，`NoFocus` 策略挡不住），
+  分发器订阅 `overlay.currentChanged`，收到空白层时 `exit_back` 回根帧并把焦点
+  交给确定的区域入口（内容层 → 标题栏兜底），全程不直接 `setFocus`
 
 **横向（keymap 层）**：
 - 单向依赖：nav → keymap 只在 `TYPE_CHECKING` 下 import `ShortcutSlot`；运行时零 import
@@ -512,7 +524,8 @@ nav 接管），但 v1 **不跨域**。
 | B4 | `last_action_ok` + `snapshot` / `restore` + `suspend` / `resume` | `registry.py` |
 | C1 | `QtFocusBackend`（`nav/qt.py`）与分发器侧执行语义 | `nav/qt.py` / `nav_presenter.py` |
 | C2 | 焦点回灌：命中对齐、不可见跳过、不命中只 warning（不拉回） | `nav_presenter.py` |
-| C3 | 挂起 / 恢复（presenter 计数 + 注册表页面级挂起） | 两处 |
+| C3 | 挂起 / 恢复（presenter 计数 + 注册表页面级挂起）；模态统一 suspend 见 `TODO(v2)` | 两处 |
+| C4 | overlay 关页后的焦点落点（视图侧交还焦点 + 分发器经 nav 重新落点） | `passthrough_stack_widget.py` / `nav_presenter.py` |
 | D1 | `Domain.tab_order` | `model.py` |
 | D2 | `tab_next` / `tab_prev`（v1 不跨域） | `registry.py` |
 | D3 | `enter(how="tab")` 语义不变（仅进域入口） | `registry.py` |
