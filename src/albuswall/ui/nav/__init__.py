@@ -100,8 +100,23 @@ Popup 菜单、标签树弹出）由 Qt 控件自治，nav 只负责进入 / 退
    ``QDialog.exec`` / ``QMenu.exec`` / Popup / ``QFileDialog`` 等阻塞式嵌套
    事件循环期间，调用方不得调 ``move`` / ``enter`` / ``exit_back`` / ``esc`` /
    ``shift_esc`` / ``jump_to_page_root`` / ``tab_next`` / ``tab_prev``。
-   用 ``NavRegistry.suspend(page_id)`` / ``resume(page_id)`` 把这条契约变成
-   机器保证：挂起期间这些方法一律返回 ``None`` 且不改状态。
+
+   **机器保证分两层，口径以本节为准**：
+
+   * ``NavRegistry.suspend(page_id)`` / ``resume(page_id)`` —— 挂起期间上述
+     动作方法一律返回 ``None`` 且不改状态。**这一步由调用方显式触发**：谁
+     开模态，谁负责挂起（如命令处理里 ``with presenter.suspended():``）；
+   * ``NavPresenter._is_blocked()`` —— 分发器的**统一短路**：``_suspended``
+     计数 > 0、或 Qt 当前有 ``activeModalWidget()`` / ``activePopupWidget()``
+     时，分派直接放行（不消费、不动光标）。这是「调用方忘了挂起」时的第二
+     道防线。
+
+   ``TODO(v2)``：把第二道防线升级成**统一 suspend**（出现模态 / 弹窗时自动
+   ``nav.suspend(page_id)``、消失时 ``resume``，删掉 ``_is_blocked`` 的分派
+   短路）。卡点：Qt 没有 ``activeModalWidget`` 变化的可靠信号，需要改走
+   ``QEvent.WindowBlocked`` / ``WindowUnblocked`` 事件，且要处理「弹窗套弹窗」
+   与 Qt6 里这两个事件时序的差异；那是一次单独的模态契约改造，不和焦点接管
+   混在一个改动里。
 
 2. **焦点回流由分发器自动完成，手工 ``set_current`` 只在绕过它时才需要**
    装了 ``NavPresenter`` 之后，鼠标点击 / 程序化 ``setFocus`` 都会被

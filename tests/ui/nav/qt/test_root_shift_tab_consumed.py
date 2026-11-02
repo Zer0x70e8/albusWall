@@ -96,7 +96,7 @@ def test_shift_tab_inside_an_overlay_page_pops_to_the_parent_frame(nav_rig):
 
 
 def test_shift_tab_closes_the_overlay_page_at_the_root(nav_rig):
-    """根帧 Shift+Tab 的关页钩子：有页就关，已空白则什么都不做。"""
+    """根帧 Shift+Tab 的关页钩子：有页就关，焦点落点由 nav 决定。"""
     rig = nav_rig
     rig.open_page("album")
     rig.nav.jump_to_page_root(NAV_PAGE_ID)
@@ -106,7 +106,12 @@ def test_shift_tab_closes_the_overlay_page_at_the_root(nav_rig):
     assert rig.press(Qt.Key.Key_Backtab, _SHIFT) is True
     rig.app.processEvents()
     assert rig.window.overlay.is_blank() is True
+    # 关页之后焦点交给确定的父区域入口（内容层），光标随之离开虚拟根
+    assert rig.frame.domain_id == "content"
+    assert rig.current == "content.body"
+    assert rig.focused_widget() is rig.window.content
 
-    # 已经是空白层：只消费，不报错、不挪光标
+    # 已经是空白层：Shift+Tab 仍然被消费（弹回根帧，光标停在内容层入口）
     assert rig.press(Qt.Key.Key_Backtab, _SHIFT) is True
-    assert rig.current is None
+    assert rig.frame.domain_id == "window"
+    assert rig.current == "window.content"

@@ -133,7 +133,7 @@ from albuswall.ui.keymap.errors import InvalidKeySequence
 from albuswall.ui.keymap.qt_keys import qt_event_to_nav
 from albuswall.ui.nav.model import Direction
 from albuswall.ui.nav.qt import QtFocusBackend
-from albuswall.ui.nav.wiring import NAV_PAGE_ID
+from albuswall.ui.nav.wiring import NAV_PAGE_ID, ROOT_DOMAIN
 
 from .base import Presenter, register_presenter
 
@@ -182,6 +182,13 @@ _MODIFIER_KEYS: frozenset[Qt.Key] = frozenset({
 #: ``focusChanged`` 反向同步时最多 push 多少层（防注册表有环时死循环）。
 _MAX_PUSH_DEPTH = 8
 
+#: overlay 收起后最多弹多少层域（防注册表有环 / 弹不动时死循环）。
+_MAX_OVERLAY_POPS = 8
+
+#: 关页后的目标落点：内容层入口 -> 进域落到 ``content.body``；标题栏兜底。
+CONTENT_GATEWAY = "window.content"
+ROOT_TITLEBAR_GATEWAY = "window.titlebar"
+
 
 class NavPresenter(Presenter):
     """把键盘事件接到 nav 注册表上（nav 的 Qt 侧分发器）。"""
@@ -212,6 +219,8 @@ class NavPresenter(Presenter):
         self._applying_focus = False
         #: 窗口当前是否处于激活状态（失活时冻结回灌，见模块 docstring）。
         self._window_active = True
+        #: 订阅了 ``currentChanged`` 的 overlay 栈（``None`` = 没订阅上）。
+        self._overlay: Any = None
 
     # ------------------------------------------------------------------ #
     # 生命周期
@@ -257,6 +266,7 @@ class NavPresenter(Presenter):
         app.installEventFilter(self)
         app.focusChanged.connect(self._on_focus_changed)
         self._installed_app = app
+        self._install_overlay_hook(window)
         logger.debug(
             "nav presenter: installed (page=%s, %d widgets indexed)",
             self._page_id, len(self._widget_index))
@@ -265,6 +275,7 @@ class NavPresenter(Presenter):
         app = self._installed_app
         self._installed_app = None
         self._restore_backend()
+        self._remove_overlay_hook()
         if app is None:
             return
         try:
@@ -282,6 +293,125 @@ class NavPresenter(Presenter):
         if nav is not None:
             nav.set_backend(None)
             nav.resume(self._page_id)
+
+    # ------------------------------------------------------------------ #
+    # overlay 换页 / 收起：由 nav 决定焦点落点
+    # ------------------------------------------------------------------ #
+    def _install_overlay_hook(self, window: Any) -> None:
+        """订阅 overlay 的页切换（``QStackedWidget.currentChanged``）。
+
+        overlay 收起时 Qt 会把焦点从页内控件手里拿走（页面被隐藏）。落点必须
+        由 nav 决定，不能让 Qt 的焦点链顺手塞给某个控件 —— 见
+        :meth:`_on_overlay_page_changed`。
+        """
+        overlay = getattr(window, "overlay", None)
+        signal = getattr(overlay, "currentChanged", None)
+        connect = getattr(signal, "connect", None)
+        if not callable(connect):
+            logger.debug(
+                "nav presenter: window.overlay has no currentChanged; "
+                "overlay-close focus relocation disabled")
+            return
+        self._overlay = overlay
+        try:
+            connect(self._on_overlay_page_changed)
+        except (RuntimeError, TypeError):  # 替身 / 已销毁
+            self._overlay = None
+            logger.debug(
+                "nav presenter: cannot subscribe overlay.currentChanged")
+
+    def _remove_overlay_hook(self) -> None:
+        overlay = self._overlay
+        self._overlay = None
+        signal = getattr(overlay, "currentChanged", None)
+        disconnect = getattr(signal, "disconnect", None)
+        if not callable(disconnect):
+            return
+        try:
+            disconnect(self._on_overlay_page_changed)
+        except (RuntimeError, TypeError):  # 已经断开 / 控件没了
+            pass
+
+    def _on_overlay_page_changed(self, *_args: Any) -> None:
+        """overlay 切换到空白层（关页）之后：把焦点交回 nav 的决策。
+
+        只在**收起**（收到空白层）时动手：换页（相册 → 详情）时焦点由新页里
+        的控件自己负责，nav 不插一脚。
+
+        决策顺序（全部经 nav，不直接 ``setFocus``）：
+
+        1. 一路 ``exit_back`` 把光标弹回页面根帧（overlay 的域都挂在根域下，
+           嵌套页会弹多层）；弹不动（``allow_exit=False``）就停在当前帧；
+        2. 根帧上残留的光标若已不可见（正停在刚关掉的那一页上）→ 换落点；
+        3. 确定的父区域入口：内容层（叠层收起后它才可落点，进域落 ``entry``）
+           → 标题栏兜底。
+        """
+        nav = self._nav
+        if nav is None:
+            return
+        overlay = self._overlay
+        is_blank = getattr(overlay, "is_blank", None)
+        if not callable(is_blank):
+            return
+        try:
+            if not is_blank():
+                return
+        except RuntimeError:  # 控件已销毁
+            return
+        node = self._landing_after_overlay_closed(nav, self._page_id)
+        if node is not None:
+            self._focus(nav, node, "overlay-closed")
+
+    def _landing_after_overlay_closed(
+            self, nav: NavRegistry, page_id: str,
+    ) -> Node | None:
+        """关页之后该把焦点交给谁（``Node``）；``None`` = 不动。"""
+        state = nav.restore_page(page_id)
+        if state is None:
+            return None
+
+        # 1) 弹回根帧（不动根域帧本身：栈深 2 = page_focus + 根域）
+        pops = 0
+        while len(state.stack) > 2 and pops < _MAX_OVERLAY_POPS:
+            depth = len(state.stack)
+            nav.exit_back(page_id)
+            if len(state.stack) >= depth:
+                break               # allow_exit=False：弹不动
+            pops += 1
+
+        frame = nav.current_frame(page_id)
+        if frame is None or frame.domain_id != ROOT_DOMAIN:
+            logger.debug(
+                "nav presenter: overlay closed but cursor is in %r; "
+                "focus left as is", None if frame is None else frame.domain_id)
+            return None
+
+        # 2) 根帧上残留的光标仍然可见 → 就落它
+        if frame.current is not None:
+            node = nav.get_node(frame.current)
+            if node is not None and nav.is_visible(node):
+                return node
+
+        # 3) 确定的父区域入口：先试内容层（刚被揭开的那一层），再退回标题栏
+        gateway = nav.get_node(CONTENT_GATEWAY)
+        if gateway is not None and nav.is_visible(gateway):
+            try:
+                nav.set_current(page_id, gateway.id)
+                entered = nav.enter(page_id, how="tab")
+            except Exception:  # noqa: BLE001 - 替身注册表 / 域不匹配
+                entered = None
+            if entered is not None:
+                return entered
+            nav.exit_back(page_id)
+
+        titlebar = nav.get_node(ROOT_TITLEBAR_GATEWAY)
+        if titlebar is not None:
+            try:
+                nav.set_current(page_id, titlebar.id)
+            except Exception:  # noqa: BLE001
+                return None
+            return titlebar
+        return None
 
     # ------------------------------------------------------------------ #
     # 暂停（契约 1：模态期间调用方不该让 nav 动）
@@ -753,6 +883,18 @@ class NavPresenter(Presenter):
         return None
 
     def _is_blocked(self) -> bool:
+        """分派的第二道防线（契约 1）：挂起中 / 有模态 / 有弹窗 → 放行。
+
+        口径见 ``albuswall.ui.nav`` 包文档的契约 1：**第一层**是调用方显式
+        ``suspend`` / ``resume``（挂起期间 nav 动作方法一律返回 ``None``），
+        **第二层**就是这里——哪怕调用方忘了挂起，分派也不会在 ``QDialog.exec``
+        期间偷偷路由。
+
+        为什么不做「统一 suspend」（模态出现就自动 ``nav.suspend``）：
+        ``TODO(v2)`` 见包文档契约 1 —— Qt 没有 ``activeModalWidget`` 变化的
+        可靠信号，得改走 ``WindowBlocked`` / ``WindowUnblocked`` 事件，属于
+        单独的模态契约改造。
+        """
         if self._suspended > 0:
             return True
         app = self._installed_app
