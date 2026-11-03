@@ -18,6 +18,7 @@ from typing import Any
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLineEdit,
@@ -226,7 +227,8 @@ class TagBar(Retranslatable, QFrame):
             self._popup_closed_at = time.monotonic()
             return
         self.layer_tree_open_requested.emit()  # 先让外部刷新树数据
-        if time.monotonic() - self._popup_closed_at < 0.2:
+        # 100ms：只挡「同一次鼠标点击 / 连按造成的开-关抖动」，不挡正常的再次打开
+        if time.monotonic() - self._popup_closed_at < 0.1:
             return
         popup.show_under(self.layer_tree_button)
         # 打开后把焦点交给标签树，方向键 + Enter 即可操作
@@ -368,6 +370,8 @@ class TagBar(Retranslatable, QFrame):
     def expand(self) -> None:
         """展开标签栏（恢复输入区宽度）。"""
         self._is_collapse = False
+        # 先恢复可见性再恢复宽度：隐藏时定宽不会生效，顺序反了会短暂闪一下。
+        self.content_widget.setVisible(True)
         if self._old_tag_add_container_widget is not None:  # 防 2**24-1
             self.content_widget.setFixedWidth(
                 self._old_tag_add_container_widget)
@@ -377,8 +381,20 @@ class TagBar(Retranslatable, QFrame):
         """收起标签栏（输入区宽度归零）。"""
         self._is_collapse = True
         self._old_tag_add_container_widget = self.content_widget.width()
+        # 「宽度归零」不等于「不可见」：Qt 的 Tab 链只看 isVisible()，0 宽控件
+        # 照样停在链上，焦点会卡在看不见的输入框里。先把焦点交出去，再真正隐藏。
+        self._release_child_focus()
         self.content_widget.setFixedWidth(0)
+        self.content_widget.setVisible(False)
         self._apply_toggle_symbol()
+
+    def _release_child_focus(self) -> None:
+        """把焦点从 ``content_widget`` 子树里交出去（交给折叠切换按钮）。"""
+        app = QApplication.instance()
+        focused = app.focusWidget() if isinstance(app, QApplication) else None
+        if focused is not None and self.content_widget.isAncestorOf(focused):
+            self.collapse_toggle_button.setFocus(
+                Qt.FocusReason.OtherFocusReason)
 
     def collapse_toggle(self, to: bool | None = None) -> None:
         """切换折叠状态；``to`` 为 ``None`` 时取反。"""

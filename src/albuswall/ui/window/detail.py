@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from PySide6.QtCore import (
+    QEvent,
     QItemSelectionModel,
     QModelIndex,
     QSize,
@@ -22,6 +23,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -94,6 +96,10 @@ class Detail(Retranslatable, BlurLabel):
         # 快速预览模式：隐藏 HUD，只在底部留一条提示
         self._preview_mode: bool = False
         self._hud_visible_before_preview: tuple[bool, bool] = (True, True)
+        # 进入预览前的焦点落点（只在焦点落本页子树内时记忆）
+        self._focus_before_preview: QWidget | None = None
+        # 进入预览前信息面板是否显示（退出预览时还原）
+        self._panel_visible_before_preview: bool = False
 
         # 只显示图标的动作按钮：文案改放 tooltip（图标不参与翻译）
         self._icon_only: set[QPushButton] = set()
@@ -210,6 +216,10 @@ class Detail(Retranslatable, BlurLabel):
         self.panel.setGeometry(self.rect())
         self.panel.close_requested.connect(
             lambda: self.information_button.setChecked(False))
+        # 面板可见期间把 Tab 关在面板内（见 eventFilter）：Qt 的 Tab 只认焦点链，
+        # 面板兄弟层（标题栏 / 内容层）仍然可聚焦，必须自己拦。
+        for widget in (self.panel.close_button, self.panel.view):
+            widget.installEventFilter(self)
 
         # 快速预览模式的底部提示（不进 layout、不抢焦点）
         self.preview_hint = QLabel("", self)
@@ -416,6 +426,19 @@ class Detail(Retranslatable, BlurLabel):
         if active:
             self._hud_visible_before_preview = (
                 self.overlay.isVisible(), self.close_button.isVisible())
+            # 只在焦点确实落在本页子树里时记忆，避免退出预览时把别处的焦点抢过来
+            app = QApplication.instance()
+            focused = app.focusWidget() if isinstance(app, QApplication) else None
+            self._focus_before_preview = (
+                focused if focused is not None
+                and (focused is self or self.isAncestorOf(focused)) else None)
+            # 预览是「只看图」：信息面板也要收起，退出时按进入前状态还原。
+            # 走 information_button 而不是直接 setVisible，让「按钮 checked」
+            # 与「面板可见」始终一致，也复用 _on_information_toggled 里的
+            # enabled 围栏，避免出现「面板藏了但整页还是禁用」的中间态。
+            self._panel_visible_before_preview = self.panel.isVisible()
+            if self._panel_visible_before_preview:
+                self.information_button.setChecked(False)
             self.overlay.setVisible(False)
             self.close_button.setVisible(False)
             self._preview_mode = True
@@ -424,6 +447,7 @@ class Detail(Retranslatable, BlurLabel):
             self.preview_hint.raise_()
             self._place_preview_hint()
             self._preview_hint_timer.start()
+            self.image_viewer.setFocus(Qt.FocusReason.OtherFocusReason)
             return
         self._preview_mode = False
         self._preview_hint_timer.stop()
@@ -431,6 +455,16 @@ class Detail(Retranslatable, BlurLabel):
         hud_visible, close_visible = self._hud_visible_before_preview
         self.overlay.setVisible(hud_visible)
         self.close_button.setVisible(close_visible)
+        panel_was_visible = self._panel_visible_before_preview
+        self._panel_visible_before_preview = False
+        if panel_was_visible:
+            self.information_button.setChecked(True)  # 走统一路径：几何 + raise + 围栏
+        target = self._focus_before_preview
+        self._focus_before_preview = None
+        if target is None or not target.isVisible() or not target.isEnabled():
+            target = (self.panel.close_button if self.panel.isVisible()
+                      else self.image_viewer)
+        target.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def set_preview_hint(self, text: str) -> None:
         """覆盖快速预览底部提示。"""
@@ -463,10 +497,38 @@ class Detail(Retranslatable, BlurLabel):
             self.panel.setGeometry(self.rect())
             self.panel.raise_()  # 抬到 Detail 里其它子控件之上
         self.panel.setVisible(checked)
+        # 面板是整页覆盖层：可见期间被它遮住的控件必须退出键盘交互。
+        # 光挪焦点不够 —— 「Tab 到被遮住的按钮 + 空格」照样能激活它，
+        # 只有 setEnabled(False) 才把整棵子树同时移出焦点链与输入路径。
+        for widget in (self.overlay, self.close_button, self.image_viewer):
+            widget.setEnabled(not checked)
         if checked:
             self.panel.close_button.setFocus(Qt.FocusReason.OtherFocusReason)
         else:
             self.information_button.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt 命名
+        """面板可见期间，把 Tab / Backtab 关在面板内部。
+
+        ``setEnabled(False)`` 只能摘掉 Detail 自己的子树；标题栏与内容层是
+        面板的兄弟层级，仍然留在焦点链上，Tab 会从面板里跑出去。这里只在
+        面板可见时接管面板内控件的 Tab，其余事件照旧交给基类（模糊层要靠
+        基类的事件过滤跟尺寸）。
+        """
+        panel = getattr(self, "panel", None)
+        if (panel is not None
+                and panel.isVisible()
+                and panel.isAncestorOf(obj)
+                and event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab)):
+            other = (panel.view if obj is panel.close_button
+                     else panel.close_button)
+            reason = (Qt.FocusReason.BacktabFocusReason
+                      if event.key() == Qt.Key.Key_Backtab
+                      else Qt.FocusReason.TabFocusReason)
+            other.setFocus(reason)
+            return True
+        return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------------ #
     # 几何
