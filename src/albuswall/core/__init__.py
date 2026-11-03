@@ -5,6 +5,7 @@ from .application import Application, CoreApplication
 from .container import Container
 from .errors import MissingDependencyError
 from .exit_codes import AppError, ExitCode
+from .main_loop import MainLoop, HeadlessMainLoop
 from .plugins import (
     BasePlugin,
     DuplicatePluginError,
@@ -29,6 +30,8 @@ __all__ = [
     "DuplicatePluginError",
     "ErrorHook",
     "ExitCode",
+    "MainLoop",
+    "HeadlessMainLoop",
     "Hooks",
     "HooksMap",
     "LoopHook",

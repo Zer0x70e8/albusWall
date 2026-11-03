@@ -15,6 +15,8 @@ service 一起退役——重新实现业务时按新契约重建 handler 模块
 * ``tag``       —— 标签树 + 别名（``tag.alias.*``）；
 * ``trash``     —— **资产级**回收站（保留期清理 / 清空 / 恢复）；
 * ``thumbnail`` —— 按需生成 + 维护（统计 / 路径 / 手动催 / 清孤儿）；
+* ``keymap``    —— 快捷键层内省（``keymap.slots``）；注册表由 UI 启动流程
+  后注册，命令懒取，取不到就提示；
 * ``setting``   —— 配置读写（结构内省 / 校验后写盘 / 脏节点落盘）。
   **例外**：它依赖容器的 ``config`` 键，因此不进
   ``tests/test_handlers_contract.py`` 的 ``_BUSINESS_HANDLERS`` 白名单；
@@ -32,6 +34,7 @@ from . import (
     asset,
     builtin,
     import_,
+    keymap,
     setting,
     source,
     tag,
@@ -43,6 +46,8 @@ from ._protocol import HandlerModule
 
 MODULES: tuple[HandlerModule, ...] = (
     builtin, setting, task, source, import_, asset, album, tag, trash, thumbnail,
+    # 只读内省（keymap 注册表由 UI 启动流程写入容器，命令体内懒取）
+    keymap,
 )
 
 

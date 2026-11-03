@@ -451,7 +451,7 @@ def test_shipped_default_table_is_loadable() -> None:
     assert [str(key) for key in table["window.fullscreen"].keys] == [
         "F11", "Ctrl+Shift+F",
     ]
-    assert [str(key) for key in table["navigation.grid"].keys] == ["G, G"]
+    assert [str(key) for key in table["content.search"].keys] == ["Ctrl+F"]
 
 
 def test_user_config_path_is_under_user_config_dir() -> None:

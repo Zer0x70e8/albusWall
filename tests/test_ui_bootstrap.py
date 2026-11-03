@@ -99,47 +99,6 @@ def test_setup_ui_registers_container_keys(qapp, container):
     assert window.windowTitle() == bootstrap.DEFAULT_TITLE
 
 
-def test_setup_ui_registers_nav_registry(qapp, container):
-    """导航注册表在 UI boot 时登记（延后注册：不占 main._boot 的 phase 6/7）。"""
-    from albuswall.ui import bootstrap
-    from albuswall.ui.nav import get_default_registry
-
-    assert container.get(bootstrap.NAV_REGISTRY_KEY) is None, (
-        "用例前容器里不该有 nav_registry")
-
-    bootstrap.setup_ui(container, qapp)
-
-    assert container.get(bootstrap.NAV_REGISTRY_KEY) is get_default_registry()
-
-
-def test_setup_ui_lands_the_first_focus(qapp, container):
-    """A5：boot 结束时光标已经落在根域第一个可见入口上，方向键按下去有反应。
-
-    ``register_window_nav`` 只复位到虚拟根（``current=None``）；虚拟根上方向
-    键没有落点，所以首焦点必须由 boot 补上（phase 3c）。
-    """
-    from albuswall.ui import bootstrap
-    from albuswall.ui.nav import Direction, get_default_registry
-    from albuswall.ui.nav.wiring import NAV_PAGE_ID, ROOT_DOMAIN
-
-    nav = get_default_registry()
-    nav.clear()
-    try:
-        bootstrap.setup_ui(container, qapp)
-
-        frame = nav.current_frame(NAV_PAGE_ID)
-        assert frame is not None and frame.domain_id == ROOT_DOMAIN
-        assert frame.current is not None, "boot 之后光标还停在虚拟根上"
-
-        landed = nav.get_node(frame.current)
-        assert landed is not None and landed.focusable is True
-
-        # 第一下方向键就有落点（不是「None 且无 root_action」的死局）
-        assert nav.move(NAV_PAGE_ID, Direction.DOWN) is not None
-    finally:
-        nav.clear()
-
-
 # ---------------- 主窗口来自容器（派生类替换） ----------------
 
 class _DerivedWindow:

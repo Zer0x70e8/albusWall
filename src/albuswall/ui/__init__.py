@@ -18,9 +18,14 @@
 外部把模型递进去就能用，缺省委托会自动装好。
 
 presenter 由 :class:`~albuswall.ui.presenter.main.MainPresenter` 统一编排：
-``Application.setup()`` 建好窗口后调用 ``MainPresenter.bootstrap(...)``，
+界面 boot 层（:func:`albuswall.ui.bootstrap.setup_ui`，由 ``builtin_ui`` 插件在
+``init`` hook 里调用）建好窗口后调用 ``MainPresenter.bootstrap(...)``，
 它把主 presenter 注册进容器（``presenter`` / ``main_presenter``），并负责
 子 presenter 的构造与生命周期；窗口主题也在那里应用。
+
+UI 主类 :class:`~albuswall.ui.application.Application` 是**被动**的：只是一个
+``QApplication`` + ``MainLoop``（事件循环 / 退出码 / 跨线程投递），不建窗口、
+不注册 hook；装配全在 :mod:`albuswall.ui.bootstrap`。
 """
 
 from __future__ import annotations

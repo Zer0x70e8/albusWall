@@ -68,7 +68,7 @@ ThemeSource = Literal["config", "bundled", "empty"]
 # noinspection bad-assignment
 @configclass("ui", "main")
 class ThemeConfig:
-    """``[ui]`` 段里与主题相关的键（与 :class:`albuswall.ui.application.UIConf`
+    """``[ui]`` 段里与主题相关的键（与 :class:`albuswall.ui.bootstrap.UIConf`
     同一个 section，字段互不重叠）。
 
     ``albuswall.ui`` 在插件 setup 阶段（``setup_config`` + ``load()`` 之后）

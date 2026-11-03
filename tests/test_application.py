@@ -238,20 +238,20 @@ class _FakeConfig:
 
 
 def test_plugin_disables_reads_section_keys():
-    from albuswall.main import _plugin_disables
+    from albuswall.main import plugin_disables
 
     config = _FakeConfig({"plugin_disables": ["builtin_ui", "ipc"]})
 
-    assert _plugin_disables(config) == {"builtin_ui", "ipc"}
+    assert plugin_disables(config) == {"builtin_ui", "ipc"}
 
 
 def test_plugin_disables_missing_section_is_empty():
-    from albuswall.main import _plugin_disables
+    from albuswall.main import plugin_disables
 
-    assert _plugin_disables(_FakeConfig({})) == set()
+    assert plugin_disables(_FakeConfig({})) == set()
 
 
 def test_plugin_disables_tolerates_missing_config():
-    from albuswall.main import _plugin_disables
+    from albuswall.main import plugin_disables
 
-    assert _plugin_disables(None) == set()
+    assert plugin_disables(None) == set()

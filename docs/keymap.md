@@ -31,7 +31,7 @@
 
 ## 默认键位（`src/albuswall/resources/config/shortcuts.ini`）
 
-`[shortcuts]` 段，一条命令一行；13 条命令 / 15 个键位。分组是文件里的注释分组。
+`[shortcuts]` 段，一条命令一行；12 条命令 / 14 个键位。分组是文件里的注释分组。
 
 | 分组 | 命令 | 键位 |
 | --- | --- | --- |
@@ -42,8 +42,7 @@
 | window / view | `view.zoom_in` | `Ctrl++`, `Ctrl+=` |
 | window / view | `view.zoom_out` | `Ctrl+-` |
 | window / view | `view.reset` | `Ctrl+0` |
-| navigation | `navigation.grid` | `G, G`（和弦，不是两个键） |
-| navigation | `content.search` | `Ctrl+F` |
+| content / view | `content.search` | `Ctrl+F` |
 | albums / assets | `album.new` | `Ctrl+N` |
 | albums / assets | `album.rename` | `F2` |
 | albums / assets | `asset.favorite` | `Space` |
@@ -169,10 +168,10 @@ registry.persist()                  # 把与默认不同的条目写回用户表
 
 | 缺口 | 现状 |
 | --- | --- |
-| 真实按键 | 没有任何 `QShortcut` / 事件过滤器：`keymap/__init__.py` 明确「本包只做注册，不接管真实按键」。`sequence.py` 是唯一 import Qt 的模块，所以即使加载成功，按键也不会自己发生 |
-| 视图 / presenter 接线 | `src/albuswall/ui/keymap/` 之外没有任何代码 import 它（只有 `tests/test_ui_keymap.py`，以及 `shortcuts.ini` 头部的注释提到它）；启动流程里也没有 `load_shortcuts()` |
-| 默认表与代码的对应 | `shortcuts.ini` 里的 13 条命令都没有对应的槽登记，`load()` 之后 `unbound_slots()` 为空只是因为没有槽，`trigger` 对每条命令都跳过 |
+| 真实按键 | **未接通**：`keymap/__init__.py` 只做注册，仓库里没有应用级 `eventFilter` 把 `QKeyEvent` 转成 PortableText 再调 `trigger()`；无修饰键的绑定（`F5`）与和弦（`G, G`）都没有入口 |
+| 视图 / presenter 接线 | 界面 boot（`ui/bootstrap.py` phase 3）会 `registry_shortcut_registry(container)` 登记进容器；但**没有任何代码 import `albuswall.ui.keymap` 的类**（只按鸭子类型用容器里那个对象），启动流程里也没有 `load_shortcuts()` |
+| 默认表与代码的对应 | `shortcuts.ini` 里的 12 条命令都没有对应的槽登记，`load()` 之后 `unbound_slots()` 为空只是因为没有槽，`trigger` 对每条命令都跳过 |
 | 设置页 / 键位编辑 UI | 不存在：没有 Qt 行模型、没有录键控件、没有冲突提示、没有「恢复默认」按钮。`conflicts()` / `unbound_slots()` / `binding_for()` 是留给它的查询接口 |
-| 提示未来的组件标记 | `ui/widgets/collapsible_group_box.py:30` 与 `ui/widgets/virtual_scroll/basic.py:56` 设了 Qt 属性 `keymap_passthrough`，当前**没有任何代码读它** |
+| 提示未来的组件标记 | `ui/widgets/collapsible_group_box.py` 与 `ui/widgets/virtual_scroll/basic.py` 设的 Qt 属性 `keymap_passthrough` 目前**没有读者**：它曾由导航层（`NavRegistry.should_pass_through()`）用来决定「这组按键让渡给控件」，导航层已移除；keymap 层自己仍然不读它 |
 | 命令层接口 | `albuswall/command/registry.py` 的 docstring 有 `TODO(ui)`：快捷键绑定归界面层，命令注册表不提供接口 |
 | 设置写回 | 应用处于重构阶段、设置 GUI 未恢复。`albuswall.service.command.handlers.setting`（`setting.schema` / `setting.set` / `setting.save`）只对 `configue` 管的配置（如 `[ui]`）做写回，**不**管 `shortcuts.ini`——快捷键文件由 `ShortcutConfig` 自己读写，不进 `configue` schema |

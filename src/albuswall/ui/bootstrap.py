@@ -11,9 +11,8 @@ main loop → gc → 基础设施 → 服务）；本模块编排**界面**那�
 
 =========================  ===================================================
 :func:`setup_ui`           **init** 阶段：phase 1 语言 + ``ui_app`` / ``i18n``
-                           → phase 2 主窗口 → phase 3 导航注册表（3a 容器登记
-                           + 3b 窗口结构 → 域 / 节点）→ phase 4 presenter
-                           （``MainPresenter.bootstrap``）
+                           → phase 2 主窗口 → phase 3 快捷键注册表（容器登记）
+                           → phase 4 presenter（``MainPresenter.bootstrap``）
 :func:`show_ui`            **loop** 阶段：把容器里的主窗口显示出来
 =========================  ===================================================
 
@@ -31,11 +30,7 @@ main loop → gc → 基础设施 → 服务）；本模块编排**界面**那�
 ``i18n``         界面语言管理器（与模块级 :func:`albuswall.ui.set_language` 同一对象）
 ``main_window``  主窗口（默认 :class:`~albuswall.ui.window.Window`）
 ``presenter``    presenter 树的根（``main_presenter`` 是别名）
-``nav_registry`` 导航注册表（进程级单例；phase 3a 登记进容器，phase 3b
-                 由 :func:`~albuswall.ui.nav.wiring.register_window_nav` 写入
-                 主窗口的域 / 节点）；由 ``NavPresenter``（presenter 树里的
-                 ``nav``）负责按键分派
-``shortcuts``    快捷键注册表（进程级单例；phase 3a 只**登记**，**不**自动
+``shortcuts``    快捷键注册表（进程级单例；phase 3 只**登记**，**不**自动
                  ``load_shortcuts()``——加载时机仍归调用方）
 ===============  ==========================================================
 
@@ -82,7 +77,6 @@ from albuswall.configue import configclass
 from .i18n import TranslationManager
 from .languages import DEFAULT_LANGUAGE
 from .keymap import registry_shortcut_registry
-from .nav import NAV_PAGE_ID, register_window_nav, registry_nav_registry
 from .presenter import MainPresenter
 from .window import Window
 
@@ -94,7 +88,6 @@ if TYPE_CHECKING:
 __all__ = [
     "I18N_KEY",
     "MAIN_WINDOW_KEY",
-    "NAV_REGISTRY_KEY",
     "UI_APP_KEY",
     "UIConf",
     "configured_language",
@@ -115,8 +108,6 @@ UI_APP_KEY = "ui_app"
 I18N_KEY = "i18n"
 #: 容器键：主窗口（默认 :class:`~albuswall.ui.window.Window`；可被派生类替换）。
 MAIN_WINDOW_KEY = "main_window"
-#: 容器键：导航注册表（``albuswall.ui.nav`` 的进程级单例）。
-NAV_REGISTRY_KEY = "nav_registry"
 
 
 # noinspection bad-assignment
@@ -185,41 +176,8 @@ def ensure_main_window(container: Container) -> Window:
     return window
 
 
-def _land_initial_focus(nav: object, window: object) -> None:
-    """把光标落到根域第一个可见入口，并执行一次焦点（``setup_ui`` phase 3c）。
-
-    「首焦点由谁决定」在 nav 的契约里是明确分工的：``register_window_nav``
-    只负责复位（``jump_to_page_root`` → 根域虚拟根 ``current=None``），**不**
-    替调用方选落点；选落点属于 boot 的编排。这里的落点由 nav 自己算
-    （``enter(how="tab")`` 的三级 fallback），boot 不硬编码任何节点 id——
-    派生窗口砍掉标题栏时，落点会自动变成下一个可见入口。
-
-    ``enter`` 返回 ``None``（根域一个可见落点都没有）时安静跳过：headless /
-    游戏化窗口里没有可聚焦控件是允许的状态。
-
-    Args:
-        nav: 导航注册表（``NavRegistry``；这里只按鸭子类型调用三个方法）。
-        window: 主窗口，仅用于日志。
-    """
-    try:
-        node = nav.enter(NAV_PAGE_ID, how="tab")
-    except Exception:  # noqa: BLE001 - boot 不该因为导航落点把启动拖崩
-        logger.debug("ui.bootstrap: initial nav landing failed", exc_info=True)
-        return
-    if node is None:
-        logger.debug(
-            "ui.bootstrap: no focusable entry for %s; leaving focus alone",
-            type(window).__name__)
-        return
-    try:
-        nav.focus_node(node)
-    except Exception:  # noqa: BLE001 - 窗口还没显示时 setFocus 可能不可用
-        logger.debug(
-            "ui.bootstrap: initial focus on %s failed", node.id, exc_info=True)
-
-
 def setup_ui(container: Container, app: Application) -> Window:
-    """界面 boot：语言 → 主窗口 → 导航注册表 → presenter。
+    """界面 boot：语言 → 主窗口 → 快捷键注册表 → presenter。
 
     由 ``albuswall.plugins.builtin_ui`` 在 ``init`` hook 里调用（hook 插在
     ``init`` 列表头部）。这个时机是**必须**的：
@@ -231,10 +189,6 @@ def setup_ui(container: Container, app: Application) -> Window:
 
     窗口来自 :func:`ensure_main_window`：容器里已经塞了派生窗口就用那个，
     这里不 new、不认类型。
-
-    phase 3b 之后还要做一次「首焦点」（见 :func:`_land_initial_focus`）：
-    wiring 结束时光标停在根域虚拟根，方向键在那上面没有落点，不落首焦点
-    会表现成「界面出来了，方向键按了没反应」。
 
     Args:
         container: 依赖容器（与 ``app`` 同属一次启动）。
@@ -253,20 +207,9 @@ def setup_ui(container: Container, app: Application) -> Window:
     # phase 2: 主窗口（容器优先：派生窗口替换的落点）
     window = ensure_main_window(container)
 
-    # phase 3: 界面侧注册表（导航 + 快捷键）。**延后**到界面 boot 才登记：它们
-    # 只对界面有意义，不该占宿主 ``main._boot`` 的 phase 6/7（那是基础设施与服务）。
-    #
-    # 3a 容器登记 → 3b 把窗口结构注册成域 / 节点。顺序不能反：wiring 要往
-    # 容器里那**一个**注册表写（进程级单例），先登记才能取到同一个对象。
-    registry_nav_registry(container)
+    # phase 3: 界面侧注册表（快捷键）。**延后**到界面 boot 才登记：它只对界面
+    # 有意义，不该占宿主 ``main._boot`` 的 phase 6/7（那是基础设施与服务）。
     registry_shortcut_registry(container)
-    nav = container.get(NAV_REGISTRY_KEY)
-    register_window_nav(window, registry=nav)
-    # 3c 首焦点。``register_window_nav`` 只把页面复位到根域虚拟根（``current``
-    # 为 ``None``）；虚拟根上按方向键没有任何落点，光标会「按了没反应」。所以
-    # 「第一次按键往哪走」由 boot 决定：落根域第一个可见 focusable（正常情况下
-    # 是 ``window.titlebar`` 区域入口），并把真实焦点交给它的 ``focus_fn``。
-    _land_initial_focus(nav, window)
 
     # phase 4: presenter 树（在 show 之前套主题，绑定主窗口）
     MainPresenter.bootstrap(container, app=app, window=window)

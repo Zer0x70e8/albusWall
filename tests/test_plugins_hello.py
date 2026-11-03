@@ -1,12 +1,16 @@
 #
-"""内置示例插件 ``albuswall.plugins.hello`` 的回归。
+"""示例插件 ``albuswall.plugins.hello`` 的回归。
+
+示例文件以 ``hello.py.txt`` 的形式随包发布：**扩展名不是 .py，所以内置发现
+扫不到它**，`python -m albuswall` 不会把它装进生命周期。下面这些用例按需把
+它当普通模块从源码装进 ``sys.modules``，于是仍能守住它的行为约定。
 
 守四件事：
 
 1. **声明只在 import 期发生一次**：模块被 import 时 `@plugin` 追加到
    `_pending`；重复 import（`sys.modules` 命中）不会重复声明。所以每个用例
    开头都先 `sys.modules.pop(...)` 再造「首次 import」；
-2. **发现 + 收编 + 生命周期**：`load_builtin` 收编后，`exec` 的真实顺序是
+2. **收编 + 生命周期**：`load_pending` 收编后，`exec` 的真实顺序是
    `boot → init → start → loop → stop → exit`，且 `stop` 早于 `exit`；
 3. **服务可见性**：串插件通过容器拿到 `hello_service`；
 4. **可禁用 / 可配置**：`disabled=["hello"]` 后不注册任何东西；
@@ -17,9 +21,13 @@
 from __future__ import annotations
 
 import importlib
+import importlib.machinery
+import importlib.util
 import logging
 import sys
+import types
 from contextlib import suppress
+from pathlib import Path
 
 import pytest
 
@@ -39,13 +47,32 @@ from albuswall.core.registry import hooks_map
 HELLO_MODULE = "albuswall.plugins.hello"
 HELLO_LOGGER = "albuswall.plugins.hello"
 
+#: 示例文件用 ``.txt`` 后缀随包发布 —— 内置发现只认 ``.py``，所以它不会被
+#: 自动启用；要跑它的行为，得从源码路径显式装进 ``sys.modules``。
+HELLO_SAMPLE = (
+    Path(__file__).resolve().parents[1]
+    / "src" / "albuswall" / "plugins" / "hello.py.txt"
+)
+
 
 # ==================== 辅助 ====================
 
 def _fresh_import() -> types.ModuleType:
-    """重新 import hello，模拟「首次 import 触发模块级 @plugin」。"""
+    """从 ``hello.py.txt`` 重新装成模块，模拟「首次 import 触发模块级 @plugin」。"""
     sys.modules.pop(HELLO_MODULE, None)
-    return importlib.import_module(HELLO_MODULE)
+    loader = importlib.machinery.SourceFileLoader(HELLO_MODULE, str(HELLO_SAMPLE))
+    spec = importlib.util.spec_from_file_location(
+        HELLO_MODULE, str(HELLO_SAMPLE), loader=loader,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[HELLO_MODULE] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(HELLO_MODULE, None)
+        raise
+    return module
 
 
 class _FakeLoop(MainLoop):
@@ -155,13 +182,17 @@ def test_reimport_does_not_duplicate_declaration():
     assert count_after == count_before
 
 
-def test_load_builtin_discovers_hello():
-    _fresh_import()
-    manager = make_app().plugins
+def test_sample_is_not_discovered_as_builtin():
+    """示例文件叫 ``hello.py.txt``，内置发现不该把 ``hello`` 收成插件。
 
-    assert manager.load_builtin("albuswall.plugins") >= 1
-    assert "hello" in manager
-    assert manager.get("hello").version == "1.0.0"
+    这是「示例随包发布但不自动启用」的核心守卫：换回 ``.py`` 就会让
+    `python -m albuswall` 真的把它装进生命周期。
+    """
+    assert HELLO_SAMPLE.is_file()
+
+    manager = make_app().plugins
+    manager.load_builtin("albuswall.plugins")
+    assert "hello" not in manager
 
 
 # ==================== setup 阶段的效果 ====================
@@ -169,7 +200,7 @@ def test_load_builtin_discovers_hello():
 def test_setup_registers_service_and_hooks():
     _fresh_import()
     app = make_app()
-    app.plugins.load_builtin("albuswall.plugins")
+    app.plugins.load_pending()
     app.plugins.setup_all()
 
     service = app.container.require("hello_service")
@@ -186,7 +217,7 @@ def test_service_is_visible_to_other_code():
     """别的插件（这里用一条普通 loop hook 代替）能从容器拿到 hello_service。"""
     _fresh_import()
     app = make_app()
-    app.plugins.load_builtin("albuswall.plugins")
+    app.plugins.load_pending()
     app.plugins.setup_all()
 
     seen = []
@@ -203,7 +234,7 @@ def test_service_is_visible_to_other_code():
 def test_disabled_hello_registers_nothing():
     _fresh_import()
     app = make_app()
-    app.plugins.load_builtin("albuswall.plugins")
+    app.plugins.load_pending()
     app.plugins.setup_all(disabled=["hello"])
 
     assert "hello_service" not in app.container
@@ -217,7 +248,7 @@ def test_exec_runs_hello_lifecycle_in_order(caplog):
     _fresh_import()
     loop = _FakeLoop()
     app = make_app(loop, config=_PlaceholderConfig())
-    app.plugins.load_builtin("albuswall.plugins")
+    app.plugins.load_pending()
 
     with caplog.at_level(logging.INFO, logger=HELLO_LOGGER):
         assert app.exec() == 0
@@ -244,7 +275,7 @@ def test_exec_runs_hello_lifecycle_in_order(caplog):
 def test_started_flag_toggles_across_lifecycle():
     _fresh_import()
     app = make_app(_FakeLoop())
-    app.plugins.load_builtin("albuswall.plugins")
+    app.plugins.load_pending()
     app.plugins.setup_all()
 
     service = app.container.require("hello_service")
@@ -261,7 +292,7 @@ def test_exit_hook_is_idempotent():
     """exit 钩子会被 finally_ 跑一次；人工再跑一次不能炸。"""
     _fresh_import()
     app = make_app()
-    app.plugins.load_builtin("albuswall.plugins")
+    app.plugins.load_pending()
     app.plugins.setup_all()
 
     for hook in list(hooks_map["exit"]):
@@ -277,7 +308,7 @@ def test_greeting_from_config(real_config):
     real_config("[hello]\ngreeting =   你好，AlbusWall  \n")
 
     app = make_app()
-    app.plugins.load_builtin("albuswall.plugins")
+    app.plugins.load_pending()
     app.plugins.setup_all()
 
     assert app.container.require("hello_service").greeting == "你好，AlbusWall"
@@ -288,7 +319,7 @@ def test_greeting_falls_back_when_section_missing(real_config):
     real_config("[log]\nlevel = INFO\n")     # 真配置，但没有 [hello]
 
     app = make_app()
-    app.plugins.load_builtin("albuswall.plugins")
+    app.plugins.load_pending()
     app.plugins.setup_all()
 
     assert app.container.require("hello_service").greeting == "Hello, AlbusWall!"
@@ -300,7 +331,7 @@ def test_greeting_falls_back_on_empty_value(real_config):
     real_config("[hello]\ngreeting =    \n")
 
     app = make_app()
-    app.plugins.load_builtin("albuswall.plugins")
+    app.plugins.load_pending()
     app.plugins.setup_all()
 
     assert app.container.require("hello_service").greeting == "Hello, AlbusWall!"
@@ -312,7 +343,7 @@ def test_greeting_falls_back_without_configue():
     assert Configue._instance is None
 
     app = make_app()
-    app.plugins.load_builtin("albuswall.plugins")
+    app.plugins.load_pending()
     app.plugins.setup_all()
 
     assert app.container.require("hello_service").greeting == "Hello, AlbusWall!"

@@ -34,7 +34,7 @@ CONFIG_FILE_NAME = "config.ini"
 _logger = getLogger(__package__)
 
 
-def _plugin_disables(config: "Configue | None") -> set[str]:
+def plugin_disables(config: "Configue | None") -> set[str]:
     """从配置读 ``[plugin_disables]`` 段，返回被禁用的插件名。
 
     段的 key 就是插件名；value 只是「开关记法」，本阶段不参与判断——这与旧
@@ -81,17 +81,17 @@ def _boot(app: Application):
     )
     manager = app.plugins()
     manager.load_pending()
-    plugin_disables = _plugin_disables(container.get("config"))
-    manager.setup_all(disabled=plugin_disables)
+    manager.setup_all(disabled=plugin_disables(container.get("config")))
 
     # phase 3: logger
     setup_log(container)
 
     # phase 4: main loop
     # 插件在 setup 阶段注册的 select_loop hook 在这里触发（例如 builtin_ui）。
-    # 必须在 exec() 的 run_hooks("init") 之前完成——Application.__init__
-    # 会把自己的 init/loop hook 插到列表头部，插件在 on_init 里才能访问 ui_app。
-    # 本 phase 位于 _boot，_boot 早于 _main 的 app.exec()，满足时序。
+    # 槽位工厂只造**被动的** Qt 主循环并把 ``ui_app`` 登记进容器；界面装配
+    # （语言 / 主窗口 / presenter）由 builtin_ui 在 init hook 里做——那时
+    # phase 6/7 已经把基础设施与服务装好，presenter 才拿得到自己依赖的服务。
+    # 本 phase 又必须早于 phase 7：服务层据此建 ``main_loop_service``。
     loop = app.resolve_slot("main_loop")
     # 放进容器：服务层据此建 ``main_loop_service``（写入口回主线程的通道）。
     # 必须与 ``loop.run()`` 是**同一个对象**，否则调度会投递到没人消费的队列。

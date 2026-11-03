@@ -26,6 +26,7 @@ class CloseButton(QPushButton):
         """Initialize the close button with a cross cover."""
         super().__init__(parent)
         self.setObjectName(type(self).__name__)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self.clicked.connect(lambda: self.window().close())
         self.setText("\u2715")  # multiplication sign (✕)
@@ -54,6 +55,7 @@ class MaximizeButton(QPushButton):
         """
         super().__init__(parent)
         self.setObjectName(type(self).__name__)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         # Icons: (maximize, restore) using Unicode symbols
         self.icons = ("\U0001F5D7", "\U0001F5D6")   # 🗗 (maximize), 🗖 (restore)
@@ -174,6 +176,7 @@ class MinimizeButton(QPushButton):
         """Initialize the minimize button with a dash cover."""
         super().__init__(parent)
         self.setObjectName(type(self).__name__)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self.clicked.connect(lambda: self.window().showMinimized())
         self.setText("\U0001F5D5")  # minimize symbol
@@ -186,6 +189,7 @@ class PinButton(QPushButton):
         """Initialize the pin button with two states: unpinned and pinned."""
         super().__init__(parent)
         self.setObjectName(type(self).__name__)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self.texts = ("\U0001F4CC\uFE0E", "\U0001F4CC\uFE0E\u20E0")  # (unpinned, pinned)
         self.setText(self.texts[0])
@@ -217,6 +221,7 @@ class FoldButton(QPushButton):
         """Initialize the fold button with two states: folded and unfolded."""
         super().__init__(parent)
         self.setObjectName(type(self).__name__)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self.texts = ("\u23F7", "\u23F5")  # (unfolded cover, folded cover)
         self.is_folded = False

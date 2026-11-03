@@ -35,16 +35,16 @@
 正确性：接线发生在所有子节点构造完成之后，子节点启动期发出的信号也已被
 连上，不会漏接。
 
-和 UI 应用类的关系
-==================
+和界面 boot 层的关系
+====================
 
-:meth:`MainPresenter.bootstrap` 是**唯一**入口 —— ``Application.setup()`` 建好
-主窗口后调用它：
+:meth:`MainPresenter.bootstrap` 是**唯一**入口 —— boot 层
+(:func:`albuswall.ui.bootstrap.setup_ui`) 建好主窗口后调用它：
 
 .. code-block:: python
 
     self.presenter = MainPresenter.bootstrap(
-        self._container, app=self, window=window)
+        container, app=app, window=window)
 
 ``bootstrap`` 做四件事（全部幂等）：
 

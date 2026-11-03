@@ -64,7 +64,7 @@ RUF002/003 与既有 UP009/I001）对新文件全绿。
 
 `tests/test_application.py`：`setup → boot → init → start → loop → run → stop →
 exit` 顺序、已 setup/start 时不重复、start 失败传播 + 已清理、exit hook 失败只
-记日志、`Application.plugins()` / `load_plugins()`、`_plugin_disables` 三种输入。
+记日志、`Application.plugins()` / `load_plugins()`、`plugin_disables` 三种输入。
 
 ---
 

@@ -15,7 +15,7 @@
     [shortcuts]
     slot_name     = ["Alt+1", [1], {"mode": "x"}]
     view.fullscreen = [["F11", "Ctrl+Shift+F"], [], {}]
-    navigation.grid = ["G, G"]
+    content.search = ["Ctrl+F"]
 
 每条记录是「快捷键 + 位置参数 + 关键字参数」三元组（JSON 数组）：
 

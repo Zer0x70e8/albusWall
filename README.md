@@ -38,7 +38,8 @@ This is not just a cleanup — the architecture is now much more flexible.
 - **UI is now replaceable**  
   The built-in UI is implemented as a plugin. The core application no longer forces PySide6 as a hard dependency.  
   Relevant modules:
-  - `albuswall.ui.application` (`Application` / `UIApplication`, the Qt `MainLoop`)
+  - `albuswall.ui.application` (`Application` / `UIApplication`, the passive Qt `MainLoop`)
+  - `albuswall.ui.bootstrap` (`setup_ui` / `show_ui`: UI-side boot — language, window, presenters)
   - `albuswall.ui.window` / `albuswall.ui.widgets` (pure views: they only emit intents)
   - `albuswall.ui.presenter` (presentation layer: `MainPresenter` orchestrates every presenter's lifecycle and owns the window theme)
   - `albuswall.plugins.builtin_ui`
@@ -174,9 +175,10 @@ AlbusWall now treats functionality and frontends as plugins.
 | `core/application.py` | `Application` lifecycle, slot resolution, hook dispatch |
 | `core/main_loop.py` | `MainLoop` protocol (`call_soon` / `run` / `stop`) |
 | `plugin/discovery.py` | Finding available plugins (entry points, directories, packages) |
-| `plugins/builtin_ui.py` | The default UI provided as a plugin |
+| `plugins/builtin_ui.py` | The default UI as a plugin: provides `main_loop`, runs the UI boot |
 | `plugins/command.py` | Assembles every command handler, then freezes the registry |
-| `ui/application.py` | Qt `MainLoop` (`Application` / `UIApplication`) |
+| `ui/application.py` | Qt `MainLoop` (`Application` / `UIApplication`) — passive, no boot |
+| `ui/bootstrap.py` | UI boot: `[ui] language` → window → shortcut registry → presenters → container keys (the window is taken from the container, so a derived window replaces it) |
 | `ui/window/`, `ui/widgets/` | Pure views (they only emit intent signals) |
 | `ui/presenter/` | Presentation layer: `MainPresenter` + one presenter per screen |
 
@@ -369,7 +371,8 @@ src/
     ├── infrastructure/        # database, ipc, task, trigger, reconcile, platform
     ├── log/                   # logging system (filters, formatters, handlers)
     ├── plugin/                # discovery (entry points / directories / packages)
-    ├── plugins/               # built-ins: builtin_ui, command, hello
+    ├── plugins/               # built-ins: builtin_ui, command
+    │                          # sample: hello.py.txt (not auto-loaded)
     ├── repositories/          # data access (+ utils/visibility.py)
     ├── resources/             # conf.ini, shortcuts.ini, sql, themes, i18n, icons
     ├── service/               # business logic, one package per domain

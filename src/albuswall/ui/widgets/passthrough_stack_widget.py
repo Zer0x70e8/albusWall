@@ -74,8 +74,7 @@ class PassthroughStack(QStackedWidget):
 
         这里先 ``clearFocus()``：焦点不再在旧页里，Qt 那一步转移就不会发生，
         占位页也就永远拿不到焦点。**落到哪里不由这里决定**：焦点暂时为空，
-        随后由 ``NavPresenter`` 按 nav 的决策重新落点（关页 → 弹回根帧 →
-        焦点交给确定的区域入口）。
+        由调用方按业务语义交给下一位（关页 → 回到内容网格 → 收掉浮层）。
         """
         holder = self.focusWidget()
         if holder is not None:
