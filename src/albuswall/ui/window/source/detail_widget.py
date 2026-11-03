@@ -2,11 +2,14 @@
 """导入源表单：元信息 / 源路径 / 触发器三组控件（纯展示，不含业务）。
 
 表单不做任何 DTO ↔ 控件映射，也不发请求；读取 / 回填由外部完成。
+
+``tag_remove_requested`` / ``file_type_remove_requested`` 是预留信号，外部接线后按
+Delete 才会真的移除；未接线时按 Delete 无反应，但已防止双击 / F2 误编辑。
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QStringListModel
+from PySide6.QtCore import QEvent, QStringListModel, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -34,6 +37,10 @@ __all__ = ["IngestSourceDetailWidget"]
 
 class IngestSourceDetailWidget(Retranslatable, QFrame):
     """导入源表单。"""
+
+    # ---- 对外信号（预留）：只声明「想移除这一项」，移除由外部接线完成 ----
+    tag_remove_requested = Signal(str)
+    file_type_remove_requested = Signal(str)
 
     # ---- 子控件声明（类型注解） ----
     main_layout: QVBoxLayout
@@ -179,6 +186,9 @@ class IngestSourceDetailWidget(Retranslatable, QFrame):
         self.tags_view.setViewMode(QListView.ViewMode.IconMode)
         self.tags_view.setSpacing(4)
         self.tags_view.setFixedHeight(40)
+        # 只读展示：禁掉双击 / F2 误编辑；Tab 可聚焦与选中高亮保持不变
+        self.tags_view.setEditTriggers(QListView.EditTrigger.NoEditTriggers)
+        self.tags_view.installEventFilter(self)
 
         self.tags_layout.addWidget(self.tags_view)
         self.tags_layout.addWidget(self.tags_line_edit)
@@ -216,6 +226,10 @@ class IngestSourceDetailWidget(Retranslatable, QFrame):
         self.file_type_list_view.setViewMode(QListView.ViewMode.IconMode)
         self.file_type_list_view.setSpacing(4)
         self.file_type_list_view.setFixedHeight(40)
+        # 只读展示：禁掉双击 / F2 误编辑；Tab 可聚焦与选中高亮保持不变
+        self.file_type_list_view.setEditTriggers(
+            QListView.EditTrigger.NoEditTriggers)
+        self.file_type_list_view.installEventFilter(self)
 
         self.file_type_layout = QHBoxLayout()
         self.file_type_layout.addWidget(self.file_type_list_view, 2)
@@ -484,6 +498,32 @@ class IngestSourceDetailWidget(Retranslatable, QFrame):
         self.scheduled_time_label.setVisible(not is_interval)
         self.interval_time_edit.setVisible(is_interval)
         self.interval_time_label.setVisible(is_interval)
+
+    # ------------------------------------------------------------------ #
+    # 键盘：两个只读列表的「移除」意图
+    # ------------------------------------------------------------------ #
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt 命名
+        """Delete / Backspace 在只读列表上抛移除意图（展示副本本身不动）。"""
+        if (event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)):
+            if obj is self.tags_view:
+                self._emit_remove(self.tags_view, self.tag_remove_requested)
+                event.accept()
+                return True
+            if obj is self.file_type_list_view:
+                self._emit_remove(self.file_type_list_view,
+                                  self.file_type_remove_requested)
+                event.accept()
+                return True
+        return super().eventFilter(obj, event)
+
+    @staticmethod
+    def _emit_remove(view: QListView, signal) -> None:
+        """把「想移除这一项」按 DisplayRole 文本抛给外部；无选中项时什么也不做。"""
+        index = view.currentIndex()
+        if not index.isValid():
+            return
+        signal.emit(index.data(Qt.ItemDataRole.DisplayRole))
 
     # ------------------------------------------------------------------ #
     # 纯视图侧的复位接口

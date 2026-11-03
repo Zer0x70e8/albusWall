@@ -146,7 +146,12 @@ class ColumnLayoutCalculator:
 
 
 class ColumnListView(QAbstractItemView):
-    """多列卡片视图（原文档字符串保留）。"""
+    """多列卡片视图（原文档字符串保留）。
+
+    鼠标：本类重写了 ``mousePressEvent``（选中 + 置 current 都在按下时完成），
+    并且**不转交基类**，所以基类依赖 ``pressedIndex`` 的路径不会生效 ——
+    ``clicked`` 的发射由本类自己保证。消费方可以放心接 ``clicked``。
+    """
 
     # ============ QSS 可调参数 ============
     cardRadius = _card_prop("radius", 10)
@@ -453,6 +458,11 @@ class ColumnListView(QAbstractItemView):
 
         self.viewport().update()
         event.accept()
+        # QAbstractItemView 的 clicked 由 mouseReleaseEvent 依据 press 时登记的
+        # pressedIndex 发射；本类重写了 mousePressEvent 且从不转交基类，那条路径
+        # 永远不成立（pressed / clicked 会静默失效）。因此 clicked 的发射由本类
+        # 自己保证：命中有效索引就发一次，空白处不发。
+        self.clicked.emit(index)
 
     # ========== 滚动到指定索引 ==========
     def scrollTo(self, index, hint=QAbstractItemView.ScrollHint.EnsureVisible):

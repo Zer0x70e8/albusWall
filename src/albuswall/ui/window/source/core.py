@@ -78,7 +78,6 @@ class IngestSource(Retranslatable, BlurLabel):
         self.model = None
         self.delegate = None
         self._detail_mode = False
-        self._selection_connected = False
 
         self.setObjectName("IngestSource")
 
@@ -116,6 +115,8 @@ class IngestSource(Retranslatable, BlurLabel):
         self.view.customContextMenuRequested.connect(
             self._on_view_context_menu_requested)
         self.view.clicked.connect(self._on_card_clicked)
+        # 键盘 Enter / Return：与点击同一条出口（方向键只移动高亮，不打开发表单）
+        self.view.activated.connect(self._on_card_clicked)
         self.view.installEventFilter(self)
 
         self.splitter.addWidget(self.view)
@@ -191,12 +192,6 @@ class IngestSource(Retranslatable, BlurLabel):
         self.delegate = delegate
         self.view.bind_model(model, delegate)
 
-        # 此时 selectionModel 才存在
-        selection_model = self.view.selectionModel()
-        if selection_model is not None and not self._selection_connected:
-            selection_model.currentChanged.connect(self._on_current_changed)
-            self._selection_connected = True
-
     def set_source_cards(self, cards) -> None:
         """便捷入口：直接喂一批导入源对象（DTO / ``SourceCard`` 都行）。
 
@@ -234,15 +229,6 @@ class IngestSource(Retranslatable, BlurLabel):
             QTimer.singleShot(0, self._resize_splitter)
         # 无论首次还是再次，都要把 index 抛给外部填数据
         self.card_clicked.emit(index)
-
-    def _on_current_changed(
-            self,
-            current: QModelIndex,
-            _previous: QModelIndex,
-    ) -> None:
-        # clearSelection() 会切到 invalid index —— 过滤掉，不误触
-        if current.isValid():
-            self._on_card_clicked(current)
 
     def _resize_splitter(self) -> None:
         width = max(self.splitter.width(), 500)
