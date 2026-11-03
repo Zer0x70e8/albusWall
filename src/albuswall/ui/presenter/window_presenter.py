@@ -89,7 +89,7 @@ class WindowPresenter(Presenter):
         # 主 presenter 启动时已经套好主题：这里把主题图标补上
         self.apply_theme(self._current_theme())
         # 等一次事件循环：布局稳定后焦点才有正确的父链。
-        QTimer.singleShot(0, self.focus_default_region)
+        QTimer.singleShot(0, self._window.focus_default_region)
 
     def _wire(self) -> None:
         w = self._window

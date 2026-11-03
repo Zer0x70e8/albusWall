@@ -205,6 +205,10 @@ class Window(QWidget):
         """收起当前浮层页，回到空白层（内容层重新可交互）。"""
         self.overlay.show_blank()
 
+    def focus_default_region(self) -> None:
+        """把键盘焦点交给内容网格（外部在窗口显示 / 收起浮层时调用）。"""
+        self.content.setFocus(Qt.FocusReason.OtherFocusReason)
+
     def _toggle_page(self, page: QWidget) -> None:
         if self.overlay.currentWidget() is page:
             self.overlay.show_blank()
@@ -212,11 +216,19 @@ class Window(QWidget):
             self.overlay.setCurrentWidget(page)
 
     def _on_exit_requested(self) -> None:
-        """「更多 → 退出」：关闭主窗口并结束事件循环。"""
-        self.close()
+        """「更多 → 退出」：先请求停事件循环，再关窗口。
+
+        注意 Qt 行为：``quit()`` 会先请求关闭窗口；任一窗口在
+        ``closeEvent`` 里 ``ignore()`` 时，这次 quit 会被中止，事件循环
+        继续跑。因此本函数的"退出"语义**可被外部取消**——需要无条件退出
+        应改 ``app.exit(0)``（不经过 closeEvent，但会跳过关闭清理）。
+
+        当前选择可取消语义：外部（如未保存确认对话框）有权拦下退出。
+        """
         app = QApplication.instance()
         if app is not None:
             app.quit()
+        self.close()
 
     # ------------------------------------------------------------------ #
     # 几何同步
