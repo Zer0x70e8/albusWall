@@ -3,7 +3,7 @@
 > 本文件是本次改动的 **PR 描述**。实现范围严格限定在规格给定的决策
 > D1–D10，不引入新的设计选择；规格未覆盖的细节集中在文末「待确认」。
 >
-> 分支：`wip/configue1-refactor`（基于 `39652d2`）
+> 分支：`wip/configue1-refactor`（基于 `3c0b201`）
 
 ## 改动概览
 
@@ -11,7 +11,7 @@
 | --- | --- |
 | 新增 | `src/albuswall/core/plugins.py` |
 | 新增 | `src/albuswall/plugins/__init__.py`（第一方插件目录占位，见「待确认 1」） |
-| 恢复 | `src/albuswall/plugin/__init__.py`、`src/albuswall/plugin/discovery.py`（本分支 `55b1b17` 删除，从历史恢复并微调） |
+| 恢复 | `src/albuswall/plugin/__init__.py`、`src/albuswall/plugin/discovery.py`（本分支 `972f6b8` 删除，从历史恢复并微调） |
 | 新增 | `tests/test_plugins.py`（50 例）、`tests/test_container.py`（11 例）、`tests/test_application.py`（13 例） |
 | 新增 | `docs/plugin-author-guide.md`（12 节） |
 | 修改 | `src/albuswall/core/{container,registry,application,types,runtime,__init__}.py`、`src/albuswall/log/bootstrap.py`、`src/albuswall/main.py`、`tests/conftest.py` |
@@ -27,7 +27,7 @@ RUF002/003 与既有 UP009/I001）对新文件全绿。
 
 | 决策 | 落地位置 | 说明 |
 | --- | --- | --- |
-| **D1** UI 子插件独立 | `core/plugins.py` 全文 | 不 import `plugin/declaration.py` / `plugin/manager.py`，也没有任何 `ui_loader` / `activate_ui` 痕迹。这两个模块在本分支不存在（`55b1b17` 已删除），本次**不恢复**。 |
+| **D1** UI 子插件独立 | `core/plugins.py` 全文 | 不 import `plugin/declaration.py` / `plugin/manager.py`，也没有任何 `ui_loader` / `activate_ui` 痕迹。这两个模块在本分支不存在（`972f6b8` 已删除），本次**不恢复**。 |
 | **D2** 最小 API、不设围墙 | `PluginContext`（`provide` / `on` / `register` / `require` / `get` / `log`）、`_DecoratedPlugin.setup` | `container` / `app` 是真实对象；`provide` / `on` / `register` 只记录以便回滚。工厂签名统一 `Callable[[Container], Any]`：`_DecoratedPlugin.setup` 直调 `self._factory(ctx.container)`，**不**走 `_wants_container`。无 ServiceProxy。 |
 | **D3** `@plugin` 三形态 + pending | `plugin()`、`_pending`、`_drain_pending()`、`PluginManager.load_pending()` | 装饰返回原函数（保持可调用），把 `_DecoratedPlugin` append 到 `_pending`；`load_pending` 取快照后清空。三种返回值在 `_resolve_lifecycle()` 归一。 |
 | **D4** 实例级、三阶段、fail-fast | `PluginManager.__init__` / `setup_all` / `start_all` / `stop_all` / `_rollback_setup` / `_safe_stop` | 字段全部 `self.*`；setup 失败 → 撤销本插件注册 + 逆序 `_safe_stop` + `raise`；start 失败 → `_started.append` 在 `plugin.start()` **之前**，异常传播；stop 失败 → 吞 + `logger.exception` + 继续。 |
@@ -74,12 +74,12 @@ exit` 顺序、已 setup/start 时不重复、start 失败传播 + 已清理、e
 
 规格多处假设 `plugin/discovery.py` 存在（「复用 `src/albuswall/plugin/
 discovery.py`」「不要删 `_import_from_path` / `_import_quietly` /
-`discover_directory`」），但本分支 `55b1b17 WIP: configue1 配置层重构` **删掉了
-整个 `plugin/` 包**（`origin/main` 与 `55b1b17^` 里还有）。
+`discover_directory`」），但本分支 `972f6b8 WIP: configue1 configuration-layer refactor` **删掉了
+整个 `plugin/` 包**（`origin/main` 与 `972f6b8^` 里还有）。
 
 我的选择：
 
-- 从 `55b1b17^` 恢复 `plugin/discovery.py`，只做规格要求的改动：`discover_all`
+- 从 `972f6b8^` 恢复 `plugin/discovery.py`，只做规格要求的改动：`discover_all`
   的 `user_dir` 默认 `None`（`None` 即跳过）、docstring 改成中文并标注
   `discover_all` **不推荐**（优先 `PluginManager.load_*`）、类型标注收紧
   （`eps: Any`、`target: Any`，使 pyright strict 下该文件 **0 error**）；

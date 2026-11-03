@@ -2,8 +2,8 @@
 
 > 面向：本项目的使用者（改 `config.ini` 的人）与未来的维护者（读/改配置层的人）。
 > 状态（历史）：本次迁移把旧包拆成新包 `albuswall.configue1`；迁移完成后旧包已删除
-> （commit `bab0ed2`，删除前最后一个仍含旧包的提交是
-> `55b1b173d4394203fda9f2760ea5688cb3050d71`，下文简称 `55b1b17`）。
+> （commit `f664c69`，删除前最后一个仍含旧包的提交是
+> `972f6b867ff3f9b748785870200526afe8843a69`，下文简称 `972f6b8`）。
 > 状态（当前）：紧随其后的一轮已把 `configue1` **改名回 `configue`**，仓库里现在只有
 > 一个配置包 `albuswall.configue`（即本文所说的「新包」），`import albuswall.configue1`
 > 会抛 `ModuleNotFoundError`。**下文凡写 `configue1` 的地方都是历史叙述**，阅读时理解为
@@ -203,9 +203,9 @@ TaskConfig().max_concurrency = 4  # 写：严格 isinstance；按文件 autosave
 
 ## 6. 旧包状态：已移除（包名后来被复用）
 
-- 旧实现 `src/albuswall/configue/` 已随 commit `bab0ed2` 删除；旧包唯一的回归防线
+- 旧实现 `src/albuswall/configue/` 已随 commit `f664c69` 删除；旧包唯一的回归防线
   `tests/test_configue_legacy_smoke.py` 一并删除。
-- **旧实现有 tag 可追**：annotated tag `configue-legacy-final` → `55b1b17`，即旧包
+- **旧实现有 tag 可追**：annotated tag `configue-legacy-final` → `972f6b8`，即旧包
   删除前的最后一个完整状态（`src/albuswall/configue/` 共 18 个文件：顶层 10 + `utils/` 8）。
   查旧代码：
 
@@ -220,7 +220,7 @@ TaskConfig().max_concurrency = 4  # 写：严格 isinstance；按文件 autosave
   `utils/annotation.py` 这 6 个，是早期的 scaffold。tag 之所以要补，就是因为当初
   「archive 分支兜底了旧包」这个前提不成立。
 - 冗余锚点：即使 tag 被误删，删除前最后一个包含旧包的 commit 仍是
-  `55b1b173d4394203fda9f2760ea5688cb3050d71`，`git show 55b1b17:src/albuswall/configue/...`
+  `972f6b867ff3f9b748785870200526afe8843a69`，`git show 972f6b8:src/albuswall/configue/...`
   照旧可用。
 - **包名已被复用，验证方式要跟着反过来**：紧随其后的一轮把 `src/albuswall/configue1/`
   改名回 `src/albuswall/configue/`，所以 `import albuswall.configue` 现在导入的是**新实现**
