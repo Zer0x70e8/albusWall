@@ -262,6 +262,29 @@ navbar 设 `{RIGHT: "enter"}` 时，`move(RIGHT)` 走的是 `enter(how="enter")`
 `ignore`。当前不做：代价大（要复刻 Qt 的焦点转移语义）、易碎（Qt 版本差异）、
 可能破坏 IME / 无障碍，且不一定挡得住程序化 `setFocus`。见 §7。
 
+### 5.9 探针触发处理 SOP
+
+**探针触发 = 出现了 nav 未预见的 Qt 内部行为**（`_report_stray_focus` 打出
+`focus landed on unregistered widget ...`）。它不是 bug 报警，是「新场景」提示。
+按下面的顺序处理，**不要**先想着让警告消失：
+
+1. **查上面的「已处理的案例」表。** `QStackedLayout` 换页 / `QTabWidget` 切页 /
+   `QDockWidget` 停靠这类已知内部行为，按表里对应修法处理（切页前
+   `_release_focus` 交还焦点 / 容器 `NoFocus` 让位 / 调整落点策略）。
+2. **查是不是新 wiring 漏了 `NoFocus`。** 新控件被 Qt 碰到 → 看它是否该进
+   `ensure_focusable` 的容器名单（`child_domain` 非空的节点），或是否该在
+   `widgets/` 层就给占位控件的内部页设 `NoFocus`（注意：`NoFocus` 只挡
+   Tab / 点击链，挡不住程序化 `setFocus`）。
+3. **查落点策略是否要扩展。** 新 overlay 页 / 新域加入后，
+   `_on_overlay_page_changed` 的落点顺序（§11「overlay 关页落点（默认策略）」）
+   是否需要跟着扩。
+4. **以上都不成立** → 在 PR 里明确记录「新发现的 Qt 内部行为」+ 采用的修法 +
+   已加入「已处理的案例」表。**不要为了让探针沉默而弱化探针。**
+
+判据：处理完应该得到的是「扩已有处理表 / 加新 `NoFocus` / 改落点策略」，不是
+「改探针」。§8 的 `test_hard_takeover_guards.py`（S1）会拦住把 `setFocus` /
+nav 动作 / 降级日志塞进探针的改动。
+
 ---
 
 ## 6. 修改这里的决策 checklist
@@ -393,7 +416,14 @@ reg.register_domain(Domain(
   （不在 `_PassthroughPage` 等占位页、落在注册节点上、光标离开被关的页域），
   且不触发 `_report_stray_focus` 的 warning；
 - `test_is_landing_widget_isolation.py`：`is_landing_widget` 判定纯注册表
-  （`ast` 审查，零 Qt 名字）+ 注入链路（presenter → `QtFocusBackend`）。
+  （`ast` 审查，零 Qt 名字）+ 注入链路（presenter → `QtFocusBackend`）；
+- `test_hard_takeover_guards.py`：**硬接管骨架的结构性守卫**（S1–S5）——
+  探针不得弱化（必须 warning 级日志、不得出现 `setFocus` / nav 动作 / 拉回
+  辅助）、`_handle_tab` 不得 `ignore` 且必须有消费路径、关页落点不得直接
+  `setFocus`（必须经 `nav.enter` / `exit_back` / `focus_node`）、容器 `NoFocus`
+  逻辑只许在 `nav/qt.py`、`PassthroughStack._release_focus` 存在且被切页路径
+  调用。每条都在内存里做了反证（改源码字符串 → 守卫必红）。处理探针触发的
+  流程见 §5.9。
 
 **覆盖率底线**：`registry.py` 的方法级覆盖 ≥ 95%。低于这个数意味着某条决策分支没人走过。
 
