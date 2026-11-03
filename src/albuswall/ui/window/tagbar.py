@@ -379,6 +379,8 @@ class TagBar(Retranslatable, QFrame):
 
     def collapse(self) -> None:
         """收起标签栏（输入区宽度归零）。"""
+        if self._is_collapse:
+            return  # 已在折叠状态，不重复记忆宽度
         self._is_collapse = True
         self._old_tag_add_container_widget = self.content_widget.width()
         # 「宽度归零」不等于「不可见」：Qt 的 Tab 链只看 isVisible()，0 宽控件
