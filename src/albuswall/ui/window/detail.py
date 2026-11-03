@@ -531,6 +531,23 @@ class Detail(Retranslatable, BlurLabel):
         return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------------ #
+    # 显示
+    # ------------------------------------------------------------------ #
+    def showEvent(self, event):  # noqa: N802 - Qt 命名
+        """详情页重新显示时，若信息面板正开着，焦点给面板内的关闭按钮。
+
+        P1 的 ``setEnabled(False)`` 会禁用 overlay / image_viewer，导致
+        presenter 的 ``image_viewer.setFocus()`` 静默失败。showEvent 在
+        ``presenter._on_overlay_changed`` 之前触发，先把焦点放到
+        ``panel.close_button``，presenter 后续的 ``setFocus(image_viewer)``
+        会因 disabled 静默失败，于是焦点保持在这里 —— 符合"面板开着就让
+        面板接住焦点"的意图。
+        """
+        super().showEvent(event)
+        if self.panel.isVisible():
+            self.panel.close_button.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    # ------------------------------------------------------------------ #
     # 几何
     # ------------------------------------------------------------------ #
     def resizeEvent(self, event):  # noqa: N802 - Qt 命名
