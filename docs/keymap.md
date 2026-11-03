@@ -164,6 +164,70 @@ registry.persist()                  # 把与默认不同的条目写回用户表
 `KeymapError` 是整层基类，一条 `except KeymapError` 能兜住；
 `InvalidKeySequence` 同时继承 `ValueError`（键位错本质是值错）。
 
+## 窗口内的「激活 / 确定」键（与 keymap 无关）
+
+窗口里「确定 / 打开 / 激活当前项」不再按控件分键位：**空格与回车等价**。
+实现只有一处——`ui/utils/activation_keys.py` 的应用级事件过滤器，由
+`ui/bootstrap.py` 的 phase 1 装到 `QApplication` 上（幂等）：
+
+| 场景 | 以前 | 现在 |
+| --- | --- | --- |
+| `QAbstractButton`（按钮 / 复选框 / 工具按钮） | 只有空格触发 `clicked` | 回车 / 小键盘回车改写成一次空格（按下动画 + `clicked` + 带菜单的按钮弹出菜单） |
+| 对话框里的按钮 | 回车 = 默认按钮 | **不动**：保持 Qt 的默认按钮语义 |
+| `QAbstractItemView`（列表 / 网格 / 树） | 只有回车 / 双击发 `activated` | 空格也发 `activated(currentIndex())` |
+| 带菜单的按钮 | 鼠标点才有菜单 | `Menu` 键 / `Shift+F10` 也打开菜单（与标签树、导入源卡片的约定一致） |
+
+* 带 `Ctrl` / `Alt` / `Meta` 的组合与按住不放（自动重复）一律不接管；
+* 文本框里的空格 / 回车属于输入内容，过滤器只认 `QAbstractButton` 与
+  `QAbstractItemView`，碰不到它们。
+
+**唯一的例外是内容视图**（`Content` 的资产网格，`VirtualScrollWidget`）：
+空格是「快速预览」、回车是「详情」，两个键分开（见 `unit_previewed` /
+`unit_activated`）；预览中再按空格退出预览（回到网格），按回车则升级成
+完整详情页（`Detail.set_preview_mode`）。它**不是** `QAbstractItemView`，
+所以过滤器不会把它的空格改写成「激活」。
+
+## Esc 的层级
+
+实现在 `ui/window/window.py` 的 `Window.keyPressEvent` / `Window.cancel_focus`：
+
+| 按键 | 效果 |
+| --- | --- |
+| `Esc`（还有焦点控件时） | **取消焦点**：`clearFocus()`，叠加层 / 当前页保持原样 |
+| `Esc`（焦点已取消时） | **收起叠加层**，回到空白占位页（`close_overlay()`） |
+| `Shift+Esc` | 不看焦点，**直接收起叠加层** |
+| `Ctrl/Alt/Meta + Esc` | 不参与这套层级（留给其它消费者） |
+
+* 「取消焦点」是 `clearFocus()`，不是把焦点挪到空白页：空白页是 `NoFocus`，
+  挪过去等于焦点仍挂在某个控件上，「取消」不可观测；
+* 取消焦点后按键由 Qt 交给窗口本身（没有焦点控件时的回退目标），所以第二次
+  `Esc` 仍能到 `Window.keyPressEvent`；
+* 按键先到焦点控件：搜索栏这类自己消费 `Esc` 的控件（先收建议列表、再收
+  搜索栏）优先，没被消费的 `Esc` 才沿控件链冒泡到窗口。
+
+## 焦点链（Tab / 方向键遍历）
+
+Qt 的 Tab 链只看焦点策略，**不看控件是否画了焦点指示器**；Qt 6 起方向键
+也会沿同一条链移动焦点。于是「不可见但可聚焦」的容器会变成陷阱：焦点走到
+上面，用户看到的就是「焦点不见了」。
+
+约定：
+
+* **滚动容器不进焦点链**：`Album.scroll_area` 与 `IngestSource.scroll_area`
+  （含 viewport）都设成 `NoFocus`。它们只是容器，落在上面的控件滚动可见性由
+  Qt（`ensureWidgetVisible`）负责，滚轮 / 列表自身的方向键照常工作；
+* **表单顺序显式给出**：控件创建顺序 ≠ 视觉阅读顺序，所以导入源详情页的
+  Tab 链由 `IngestSource._setup_tab_order` 串起来：
+  `关闭 → 应用 → 元信息 → 导入源 → 触发器（定时 → 设备插入）`，表单内部
+  顺序来自 `IngestSourceDetailWidget.tab_order()`；
+* 只读列表（标签 / 文件类型）保留在链上（可 Tab 选中），只是禁掉编辑；
+* **可勾选分组**（导入源页的「定时更新 / 设备插入触发器」）：Qt 的方向键
+  焦点导航不处理 `QGroupBox`，走进去就出不来。表单在
+  `IngestSourceDetailWidget._group_key_press` 里补上进出口语义 ——
+  `↓ / →` 进第一格，`↑ / ←` 退回分组之前；分组没勾选（子控件禁用）时
+  `↓ / →` 直接跳到分组之后的下一个焦点停点，不会卡住。分组的勾选本身
+  空格与回车都能切换（回车由激活键过滤器改写成空格）。
+
 ## 尚未接入的部分
 
 | 缺口 | 现状 |

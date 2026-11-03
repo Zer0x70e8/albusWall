@@ -105,6 +105,8 @@ class ContentPresenter(Presenter):
 
     #: 用户点击 / 回车激活了某一格（载荷 asset_uuid）。
     asset_activated = Signal(str)
+    #: 用户按空格「快速预览」了某一格（载荷 asset_uuid）：与回车（详情）分开。
+    asset_previewed = Signal(str)
     #: 键盘 / 鼠标光标切换（载荷 asset_uuid；空串 = 没有选中项）。
     selection_changed = Signal(str)
     #: 数据面变化（刷新完成；主 presenter 据此联动其它 presenter）。
@@ -148,6 +150,7 @@ class ContentPresenter(Presenter):
         grid.bind_model(self._model)
         grid.visible_range_changed.connect(self._on_visible_range)
         grid.unit_activated.connect(self._on_unit_activated)
+        grid.unit_previewed.connect(self._on_unit_previewed)
         grid.unit_clicked.connect(self._on_unit_activated)
         grid.unit_right_clicked.connect(self._on_unit_right_clicked)
         grid.cursor_changed.connect(self._on_cursor_changed)
@@ -617,6 +620,11 @@ class ContentPresenter(Presenter):
     def _on_unit_activated(self, index: int) -> None:
         if 0 <= index < len(self._uids):
             self.asset_activated.emit(self._uids[index])
+
+    def _on_unit_previewed(self, index: int) -> None:
+        """空格：快速预览这一格（与回车 / 点击的「详情」分开的两条出口）。"""
+        if 0 <= index < len(self._uids):
+            self.asset_previewed.emit(self._uids[index])
 
     def _on_cursor_changed(self, index: int) -> None:
         if 0 <= index < len(self._uids):

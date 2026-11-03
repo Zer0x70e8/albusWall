@@ -98,6 +98,10 @@ class Album(Retranslatable, BlurLabel):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)  # 去掉自带的边框
         self.scroll_area.viewport().setAutoFillBackground(False)
+        # 滚动容器不是可操作控件：它没有焦点指示器，留在 Tab 链里就会变成
+        # 「按 Tab / 方向键后焦点不见了」。落焦控件可见性由 Qt 负责。
+        self.scroll_area.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.scroll_area.viewport().setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.scroll_area.setWidget(self.content)
 
         self.root_layout.addWidget(self.scroll_area)

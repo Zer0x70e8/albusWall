@@ -167,6 +167,32 @@ class IngestSource(Retranslatable, BlurLabel):
         self.main_layout.addLayout(self.add_button_layout)
         self.main_layout.addLayout(self.content_layout, 1)
 
+        self._setup_tab_order()
+
+    def _setup_tab_order(self) -> None:
+        """详情页的键盘遍历顺序：关闭 → 应用 → 表单（阅读顺序）。
+
+        两个坑都在这里一并堵上：
+
+        * ``QScrollArea`` 默认是 Tab 停点，但它**没有焦点指示器** —— 从
+          「应用」按方向键 / Tab 走到它上面，表现就是「焦点不见了」。它只是
+          滚动容器，不是可操作控件，退出焦点链；滚到落焦控件由 Qt
+          （``ensureWidgetVisible``）负责；
+        * 控件创建顺序 ≠ 视觉阅读顺序（可勾选的触发分组建得早、排得靠下），
+          所以表单内部顺序由 :meth:`IngestSourceDetailWidget.tab_order`
+          显式给出，再和上面的两个按钮串成一条链。
+        """
+        self.scroll_area.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.scroll_area.viewport().setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        chain = [
+            self.close_detail_btn,
+            self.apply_button,
+            *self.detail_widget.tab_order(),
+        ]
+        for before, after in zip(chain, chain[1:], strict=False):
+            QWidget.setTabOrder(before, after)
+
     # ------------------------------------------------------------------ #
     # 文案
     # ------------------------------------------------------------------ #

@@ -19,7 +19,43 @@ try:
 except ImportError:  # 视 PySide6 版本而定
     from typing import Any as SignalInstance  # type: ignore[assignment]
 
-__all__ = ["install_close_button"]
+__all__ = ["install_close_button", "FocusIsolator"]
+
+
+class FocusIsolator:
+    """把一棵 widget 子树"逻辑上"移出 Tab 链，但保留视觉、enabled 与点击。
+
+    只改 focusPolicy，不改 enabled / 可见性 / 样式，因此：
+      * 不覆盖业务在隔离期间对 enabled 的动态修改；
+      * 不影响视觉（paintEvent 照常）；
+      * 不影响鼠标点击（点击仍然能到，只是 Tab 到不了）。
+
+    记录原 focusPolicy，:meth:`restore` 原样写回。
+    """
+
+    def __init__(self) -> None:
+        self._saved: dict[QWidget, Qt.FocusPolicy] = {}
+
+    def isolate(self, root: QWidget) -> None:
+        if root in self._saved:
+            return
+        for widget in (root, *root.findChildren(QWidget)):
+            if widget in self._saved:
+                continue
+            policy = widget.focusPolicy()
+            if policy == Qt.FocusPolicy.NoFocus:
+                continue
+            self._saved[widget] = policy
+            widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def restore(self) -> None:
+        # 注意：生产环境里 widget 可能已被销毁，必要时先判 shiboken6.isValid
+        for widget, policy in self._saved.items():
+            widget.setFocusPolicy(policy)
+        self._saved.clear()
+
+    def is_isolated(self, widget: QWidget) -> bool:
+        return widget in self._saved
 
 
 def install_close_button(

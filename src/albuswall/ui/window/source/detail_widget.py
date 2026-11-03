@@ -152,6 +152,48 @@ class IngestSourceDetailWidget(Retranslatable, QFrame):
         self._apply_default_state()
 
     # ------------------------------------------------------------------ #
+    # 键盘遍历顺序
+    # ------------------------------------------------------------------ #
+    def tab_order(self) -> list[QWidget]:
+        """表单内的键盘遍历顺序（Tab / 方向键），按视觉阅读顺序。
+
+        控件创建顺序不等于阅读顺序（可勾选的触发分组在代码里建得早，
+        视觉上却在最下面），所以这里把顺序显式写出来，由外层页面用它
+        串起整条 Tab 链（见 ``IngestSource._setup_tab_order``）。
+
+        顺序：元信息 → 导入源 → 触发器（定时 → 设备插入）。
+        """
+        return [
+            # ---- 元信息 ----
+            self.title_line_edit,
+            self.description_line_edit,
+            self.tags_view,
+            self.tags_line_edit,
+            self.tags_button,
+            # ---- 导入源 ----
+            self.source_path_line_edit,
+            self.source_path_browser_button,
+            self.file_type_list_view,
+            self.file_type_line_edit,
+            self.file_type_add_button,
+            self.file_type_check_s_radio_button,
+            self.file_type_check_mg_radio_button,
+            self.subfolder_recursion_check_box,
+            self.subfolder_recursion_depth_check_box,
+            self.subfolder_recursion_depth_spin_box,
+            # ---- 触发器：定时更新 ----
+            self.grp_scheduled,
+            self.update_mode_combo,
+            self.scheduled_time_edit,
+            self.interval_time_edit,
+            # ---- 触发器：设备插入 ----
+            self.grp_device_insertion_trigger,
+            self.target_combo,
+            self.auto_mount_checkbox,
+            self.mount_point_edit,
+        ]
+
+    # ------------------------------------------------------------------ #
     # 布局
     # ------------------------------------------------------------------ #
     def _setup_ui(self) -> None:
@@ -359,6 +401,10 @@ class IngestSourceDetailWidget(Retranslatable, QFrame):
         self.main_layout.addWidget(self.grp_triggers)
         self.main_layout.addStretch()
 
+        # 可勾选分组：方向键要能进出它们的子控件（见 _group_key_press）
+        for group in self._checkable_groups():
+            group.installEventFilter(self)
+
     # ------------------------------------------------------------------ #
     # 文案
     # ------------------------------------------------------------------ #
@@ -500,22 +546,106 @@ class IngestSourceDetailWidget(Retranslatable, QFrame):
         self.interval_time_label.setVisible(is_interval)
 
     # ------------------------------------------------------------------ #
-    # 键盘：两个只读列表的「移除」意图
+    # 键盘：两个只读列表的「移除」意图 + 可勾选分组的方向键进出口
     # ------------------------------------------------------------------ #
     def eventFilter(self, obj, event):  # noqa: N802 - Qt 命名
-        """Delete / Backspace 在只读列表上抛移除意图（展示副本本身不动）。"""
-        if (event.type() == QEvent.Type.KeyPress
-                and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)):
-            if obj is self.tags_view:
-                self._emit_remove(self.tags_view, self.tag_remove_requested)
-                event.accept()
+        """Delete / Backspace 在只读列表上抛移除意图（展示副本本身不动）。
+
+        可勾选的触发分组额外接管方向键（见 :meth:`_group_key_press`）。
+        """
+        if event.type() == QEvent.Type.KeyPress:
+            if obj in self._checkable_groups() and self._group_key_press(
+                    obj, event):
                 return True
-            if obj is self.file_type_list_view:
-                self._emit_remove(self.file_type_list_view,
-                                  self.file_type_remove_requested)
-                event.accept()
-                return True
+            if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                if obj is self.tags_view:
+                    self._emit_remove(self.tags_view, self.tag_remove_requested)
+                    event.accept()
+                    return True
+                if obj is self.file_type_list_view:
+                    self._emit_remove(self.file_type_list_view,
+                                      self.file_type_remove_requested)
+                    event.accept()
+                    return True
         return super().eventFilter(obj, event)
+
+    def _checkable_groups(self) -> tuple[QGroupBox, ...]:
+        """可勾选的触发分组（键盘方向键要能进出它们的子控件）。"""
+        return (self.grp_scheduled, self.grp_device_insertion_trigger)
+
+    def _group_key_press(self, group: QGroupBox, event) -> bool:
+        """分组上的方向键：下 / 右进第一格，上 / 左退回分组之前。
+
+        Qt 的方向键焦点导航不处理 `QGroupBox` —— 焦点停在分组上就不再动，
+        而分组里全是真控件（下拉框 / 输入框）。不接管的话键盘用户走到分组
+        就再也进不去，只能靠 Tab 绕过去。分组没勾选时子控件是禁用的，
+        此时什么都不做（保持「空格勾选」的原语义）。
+        """
+        mods = event.modifiers()
+        if mods & (Qt.KeyboardModifier.ControlModifier
+                   | Qt.KeyboardModifier.AltModifier
+                   | Qt.KeyboardModifier.MetaModifier):
+            return False
+        key = event.key()
+        if key in (Qt.Key.Key_Down, Qt.Key.Key_Right):
+            target = (self._first_focusable_inside(group)
+                      or self._focusable_after(group))
+        elif key in (Qt.Key.Key_Up, Qt.Key.Key_Left):
+            target = self._focusable_before(group)
+        else:
+            return False
+        if target is None:
+            return False
+        target.setFocus(Qt.FocusReason.OtherFocusReason)
+        event.accept()
+        return True
+
+    @staticmethod
+    def _first_focusable_inside(root: QWidget) -> QWidget | None:
+        """``root`` 子树里按焦点链顺序的第一个可落焦控件。"""
+        widget = root
+        for _ in range(512):
+            widget = widget.nextInFocusChain()
+            if widget is root:
+                return None
+            if root.isAncestorOf(widget) and IngestSourceDetailWidget._can_focus(
+                    widget):
+                return widget
+        return None
+
+    @staticmethod
+    def _focusable_after(widget: QWidget) -> QWidget | None:
+        """焦点链里 ``widget`` 子树之后最近的、不在它子树里的可落焦控件。"""
+        current = widget
+        for _ in range(512):
+            current = current.nextInFocusChain()
+            if current is widget:
+                return None
+            if (not widget.isAncestorOf(current)
+                    and IngestSourceDetailWidget._can_focus(current)):
+                return current
+        return None
+
+    @staticmethod
+    def _focusable_before(widget: QWidget) -> QWidget | None:
+        """焦点链里 ``widget`` 之前最近的、不在它子树里的可落焦控件。"""
+        previous = widget
+        for _ in range(512):
+            previous = previous.previousInFocusChain()
+            if previous is widget:
+                return None
+            if (not widget.isAncestorOf(previous)
+                    and IngestSourceDetailWidget._can_focus(previous)):
+                return previous
+        return None
+
+    @staticmethod
+    def _can_focus(widget: QWidget) -> bool:
+        """这个控件此刻能不能接住键盘焦点（与 Qt 的跳过规则同口径）。"""
+        return (widget.isVisible()
+                and widget.isEnabled()
+                and widget.focusPolicy() != Qt.FocusPolicy.NoFocus)
+
 
     @staticmethod
     def _emit_remove(view: QListView, signal) -> None:

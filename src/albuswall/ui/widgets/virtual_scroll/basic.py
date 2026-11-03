@@ -26,12 +26,19 @@ class VirtualScrollWidget(QWidget):
         visible_range_changed(int, int, int): 可见范围变化，参数为 (start, end, request_id)。
         cursor_changed(int):       键盘光标（当前格）变化，参数为全局索引。
         unit_activated(int):       键盘回车 / 双击激活网格项，参数为全局索引。
+        unit_previewed(int):       键盘空格「快速预览」网格项，参数为全局索引。
 
     键盘操作（纯键盘可用）：
         ←/→/↑/↓      移动光标
         Home/End      行首 / 行尾（Ctrl+Home/End 首项 / 末项）
         PageUp/Down   翻页
         Enter/Return  激活当前项（打开详情等）
+        Space         快速预览当前项
+
+    空格与回车在这里**不是**同一个键：回车 = 详情，空格 = 预览。窗口里其它
+    控件的「空格 / 回车都算确定」统一由
+    :mod:`albuswall.ui.utils.activation_keys` 的应用级过滤器负责，本组件
+    不是 ``QAbstractItemView``，因此不受它影响。
     """
 
     scroll_changed = Signal(int)
@@ -42,6 +49,7 @@ class VirtualScrollWidget(QWidget):
     visible_range_changed = Signal(int, int, int)
     cursor_changed = Signal(int)
     unit_activated = Signal(int)
+    unit_previewed = Signal(int)
 
     def __init__(
             self,
@@ -51,8 +59,8 @@ class VirtualScrollWidget(QWidget):
     ):
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        # 网格自己消费方向键 / Home / End / 回车：外部若接入全局快捷键
-        # 处理器，看到这个属性就不应再抢走无修饰键。
+        # 网格自己消费方向键 / Home / End / 回车 / 空格：外部若接入全局
+        # 快捷键处理器，看到这个属性就不应再抢走无修饰键。
         self.setProperty("keymap_passthrough", True)
 
         # conf
@@ -385,9 +393,16 @@ class VirtualScrollWidget(QWidget):
         self.set_cursor_index(base + int(delta))
 
     def activate_cursor(self) -> bool:
-        """激活当前光标项；没有光标时返回 False。"""
+        """激活当前光标项（回车语义：打开详情）；没有光标时返回 False。"""
         if 0 <= self._cursor_index <= self._max_item_index:
             self.unit_activated.emit(self._cursor_index)
+            return True
+        return False
+
+    def preview_cursor(self) -> bool:
+        """快速预览当前光标项（空格语义）；没有光标时返回 False。"""
+        if 0 <= self._cursor_index <= self._max_item_index:
+            self.unit_previewed.emit(self._cursor_index)
             return True
         return False
 
@@ -691,6 +706,13 @@ class VirtualScrollWidget(QWidget):
             target = current + cols * self._rows_per_page()
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if self.activate_cursor():
+                event.accept()
+                return
+            super().keyPressEvent(event)
+            return
+        elif key == Qt.Key.Key_Space:
+            # 内容视图里空格是「预览」、回车是「详情」：两个键分开，不合并。
+            if self.preview_cursor():
                 event.accept()
                 return
             super().keyPressEvent(event)

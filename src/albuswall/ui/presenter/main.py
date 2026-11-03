@@ -288,6 +288,10 @@ class MainPresenter(Presenter):
         if content is not None and viewer is not None:
             content.asset_activated.connect(
                 lambda asset_uuid: self._open_detail(asset_uuid))
+            # 空格 = 快速预览（HUD 收起），回车 / 点击 = 完整详情：两条出口
+            # 都进同一页，但预览模式下再按空格就退出预览。
+            content.asset_previewed.connect(
+                lambda asset_uuid: self._open_detail(asset_uuid, preview=True))
         if content is not None and tagbar is not None:
             content.selection_changed.connect(self._on_selection_changed)
         if content is not None and album is not None:
@@ -328,8 +332,14 @@ class MainPresenter(Presenter):
     # ------------------------------------------------------------------ #
     # 接线槽
     # ------------------------------------------------------------------ #
-    def _open_detail(self, asset_uuid: str) -> None:
-        """网格激活 / 外部请求 → 打开详情页。"""
+    def _open_detail(self, asset_uuid: str, *, preview: bool = False) -> None:
+        """网格激活 / 外部请求 → 打开详情页。
+
+        ``preview=True`` 是内容网格的空格「快速预览」：同一页、收起 HUD；
+        预览里的空格（退出预览）/ 回车（升级成完整详情）由
+        :class:`~albuswall.ui.window.detail.Detail` 自己的 ``eventFilter``
+        处理，这里只负责进入。
+        """
         viewer = self._child_of(ViewerPresenter)
         album = self._child_of(AlbumPresenter)
         window_p = self._child_of(WindowPresenter)
@@ -344,6 +354,10 @@ class MainPresenter(Presenter):
             tagbar.set_current_asset(str(asset_uuid))
         if window_p is not None:
             window_p.show_detail()
+        if preview:
+            detail = getattr(self._window, "detail", None)
+            if detail is not None:
+                detail.set_preview_mode(True)
 
     def _on_album_changed(self, _album: Any) -> None:
         """相册切换后标签作用对象跟到新相册的第一个光标资产。"""

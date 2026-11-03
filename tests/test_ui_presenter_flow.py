@@ -562,6 +562,30 @@ def test_asset_activation_opens_detail(stack, qapp, make_image):
     assert not built.window.detail.image_viewer._pixmap.isNull()
 
 
+def test_asset_preview_opens_detail_in_preview_mode(stack, qapp, make_image):
+    """空格（``asset_previewed``）与回车（``asset_activated``）是两条出口。"""
+    asset = make_asset(title="one.jpg")
+    built = stack(
+        albums=[make_album()],
+        assets=[asset],
+        paths={str(asset.uuid): make_image("full.png")},
+    )
+
+    detail = built.window.detail
+    built.child("content").asset_previewed.emit(str(asset.uuid))
+    pump(qapp)
+
+    assert built.window.overlay.currentWidget() is detail
+    assert detail.is_preview_mode is True
+    # 预览里 HUD（导航条 / 标签栏 / 操作按钮）收起
+    assert detail.overlay.isVisible() is False
+
+    # 收起详情 → 预览状态必须清干净（下次回车打开是完整详情）
+    built.window.close_overlay()
+    assert detail.is_preview_mode is False
+    assert detail.overlay.isVisibleTo(detail) is True
+
+
 def test_detail_favorite_trash_recover_write_through(stack, qapp):
     asset = make_asset(title="one.jpg")
     built = stack(albums=[make_album()], assets=[asset])

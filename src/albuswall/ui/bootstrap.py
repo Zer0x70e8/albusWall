@@ -78,6 +78,7 @@ from .i18n import TranslationManager
 from .languages import DEFAULT_LANGUAGE
 from .keymap import registry_shortcut_registry
 from .presenter import MainPresenter
+from .utils import install_activation_key_filter
 from .window import Window
 
 if TYPE_CHECKING:
@@ -200,6 +201,9 @@ def setup_ui(container: Container, app: Application) -> Window:
     """
     # phase 1: 语言（先定语言再建窗口）
     container.set(UI_APP_KEY, app)
+    # 激活键：空格 / 回车在按钮与列表上等价（应用级过滤器，幂等）。
+    # 详见 albuswall.ui.utils.activation_keys。
+    install_activation_key_filter(app)
     translations = TranslationManager(app)
     container.set(I18N_KEY, translations)
     translations.set_language(configured_language())

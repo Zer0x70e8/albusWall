@@ -128,6 +128,8 @@ class Detail(Retranslatable, BlurLabel):
         self.content_layout.setSpacing(0)
 
         self.image_viewer = ImageViewer(content)
+        # 预览模式的空格 / 回车出口（见 eventFilter）
+        self.image_viewer.installEventFilter(self)
         self.content_layout.addWidget(self.image_viewer, 0, 0)
 
         self.overlay = QWidget(content)
@@ -424,8 +426,11 @@ class Detail(Retranslatable, BlurLabel):
                 self._place_preview_hint()
             return
         if active:
+            # 用 ``isHidden`` 而不是 ``isVisible``：后者连带父链一起看，页面
+            # 还没显示（例如窗口未 show、单测直接构造）时会把「本来可见」
+            # 误记成 False，退出预览就再也恢复不出来。
             self._hud_visible_before_preview = (
-                self.overlay.isVisible(), self.close_button.isVisible())
+                not self.overlay.isHidden(), not self.close_button.isHidden())
             # 只在焦点确实落在本页子树里时记忆，避免退出预览时把别处的焦点抢过来
             app = QApplication.instance()
             focused = app.focusWidget() if isinstance(app, QApplication) else None
@@ -436,7 +441,7 @@ class Detail(Retranslatable, BlurLabel):
             # 走 information_button 而不是直接 setVisible，让「按钮 checked」
             # 与「面板可见」始终一致，也复用 _on_information_toggled 里的
             # enabled 围栏，避免出现「面板藏了但整页还是禁用」的中间态。
-            self._panel_visible_before_preview = self.panel.isVisible()
+            self._panel_visible_before_preview = not self.panel.isHidden()
             if self._panel_visible_before_preview:
                 self.information_button.setChecked(False)
             self.overlay.setVisible(False)
@@ -508,13 +513,36 @@ class Detail(Retranslatable, BlurLabel):
             self.information_button.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt 命名
-        """面板可见期间，把 Tab / Backtab 关在面板内部。
+        """预览模式下的空格 / 回车；面板可见期间把 Tab 关在面板内部。
+
+        快速预览（空格进入）里：
+
+        * **空格** = 退出预览（收起详情页，回到网格）——与提示条一致；
+        * **回车** = 升级成完整详情页（显示 HUD，留在详情页）。
+
+        两条出口都与内容网格的约定对齐：空格是预览、回车是详情。
 
         ``setEnabled(False)`` 只能摘掉 Detail 自己的子树；标题栏与内容层是
         面板的兄弟层级，仍然留在焦点链上，Tab 会从面板里跑出去。这里只在
         面板可见时接管面板内控件的 Tab，其余事件照旧交给基类（模糊层要靠
         基类的事件过滤跟尺寸）。
         """
+        if (self._preview_mode
+                and obj is self.image_viewer
+                and event.type() == QEvent.Type.KeyPress
+                and not event.modifiers() & (
+                        Qt.KeyboardModifier.ControlModifier
+                        | Qt.KeyboardModifier.AltModifier
+                        | Qt.KeyboardModifier.MetaModifier)):
+            key = event.key()
+            if key == Qt.Key.Key_Space:
+                self.set_preview_mode(False)
+                self.close_requested.emit()
+                return True
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self.set_preview_mode(False)
+                return True
+
         panel = getattr(self, "panel", None)
         if (panel is not None
                 and panel.isVisible()
@@ -546,6 +574,16 @@ class Detail(Retranslatable, BlurLabel):
         super().showEvent(event)
         if self.panel.isVisible():
             self.panel.close_button.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def hideEvent(self, event):  # noqa: N802 - Qt 命名
+        """详情页被收起时退出快速预览。
+
+        预览是「页内临时状态」：离开这一页（换浮层页 / 收起浮层）必须把
+        HUD 与提示条还原，否则下次用回车打开详情时会看到缺了 HUD 的残局。
+        """
+        super().hideEvent(event)
+        if self._preview_mode:
+            self.set_preview_mode(False)
 
     # ------------------------------------------------------------------ #
     # 几何
