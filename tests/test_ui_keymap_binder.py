@@ -21,6 +21,7 @@ Qt 走 offscreen（``QT_QPA_PLATFORM=offscreen``，必须在 import PySide6 之�
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -29,6 +30,11 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
+
+
+#: ``show_focused`` 等焦点的上限（毫秒）。offscreen 激活通常 <100ms，
+#: 给足余量是为了把「偶发慢」与「真的没焦点」区分开。
+FOCUS_TIMEOUT_MS = 3000
 
 
 # ==================== fixture ====================
@@ -90,9 +96,19 @@ class RecorderWidget:
 def show_focused(widget: Any, qapp: Any) -> Any:
     """显示控件并确保它拿到焦点（offscreen 下也要 ``focusWidget`` 指向它）。
 
-    offscreen 平台的「激活窗口」是异步的：``show()`` 之后要让事件循环真跑
-    几轮（``QTest.qWait``）才会落到 ``QApplication.activeWindow()`` 上，只用
-    ``processEvents()`` 不够。
+    offscreen 平台的「激活窗口」是**异步**的：``show()`` 之后要让事件循环真跑
+    几轮才会落到 ``QApplication.activeWindow()`` 上，只用 ``processEvents()``
+    不够。
+
+    等待策略（**超时必抛**）：先让 Qt 自己等窗口 active / focused，再在
+    ``FOCUS_TIMEOUT_MS`` 预算内轮询 ``QApplication.focusWidget()``；超时抛带
+    诊断信息的 ``AssertionError``。旧实现是「重试 15×20ms 后静默失败」，失败时
+    只会看到后面那条 ``recorder.calls == []`` 断言失败，看不出是「焦点没到位」
+    还是「binder 没接管」——这正是审计 A7 里那次 flaky 的观感来源。
+
+    为什么不用 ``QTest.qWaitFor(谓词)``：PySide6 6.11 的 ``QTest`` 没有暴露它
+    （只有 ``qWaitForWindowActive`` / ``qWaitForWindowExposed`` /
+    ``qWaitForWindowFocused``），所以「等谓词」这层只能自己轮询。
     """
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
@@ -100,15 +116,28 @@ def show_focused(widget: Any, qapp: Any) -> Any:
     widget.resize(200, 100)
     widget.show()
     qapp.processEvents()
-    for _attempt in range(15):
-        handle = widget.windowHandle()
-        if handle is not None:
-            handle.requestActivate()
-        widget.setFocus()
-        QTest.qWait(20)
+
+    handle = widget.windowHandle()
+    if handle is not None:
+        handle.requestActivate()
+    widget.setFocus()
+
+    # Qt 自己的等待：能覆盖「窗口还没 active / 还没 focus」这两种异步状态
+    QTest.qWaitForWindowActive(widget, FOCUS_TIMEOUT_MS)
+
+    deadline = time.monotonic() + FOCUS_TIMEOUT_MS / 1000.0
+    while time.monotonic() < deadline:
         if QApplication.focusWidget() is widget:
             return widget
-    raise AssertionError("offscreen 下没拿到焦点")
+        widget.setFocus()
+        QTest.qWait(10)
+
+    raise AssertionError(
+        "focus never arrived: QApplication.focusWidget() is not the test "
+        f"widget after {FOCUS_TIMEOUT_MS} ms "
+        f"(focus={QApplication.focusWidget()!r}, "
+        f"window={widget.window()!r}, isVisible={widget.isVisible()})"
+    )
 
 
 def send_key(widget: Any, key: Any, mods: Any = None) -> None:
