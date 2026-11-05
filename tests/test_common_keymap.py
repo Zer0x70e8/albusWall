@@ -148,14 +148,19 @@ def test_section_name_is_the_config_section() -> None:
 # ==================== 加载钩子 ====================
 
 class _FakeResolver:
-    """只实现 ``type_shortcut_keys`` 需要的那两个方法。"""
+    """只实现 ``type_shortcut_keys`` 需要的那三个方法。"""
 
-    def __init__(self, keys: list[str]) -> None:
+    def __init__(self, keys: list[str], values: dict[str, str] | None = None) -> None:
         self._keys = keys
+        self._values = values or {key: "[]" for key in keys}
         self.types: dict[tuple[str, str], object] = {}
 
     def keys_of(self, section: str) -> list[str]:
         return list(self._keys) if section == SECTION else []
+
+    def get_str(self, section: str, key: str) -> str:
+        assert section == SECTION
+        return self._values[key]
 
     def register_type(self, section: str, key: str, converter: object) -> None:
         self.types[(section, key)] = converter
@@ -170,6 +175,18 @@ def test_type_shortcut_keys_registers_every_key() -> None:
         (SECTION, "app.quit"): ShortcutRecord,
         (SECTION, "window.close"): ShortcutRecord,
     }
+
+
+def test_type_shortcut_keys_skips_broken_records() -> None:
+    """解析不了的记录不补类型：否则 ``check_all`` 会让整个 load 失败。"""
+    resolver = _FakeResolver(
+        ["good", "broken"],
+        values={"good": '["F5"]', "broken": '["F5", [1]'},
+    )
+
+    type_shortcut_keys(resolver)
+
+    assert resolver.types == {(SECTION, "good"): ShortcutRecord}
 
 
 def test_type_shortcut_keys_ignores_other_sections() -> None:

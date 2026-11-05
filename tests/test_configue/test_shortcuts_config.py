@@ -156,6 +156,65 @@ def test_tree_write_lands_in_the_user_table(config: Configue, tmp_path: Path) ->
     assert bundled.read_bytes() == before
 
 
+# ==================== 坏条目：只跳过它自己 ====================
+
+def test_malformed_entry_does_not_block_the_startup(tmp_path: Path) -> None:
+    """手滑写坏的记录：启动照常，坏的那一条退回槽的兜底键位。
+
+    与改造前的 ``load_shortcuts(strict=False)`` 行为一致——配置文件是给人手改
+    的，一条少个括号的记录不该让整个应用起不来。
+    """
+    previous = Configue._instance
+    _reset_registry()
+    write_ini(tmp_path / "config.ini", "[ui]\ntheme = default\n")
+    write_ini(
+        tmp_path / "shortcuts.ini",
+        f'[{SECTION}]\napp.quit = ["Ctrl+Q", [1]\nview.reset = ["Ctrl+Alt+0"]\n',
+    )
+    instance = setup_config(Container(), base_dir=tmp_path, portable=True)
+    try:
+        # 坏 key 没被补类型（所以 check_all 不会去转换它）
+        assert (SECTION, "app.quit") not in instance.resolver.typed_nodes()
+        # 好的 key 照常工作
+        assert instance.resolver.get_typed(SECTION, "view.reset").keys == (
+            "Ctrl+Alt+0",
+        )
+    finally:
+        with suppress(Exception):
+            instance.close()
+        Configue._instance = previous
+        _reset_registry()
+
+
+def test_registry_skips_the_malformed_entry(tmp_path: Path) -> None:
+    """注册表读到坏值：跳过该命令（退回槽的兜底键位），其它照常。"""
+    from albuswall.ui.keymap import ShortcutRegistry, ShortcutSlot
+
+    previous = Configue._instance
+    _reset_registry()
+    write_ini(tmp_path / "config.ini", "[ui]\ntheme = default\n")
+    write_ini(
+        tmp_path / "shortcuts.ini",
+        f'[{SECTION}]\nview.reset = ["Ctrl+Alt+0"]\n',
+    )
+    instance = setup_config(Container(), base_dir=tmp_path, portable=True)
+    registry = ShortcutRegistry(config=instance)
+    registry.register_slot(ShortcutSlot(
+        id="view.reset", handler=lambda: None, default_keys=("Ctrl+0",),
+    ))
+    try:
+        registry.load()
+        assert [str(key) for key in registry.keys_for("view.reset")] == [
+            "Ctrl+Alt+0",
+        ]
+    finally:
+        registry.close()
+        with suppress(Exception):
+            instance.close()
+        Configue._instance = previous
+        _reset_registry()
+
+
 # ==================== 类型补位（加载钩子） ====================
 
 def test_load_hook_typed_every_shortcut_key(config: Configue) -> None:

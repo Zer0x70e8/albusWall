@@ -51,9 +51,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "FILE_NAME",
@@ -230,16 +233,31 @@ def _keys_of(value: Any, shown: str) -> tuple[str, ...]:
 
 
 def type_shortcut_keys(resolver: Any) -> None:
-    """加载钩子：给 ``[shortcuts]`` 段的**每个** key 补上 ``ShortcutRecord`` 类型。
+    """加载钩子：给 ``[shortcuts]`` 段的 key 补上 ``ShortcutRecord`` 类型。
 
     ``[shortcuts]`` 的 key 是命令路径，只有运行期（插件登记槽之后）才知道，
     写不出 ``@configclass`` 字段，所以只能靠 ``register_load_hook`` 在
     ``load()`` 的 Step 4.5（类型自检之前）批量补类型。
 
+    **只给解析得通的 key 补类型**：补了类型意味着 ``load()`` 的 ``check_all``
+    会去转换它，一条手滑的坏记录（少个括号、`args` 不是数组）就会让整个
+    启动 ``ConfigError``。坏 key 跳过不登记，于是它在运行期是「没有类型的
+    原始字符串」——``ShortcutRegistry`` 读到坏值只记 warning 并跳过该命令
+    （退回槽的兜底键位），与改造前「坏条目只跳过这一条」的行为一致。
+
     幂等：``register_type`` 本身幂等，``load()`` 每次重跑都安全。
 
-    本函数只依赖 ``resolver`` 的两个公开方法（``keys_of`` / ``register_type``），
-    因此放在 ``common`` 里也不需要 import ``configue``。
+    本函数只依赖 ``resolver`` 的三个公开方法（``keys_of`` / ``get_str`` /
+    ``register_type``），因此放在 ``common`` 里不需要 import ``configue``。
     """
     for key in resolver.keys_of(SECTION):
+        try:
+            ShortcutRecord.from_ini(resolver.get_str(SECTION, key))
+        except Exception as exc:  # noqa: BLE001 - 坏条目只跳过它自己
+            logger.warning(
+                "shortcut record [%s]%s is not usable (%s); "
+                "it will be ignored at bind time",
+                SECTION, key, exc,
+            )
+            continue
         resolver.register_type(SECTION, key, ShortcutRecord)

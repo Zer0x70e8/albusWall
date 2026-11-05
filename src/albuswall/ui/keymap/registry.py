@@ -621,7 +621,7 @@ class ShortcutRegistry:
         if config is None and self._configue is not None:
             records = self._records_from_configue()
             self._loaded = set(records)
-            self._apply_records(records)
+            self._apply_records(records, strict=strict)
             logger.debug(
                 "shortcuts loaded from configue: %d bindings, %d slots",
                 len(self._table), len(self._slots),
