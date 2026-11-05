@@ -115,6 +115,9 @@ class Configue:
         #: 已加载文件的反查表（``resolved_path → file name``）。
         #: ``flush`` 拿到 origin 路径后要靠它找到 ``FileInfo``（→ 后端）。
         self._path_to_file: dict[Path, str] = {}
+        #: ``section → 注册文件名``：给「没有 @configclass 声明」的段
+        #: （``[shortcuts]``）指定写回落点，见 :meth:`register_section_file`。
+        self._section_files: dict[str, str] = {}
         self._initialized = True
         atexit.register(self._atexit_flush)
 
@@ -751,6 +754,10 @@ class Configue:
 
         owner = _FIELD_OWNER.get((section, key))
         if owner is None:
+            # 运行期才知道 key 的段（``[shortcuts]``）：没有 @configclass 字段，
+            # 只能靠 ``register_section_file`` 登记的「段级写回落点」。
+            owner = self._section_files.get(section)
+        if owner is None:
             raise ConfigError(
                 f"no owning file for [{'/'.join((section, key))}]; "
                 f"not declared by any @configclass"
@@ -767,6 +774,35 @@ class Configue:
                 f"which is not loaded"
             )
         return finfo.resolved_path
+
+    def register_section_file(self, section: str, name: str) -> None:
+        """登记「某个段没有 ``@configclass`` 声明时，默认写回哪个文件」。
+
+        给运行期才知道 key 的段用（典型：``[shortcuts]``）。这类节点的 key
+        不是声明出来的，``_FIELD_OWNER`` 里没有它们，于是
+        :meth:`target_file_of` 在「origin 只读（随包默认表）+ 用户文件里还
+        没有这个 key」时推不出写回落点——本方法补的就是这一步。
+
+        规则位置：``target_file_of`` 的**最后一步兜底**（origin 与
+        「其它定义过它的可写文件」都推不出来时才用），因此：
+
+        * 已声明字段（``config.ini`` 的段）不受影响；
+        * 用户文件里已经写了这个 key 时，生效 origin 就是它，本登记不参与。
+
+        Args:
+            section: 段名，如 ``"shortcuts"``。
+            name: ``reg()`` 时用的注册名（如 ``"shortcuts"`` = 用户覆盖表）。
+
+        Raises:
+            ValueError: ``section`` / ``name`` 为空。
+        """
+        text = str(section or "").strip()
+        target = str(name or "").strip()
+        if not text or not target:
+            raise ValueError(
+                "register_section_file: section and name must be non-empty"
+            )
+        self._section_files[text] = target
 
     def is_readonly_path(self, path: Path) -> bool:
         """该路径是否只读（显式标记优先，其次看文件系统写权限）。

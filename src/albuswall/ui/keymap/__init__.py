@@ -78,6 +78,8 @@
 
 from __future__ import annotations
 
+from albuswall.common.keymap import ShortcutRecord
+
 from .config import (
     DEFAULT_FILE_NAME,
     DEFAULT_SECTION,
@@ -151,6 +153,7 @@ __all__ = [
     "ShortcutConfig",
     "ShortcutConfigError",
     "ShortcutKind",
+    "ShortcutRecord",
     "ShortcutRegistry",
     "ShortcutSlot",
     "bind",

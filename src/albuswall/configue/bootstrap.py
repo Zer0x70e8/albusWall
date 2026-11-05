@@ -14,6 +14,13 @@
 路径约定（``get_user_config_dir`` 等）带进了这个包。如果将来出现第二个使用方，
 把它整段搬到 app 侧模块即可（对外只有 ``setup_config`` 一个入口，搬迁是一处
 import 的改动）。
+
+**快捷键也走这里**：``setup_config`` 把 ``shortcuts.ini`` 登记成**两个**文件
+（随包默认表 + 用户覆盖表），于是 ``[shortcuts]`` 和 ``[ui]`` 一样是配置器的
+一等公民——可枚举、可校验、可 ``flush`` 写回。记录类型
+:class:`albuswall.common.keymap.ShortcutRecord` 放在 ``common``（无 Qt），
+转换器与加载钩子在这里登记；``albuswall.ui.keymap`` 只负责把记录绑成
+``QKeySequence``。
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import albuswall
+from albuswall import resources
 from albuswall.common.constants.ui import (
     DEFAULT_THEME,
     ICON_DIR_NAME,
@@ -31,9 +39,16 @@ from albuswall.common.constants.ui import (
 )
 from albuswall.log import getLogger
 
+from albuswall.common.keymap import (
+    FILE_NAME as SHORTCUT_FILE_NAME,
+    ShortcutRecord,
+    type_shortcut_keys,
+)
+
 from .backends import get_backend
 from .errors import ConfigError
 from .registry import (
+    _FILES,
     AutosavePolicy,
     ConfigFile,
     FileInfo,
@@ -53,6 +68,8 @@ __all__ = [
     "CONFIG_FILE_NAME",
     "ICON_KEYS",
     "MAIN_FILE_NAME",
+    "SHORTCUT_DEFAULTS_FILE",
+    "SHORTCUT_USER_FILE",
     # 应用级段的类视图（业务代码从这里 import，见各自的 docstring）
     "Files",
     "Paths",
@@ -235,6 +252,95 @@ def _inject_path_defaults(
         resolver.inject_raw("path", key, value)
 
 
+#: 随包默认快捷键表的注册名（只读，``[shortcuts]`` 的第一份定义）。
+SHORTCUT_DEFAULTS_FILE = "shortcuts.default"
+
+#: 用户快捷键覆盖表的注册名（可写，``tree.shortcuts[...]`` 写这里）。
+SHORTCUT_USER_FILE = "shortcuts"
+
+#: 两份快捷键文件的 ``FileInfo.order``：用户表必须比默认表大（后写、赢）。
+SHORTCUT_DEFAULTS_ORDER = 20
+SHORTCUT_USER_ORDER = 30
+
+
+def _register_shortcut_files(user_file_name: str) -> None:
+    """把快捷键表登记成两个配置文件（随包默认 + 用户覆盖）。
+
+    为什么要两个文件、而不是一个：
+
+    * 默认表随包分发（``resources/config/shortcuts.ini``），必须**只读**：
+      用户升级后要能拿到新默认值，而不是被自己那份旧拷贝永久钉死；
+    * 用户表（``<base_dir>/shortcuts.ini``）只存**与默认不同的条目**，可写、
+      可删（删掉即恢复全默认）。
+
+    合并语义靠 ``FileInfo.order``：``load()`` 按 order 升序注入并
+    ``overwrite=True``，所以 order 大的用户表**逐 key** 覆盖默认表，
+    用户没写的 key 仍然拿默认值——这正是 ``shortcuts.ini`` 顶部注释承诺的
+    「User overrides live in ``<user_config_dir>/shortcuts.ini`` and win
+    per command」。
+
+    两个文件都带 ``optional=True``：随包表缺失是打包事故（记 WARNING 即可，
+    不该让整个应用起不来），用户表在第一次保存前**本来就不存在**。
+    """
+    try:
+        bundled = Path(str(resources.get("shortcuts")))
+    except (FileNotFoundError, KeyError, ValueError) as exc:
+        logger.warning(
+            "bundled shortcut table is unavailable (%s); "
+            "shortcuts fall back to the slots' default keys", exc,
+        )
+    else:
+        reg(
+            ConfigFile.INI, str(bundled), name=SHORTCUT_DEFAULTS_FILE,
+            autosave="off", order=SHORTCUT_DEFAULTS_ORDER, optional=True,
+        )
+
+    reg(
+        ConfigFile.INI, user_file_name, name=SHORTCUT_USER_FILE,
+        # 用户表由界面显式写回（``ShortcutRegistry.save_shortcut`` 里自带
+        # flush），不需要 atexit 兜底，也就不会在退出时莫名多写一次。
+        autosave="manual", order=SHORTCUT_USER_ORDER, optional=True,
+    )
+
+
+def _wire_shortcut_config(config: Any) -> None:
+    """快捷键表的转换器 / 加载钩子 / 只读标记 / 段级写回目标。
+
+    全部必须在 ``config.load()`` **之前或之后立刻**完成：
+
+    * 转换器：``load()`` 的 Step 4 前置会应用「构造前登记的转换器」，这里直接
+      登记在当前实例上，效果等价且不依赖登记时机；
+    * 加载钩子：Step 4.5（类型自检之前）给 ``[shortcuts]`` 的每个 key 补
+      ``ShortcutRecord`` 类型，否则它们会被当成「没有类型的原始字符串」；
+    * 段级写回落点：``[shortcuts]`` 没有 ``@configclass`` 字段，
+      ``target_file_of`` 需要知道「这个段该写用户表」。
+
+    **只读标记不在这里**：``resolved_path`` 要等 ``load()`` 解析路径之后才有，
+    见 :func:`_mark_shortcut_defaults_readonly`。
+    """
+    from . import register_load_hook
+
+    config.resolver.register_converter(
+        ShortcutRecord,
+        ShortcutRecord.from_ini,
+        writer=lambda record: record.to_ini(),
+    )
+    register_load_hook(type_shortcut_keys)
+    config.register_section_file(SHORTCUT_USER_FILE, SHORTCUT_USER_FILE)
+
+
+def _mark_shortcut_defaults_readonly(config: Any) -> None:
+    """把随包默认快捷键表标记成只读（必须在 ``load()`` 之后调用）。
+
+    只读 = ``flush`` 不会写它、``target_file_of`` 会改挑用户表。必须**显式**
+    标记而不能指望文件权限：默认表装在包目录里，开发机上它照样可写；以 root
+    运行时 ``os.access(..., W_OK)`` 更是恒真。
+    """
+    finfo = _FILES.get(SHORTCUT_DEFAULTS_FILE)
+    if finfo is not None and finfo.resolved_path is not None:
+        config.resolver.mark_readonly_file(finfo.resolved_path)
+
+
 def setup_config(
         container,
         *,
@@ -246,6 +352,7 @@ def setup_config(
         register_aliases: bool = True,
         ignore_missing: bool = False,
         portable: bool = False,
+        shortcut_file_name: str = SHORTCUT_FILE_NAME,
 ):
     """装配 albuswall 的配置并注册进依赖容器，返回 ``Configue`` 单例。
 
@@ -272,6 +379,10 @@ def setup_config(
             标成已加载，默认值照常可读，首次 ``save()`` 时创建文件。
             ``False``（默认）缺文件直接抛 ``ConfigError``。**歧义仍然报错**。
         portable: 决定 ``[path]`` 各目录默认值从哪来（详见下方「portable」）。
+        shortcut_file_name: 用户快捷键覆盖表的文件名，默认
+            ``shortcuts.ini``，落在 ``base_dir`` 下（生产环境即
+            ``~/.config/albuswall/shortcuts.ini``）。随包默认表由
+            ``resources/config/shortcuts.ini`` 提供，**不受本参数影响**。
 
     portable:
         ``False``（默认）：``[path]`` 的 ``config`` / ``data`` / ``cache`` /
@@ -332,7 +443,12 @@ def setup_config(
     _inject_path_defaults(
         config, path_config, path_data, path_cache, path_temp,
     )
+    # 快捷键：转换器 + 加载钩子必须早于 load()（类型自检要用），只读标记与
+    # 段级写回落点可以紧随其后（它们只影响写回，不影响读）。
+    _register_shortcut_files(shortcut_file_name)
+    _wire_shortcut_config(config)
     config.load()
+    _mark_shortcut_defaults_readonly(config)
     # 用 ``target_dir`` 而不是 ``base_dir``：``base_dir`` 可能是 ``None``
     # （回退用户配置目录）或 ``str``（调用方直接传字符串），两者做 ``/`` 都会
     # 失败 —— 前者 ``TypeError``，后者拼出错误的 ``str / str``。

@@ -56,6 +56,11 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 import albuswall
+from albuswall.common.keymap import (
+    FILE_NAME as FILE_NAME_IN_COMMON,
+    SECTION as SECTION_IN_COMMON,
+    ShortcutRecord,
+)
 from albuswall.configue.utils.platform_dir import get_user_config_dir
 
 from .errors import InvalidKeySequence, ShortcutConfigError
@@ -73,10 +78,13 @@ __all__ = [
 logger = logging.getLogger(__package__)
 
 #: 默认 / 用户快捷键文件名（两个目录下同名，但互不影响）。
-DEFAULT_FILE_NAME = "shortcuts.ini"
+#:
+#: 与 :mod:`albuswall.common.keymap`（配置器那股线用的同一份常量）同源：
+#: 两份实现读的是同一批文件，文件名不允许出现第二种写法。
+DEFAULT_FILE_NAME = FILE_NAME_IN_COMMON
 
 #: 绑定表所在段名。与 ``configue`` 文档里预留的 ``[shortcuts]`` 保持一致。
-DEFAULT_SECTION = "shortcuts"
+DEFAULT_SECTION = SECTION_IN_COMMON
 
 #: 「按默认规则解析路径」的哨兵；``None`` 表示「没有这份文件」。
 _DEFAULT = object()
@@ -112,90 +120,38 @@ def user_config_path(file_name: str = DEFAULT_FILE_NAME) -> Path:
 def _parse_binding(value: str) -> ShortcutBinding:
     """把一条配置值解析成 :class:`ShortcutBinding`。
 
-    接受的写法见模块 docstring：显式三元组、扁平键位数组、单个键位、空值。
-    非法写法一律抛 :class:`InvalidKeySequence`（键位问题）或
-    ``ValueError``（记录结构问题），由调用方补上「哪个文件哪一行」的上下文。
+    解析规则**只有一份**，在 :meth:`albuswall.common.keymap.ShortcutRecord.
+    from_ini` 里（配置器那股线读同一批文件，两份实现不允许漂移）。这里只把
+    「键位文本」交给 Qt 的 ``parse_sequences`` 校验并规范化；结构问题由
+    ``ShortcutRecord`` 抛 ``ValueError``。
+
+    Raises:
+        ValueError: 记录结构不合法（``ShortcutRecord.from_ini``）。
+        InvalidKeySequence: 键位文本无法解析（``parse_sequences``）。
     """
-    text = value.strip()
-    if not text:
-        return ShortcutBinding()
-    if text.startswith('"'):
-        # 单个键位的 JSON 字符串写法："Ctrl+Q" / "G, G"
-        try:
-            single = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise InvalidKeySequence(
-                f"invalid JSON key sequence: {value!r}"
-            ) from exc
-        if not isinstance(single, str):
-            raise InvalidKeySequence(
-                f"key sequence must be a string: {value!r}"
-            )
-        return ShortcutBinding(keys=parse_sequences(single))
-    if not text.startswith("["):
-        # 单个键位的裸写法（INI 风格，不需要引号）：Ctrl+Q
-        return ShortcutBinding(keys=parse_sequences(text))
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise InvalidKeySequence(
-            f"invalid JSON binding record: {value!r}"
-        ) from exc
-    if not isinstance(data, list):
-        raise InvalidKeySequence(
-            f"binding record must be a JSON array: {value!r}"
-        )
-
-    # 简写：扁平字符串数组 = 多个键位 + 无参数（也覆盖空数组 []）。
-    if all(isinstance(item, str) for item in data):
-        return ShortcutBinding(keys=parse_sequences(data))
-
-    # 显式三元组：[快捷键, 位置参数, 关键字参数]
-    if len(data) != 3:
-        raise InvalidKeySequence(
-            "binding record must be [keys, args, kwargs]: "
-            f"{value!r}"
-        )
-    raw_keys, raw_args, raw_kwargs = data
-    if isinstance(raw_keys, str):
-        key_values: list[str] = [raw_keys]
-    elif isinstance(raw_keys, list) and all(
-            isinstance(item, str) for item in raw_keys
-    ):
-        key_values = raw_keys
-    else:
-        raise InvalidKeySequence(
-            "binding keys must be a string or an array of strings: "
-            f"{value!r}"
-        )
-    if not isinstance(raw_args, list):
-        raise InvalidKeySequence(
-            f"binding positional args must be a JSON array: {value!r}"
-        )
-    if not isinstance(raw_kwargs, dict) or any(
-            not isinstance(name, str) for name in raw_kwargs
-    ):
-        raise InvalidKeySequence(
-            f"binding keyword args must be a JSON object: {value!r}"
-        )
+    record = ShortcutRecord.from_ini(value)
     return ShortcutBinding(
-        keys=parse_sequences(key_values),
-        args=tuple(raw_args),
-        kwargs=raw_kwargs,
+        keys=parse_sequences(record.keys),
+        args=record.args,
+        kwargs=dict(record.kwargs),
     )
 
 
 def _format_binding(command: str, binding: ShortcutBinding) -> str:
-    """把绑定记录写成配置值（强制使用显式三元组形式）。"""
-    keys = [str(key) for key in binding.keys]
-    first: str | list[str] = keys[0] if len(keys) == 1 else keys
-    payload = [first, list(binding.args), dict(binding.kwargs)]
+    """把绑定记录写成配置值（强制使用显式三元组形式）。
+
+    与读取侧同源：写的是 ``ShortcutRecord.to_ini()`` 的规范形态，因此
+    ``from_ini(to_ini(r))`` 恒等（见 ``tests/test_common_keymap.py``）。
+    """
     try:
-        return json.dumps(payload, ensure_ascii=False)
+        return ShortcutRecord(
+            keys=tuple(str(key) for key in binding.keys),
+            args=tuple(binding.args),
+            kwargs=dict(binding.kwargs),
+        ).to_ini()
     except (TypeError, ValueError) as exc:
         raise ShortcutConfigError(
-            f"shortcut binding for {command!r} is not JSON-serializable: {exc}"
+            f"shortcut binding for {command!r} is not writable: {exc}"
         ) from exc
 
 
