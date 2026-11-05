@@ -8,6 +8,11 @@
 
 以及一份脏集合 ``_dirty``（``set`` 缺省只标脏，不落盘）。
 
+「恢复默认」（:meth:`Resolver.reset`）：把节点从「用户写的那个文件」上摘掉，
+内存值回退到「剩下文件里优先级最高的那个值」（一个都不剩时节点消失），并把
+节点记进 ``_reset_pending``；``flush`` 看到这个标记就写 ``DELETE``（删掉用户
+文件里那一行），于是「恢复默认」在磁盘上也是真的恢复默认。
+
 变更广播：``Resolver`` 持有一个 :class:`~albuswall.configue.events.EventHub`
 （``self.events``），在 ``set`` / ``remove`` / ``reset`` / ``inject_raw`` **结束
 锁之后**发一条事件。订阅入口在 ``Configue.subscribe``；``flush`` 不广播
@@ -167,6 +172,9 @@ class Resolver:
     def __init__(self) -> None:
         self._raw: dict[Node, Any] = {}
         self._types: dict[Node, Any] = {}
+        #: 声明默认值（``@configclass`` 字段的 ``default``）。``reset`` 在
+        #: 「没有更低的文件定义」时回退到它，避免把值整个抹掉。
+        self._defaults: dict[Node, Any] = {}
         self._custom_converters: dict = {}   # 类型 -> str -> 值（读）
         self._custom_serializers: dict = {}  # 类型 -> 值 -> str（写）
 
@@ -185,6 +193,8 @@ class Resolver:
         self._file_raw: dict[Path, dict[Node, Any]] = {}
         self._readonly_files: set[Path] = set()  # 显式标记的只读来源
         self._dirty: set[Node] = set()  # 待回写节点
+        #: 「恢复默认」待删行的节点（``flush`` 见到它就把该 key 删掉）
+        self._reset_pending: set[Node] = set()
         #: 变更广播（订阅表 + 分发）。**不在本锁下 emit**，见 events.py。
         self.events = EventHub()
         self._lock = threading.RLock()
@@ -266,6 +276,8 @@ class Resolver:
             self._raw[node] = value
             if persist:
                 self._dirty.add(node)
+            # 显式设值 = 不再是「恢复默认」语义：flush 要写新值而不是删行。
+            self._reset_pending.discard(node)
             self._invalidate(node)
         self.events.emit(node, value, source="set")
 
@@ -286,11 +298,112 @@ class Resolver:
             self._raw.pop(node, None)
             if persist:
                 self._dirty.add(node)
+            self._reset_pending.discard(node)
             self._invalidate(node)
             # 本来就不存在：没有「值变了」可播（避免重复 remove 刷屏）
             changed = existed
         if changed:
             self.events.emit(node, None, source="remove")
+
+    def reset(
+            self,
+            section: str,
+            key: str,
+            *,
+            persist: bool = True,
+    ) -> bool:
+        """把节点「恢复默认」：内存回退到低优先级文件，``flush`` 删用户那一行。
+
+        规则（按顺序）：
+
+        1. 节点没有 ``origin``（纯默认值 / 从没被任何文件写过）→ 什么也不做，
+           返回 ``False``。没有「用户那一行」可删，也就没有「恢复默认」可言。
+        2. 在 ``_definitions`` 里**逆序**找 ``origin`` 之外、且 ``_file_raw``
+           里确实有值的文件（= 剩下文件里优先级最高的那个）：
+           有 → 值回退成它的，``origin`` 改成它；
+        3. 一个都没有（这个节点只有当前这一份定义）：
+           - ``origin`` 是**只读**文件（随包默认表 / 显式标记）→ 直接返回
+             ``False``：它本来就是默认值，删不掉也不该让内存里的值消失；
+           - 否则 → 节点从 Resolver 里消失（``_raw`` / ``_origins`` 一起摘）。
+        4. 记进 ``_reset_pending``；``persist=True`` 时标脏（等 ``flush`` 删行）。
+
+        ``flush`` 见到 ``_reset_pending`` 会写 ``DELETE``（删掉 origin 文件里
+        那一行），随后清掉标记。因此「恢复默认」是**磁盘级**的：配置文件里
+        那一行真的不见了，下次启动读到的是低优先级文件（或声明默认值）。
+
+        Args:
+            section: 段名。
+            key: 键名。
+            persist: ``False`` 时只回退内存，不参与回写（不标脏）。
+
+        Returns:
+            是否真的发生了回退（``False`` = 没有 origin / 本来就是默认值）。
+
+        回调在锁外执行，``source="reset"``。
+        """
+        node = (section, key)
+        with self._lock:
+            origin = self._origins.get(node)
+            if origin is None:
+                return False
+
+            fallback: Optional[tuple[Path, Any]] = None
+            for candidate in reversed(self._definitions.get(node, ())):
+                if candidate == origin:
+                    continue
+                values = self._file_raw.get(candidate)
+                if values is not None and node in values:
+                    fallback = (candidate, values[node])
+                    break
+
+            if fallback is not None:
+                path, value = fallback
+                self._raw[node] = value
+                self.set_origin(section, key, path)
+            elif node in self._defaults:
+                # 声明字段（``@configclass`` 带默认值）：回到声明默认值，
+                # 并摘掉文件 origin —— 于是 ``flush`` 会删掉文件里那一行。
+                self._raw[node] = self._defaults[node]
+                self._origins.pop(node, None)
+                bucket = self._by_file.get(origin)
+                if bucket is not None:
+                    bucket.discard(node)
+                    if not bucket:
+                        self._by_file.pop(origin, None)
+            elif origin in self._readonly_files:
+                # 只有只读文件定义过它 = 它本来就是默认值：不删、不播。
+                return False
+            else:
+                self._raw.pop(node, None)
+                self._origins.pop(node, None)
+                bucket = self._by_file.get(origin)
+                if bucket is not None:
+                    bucket.discard(node)
+                    if not bucket:
+                        self._by_file.pop(origin, None)
+
+            self._reset_pending.add(node)
+            if persist:
+                self._dirty.add(node)
+            self._invalidate(node)
+            present = node in self._raw
+
+        # 广播的是**生效值**（与 ``set`` 一致：都是调用方看得懂的类型化值）；
+        # 节点被摘掉时给 ``None``。
+        new_value = self.get_typed(section, key) if present else None
+        self.events.emit(node, new_value, source="reset")
+        return True
+
+    def is_reset_pending(self, node: Node) -> bool:
+        """该节点是否等着「删行」（``flush`` 会写 ``DELETE``）。"""
+        with self._lock:
+            return tuple(node) in self._reset_pending
+
+    def clear_reset_pending(self, nodes: Iterable[Node]) -> None:
+        """清掉「恢复默认」标记（``flush`` 写成功后调用）。"""
+        with self._lock:
+            for node in nodes:
+                self._reset_pending.discard(tuple(node))
 
     def inject_raw(
             self,
@@ -496,6 +609,26 @@ class Resolver:
             return sorted(k for s, k in self._raw if s == section)
 
     # ---------- 注册（加载阶段调用）----------
+    def register_default(self, section, key, value) -> None:
+        """登记声明默认值（``@configclass`` 的字段默认值）。
+
+        ``load()`` 的 Step 4 对每个带默认值的声明字段调用一次。它不参与读值
+        （默认值照样由 ``inject_raw`` 注入），只给 :meth:`reset` 用：用户改过
+        一个**声明字段**之后点「恢复默认」，值应当回到声明默认值，而不是
+        从 Resolver 里消失（消失会让 ``Config().field`` 抛
+        ``ConfigMissingError``）。
+        """
+        with self._lock:
+            self._defaults[(section, key)] = value
+
+    def default_of(self, section: str, key: str) -> tuple[bool, Any]:
+        """``(是否有声明默认值, 默认值)``。"""
+        with self._lock:
+            node = (section, key)
+            if node in self._defaults:
+                return True, self._defaults[node]
+            return False, None
+
     def register_type(self, section, key, converter):
         with self._lock:
             self._types[(section, key)] = converter

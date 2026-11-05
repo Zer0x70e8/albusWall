@@ -47,7 +47,10 @@ from typing import Any
 from albuswall.command import Command, CommandRegistry, Handler
 from albuswall.common.keymap import SECTION as SHORTCUT_SECTION
 from albuswall.common.keymap import ShortcutRecord
-from albuswall.configue.bootstrap import SHORTCUT_USER_FILE
+from albuswall.configue.bootstrap import (
+    SHORTCUT_DEFAULTS_FILE,
+    SHORTCUT_USER_FILE,
+)
 
 from .config import ShortcutConfig
 from .errors import DuplicateShortcutSlot, InvalidKeySequence
@@ -92,6 +95,20 @@ def _validate_command(command: str) -> str:
     return command
 
 
+def _canonical(record: ShortcutRecord) -> ShortcutRecord:
+    """键位规范化后的记录（``Delete`` → ``Del`` 这类别名要能比较出相等）。
+
+    配置文本里写的是 ``Delete``，注册表里存的是 Qt 规范化后的 ``Del``；
+    不做这一步，「和默认值比是否相等」永远为假，``persist`` 会把每条命令
+    都当成「用户改过」重新写一遍。
+    """
+    return ShortcutRecord(
+        keys=tuple(str(key) for key in parse_sequences(record.keys)),
+        args=tuple(record.args),
+        kwargs=dict(record.kwargs),
+    )
+
+
 def _record_of(binding: Any) -> ShortcutRecord:
     """``ShortcutBinding``（Qt 键位）→ :class:`ShortcutRecord`（文本键位）。
 
@@ -117,6 +134,29 @@ def _qt_application():
     except ImportError:  # pragma: no cover - 没装 Qt 的环境
         return None
     return QCoreApplication.instance()
+
+
+def _registered_file(name: str) -> Any | None:
+    """按注册名取已 ``reg()`` 的 ``FileInfo``（未登记 → ``None``）。"""
+    from albuswall.configue.registry import _FILES
+
+    return _FILES.get(name)
+
+
+def _bundled_records(config: Any) -> dict[str, ShortcutRecord]:
+    """随包默认表里的记录（``{command: record}``）；读不到就是空表。"""
+    finfo = _registered_file(SHORTCUT_DEFAULTS_FILE)
+    if finfo is None or finfo.resolved_path is None:
+        return {}
+    records: dict[str, ShortcutRecord] = {}
+    for node, raw in config.resolver.values_of_file(finfo.resolved_path).items():
+        if node[0] != SHORTCUT_SECTION:
+            continue
+        try:
+            records[node[1]] = ShortcutRecord.from_ini(raw)
+        except (TypeError, ValueError):
+            continue
+    return records
 
 
 class ShortcutRegistry:
@@ -826,16 +866,25 @@ class ShortcutRegistry:
         return True
 
     def persist(self, config: ShortcutConfig | None = None) -> Path | None:
-        """把「与默认不同的条目」写回用户表。
+        """把「与默认不同的条目」写回用户表（最小差异集）。
 
         默认基线 = 随包默认表优先、槽声明的兜底绑定兜底；只有当前绑定记录
-        （键位 + 位置参数 + 关键字参数）与基线不一致的命令才会落盘。因此
-        「改回默认」再 ``persist`` 会把该条目从用户表里删掉，用户表永远是
-        最小差异集。
+        （键位 + 位置参数 + 关键字参数）与基线不一致的命令才会落盘。「改回
+        默认」的条目会被**删掉**，用户表永远只存差异。
+
+        两条路径，自动选择：
+
+        * 绑了配置器（:meth:`bind_config`）→ :meth:`_persist_via_configue`：
+          走树视图 + ``Configue.reset``，用户表由配置器原子写回，并且**不会**
+          出现「内存态与文件态不一致」（写完即广播，绑定表自动重建）；
+        * 没绑 → 旧的 ``ShortcutConfig`` 路径（与改造前完全一致）。
 
         Returns:
-            写入的文件路径；没有可写路径（``user_path=None``）时返回 ``None``。
+            写入的文件路径；没有可写路径时返回 ``None``。
         """
+        if config is None and self._configue is not None:
+            return self._persist_via_configue()
+
         shortcut_config = (
             config if config is not None
             else (self._config or ShortcutConfig())
@@ -859,6 +908,49 @@ class ShortcutRegistry:
         if shortcut_config.user_path is None:
             return None
         return shortcut_config.save(overrides)
+
+    def _persist_via_configue(self) -> Path | None:
+        """配置器路径的 ``persist()``：差异写用户表、回到默认的删行。
+
+        基线来自**随包默认表**（``resolver.values_of_file(默认表)``），没有该
+        命令时才退到槽的兜底绑定——与旧路径同一套优先级，只是数据来源换成
+        配置器，于是「写回」和「读取」永远同一份事实。
+        """
+        config = self._configue
+        user_finfo = _registered_file(SHORTCUT_USER_FILE)
+        if user_finfo is None or user_finfo.resolved_path is None:
+            return None
+        user_path = user_finfo.resolved_path
+
+        baselines = _bundled_records(config)
+        user_nodes = set(config.resolver.values_of_file(user_path))
+
+        # 先把「当前绑定」快照下来：写回 / 恢复默认都会触发重建（``reset`` 发
+        # 事件、reload 同步执行），边写边读 iteration 会读到被重建过的表。
+        currents = {
+            command: _canonical(_record_of(self.binding_for(command)))
+            for command in self._all_commands()
+        }
+
+        changed = False
+        for command, current in currents.items():
+            baseline = baselines.get(command)
+            if baseline is None:
+                baseline = _record_of(self.default_binding_for(command))
+            baseline = _canonical(baseline)
+
+            if current != baseline:
+                self.save_shortcut(command, current, flush=False)
+                changed = True
+            elif (SHORTCUT_SECTION, command) in user_nodes:
+                # 当前值与默认一致、但用户表里还留着这一行 → 删行（恢复默认）
+                changed = config.reset(SHORTCUT_SECTION, command) or changed
+
+        if not changed:
+            return None
+        config.flush(file=SHORTCUT_USER_FILE)
+        logger.debug("shortcuts persisted via configue: %s", user_path)
+        return user_path
 
     def _all_commands(self) -> tuple[str, ...]:
         """需要参与持久化比较的命令：槽 + 绑定表 + 上次 load 读到的命令。

@@ -379,6 +379,10 @@ class Configue:
                 section = f.path[0]
                 key = f.path[-1]
                 self.resolver.register_type(section, key, f.type)
+                if f.has_default:
+                    # 记下声明默认值：``reset()`` 在「文件里那一行删掉之后」
+                    # 要靠它把值回退到声明默认值，而不是让节点消失。
+                    self.resolver.register_default(section, key, f.default)
                 if f.has_default and (section, key) not in self.resolver:
                     self.resolver.inject_raw(section, key, f.default)
 
@@ -604,7 +608,11 @@ class Configue:
                 try:
                     target, finfo = self._target_file_for(node)
                     backend = get_backend(finfo.backend)
-                    if node in resolver:
+                    if resolver.is_reset_pending(node):
+                        # 「恢复默认」：不写新值，删掉 origin 文件里的那一行
+                        # （内存已经回退到低优先级文件的值，见 Resolver.reset）
+                        serialized = DELETE
+                    elif node in resolver:
                         value = resolver.get_typed(section, key)
                         # 序列化是**后端**的职责：INI 出 str，JSON 出原生值
                         serialized = backend.serialize(
@@ -645,6 +653,7 @@ class Configue:
                     continue
 
                 resolver.mark_clean(plan_nodes[target])
+                resolver.clear_reset_pending(plan_nodes[target])
                 written.append(target)
                 _logger.info(
                     "flush: file=%s nodes=%d", target, len(plan_nodes[target]),
@@ -816,6 +825,44 @@ class Configue:
     def dirty_nodes(self) -> frozenset[Node]:
         """当前待回写的节点集合（``resolver.dirty_nodes()`` 的薄包装）。"""
         return self.resolver.dirty_nodes()
+
+    # ------------------------------------------------------------------
+    # 恢复默认
+    # ------------------------------------------------------------------
+    def reset(self, section: str, key: str, *, persist: bool = True) -> bool:
+        """把节点恢复成默认值（内存回退 + ``flush`` 删掉用户文件里那一行）。
+
+        语义见 :meth:`Resolver.reset`：
+
+        * 用户在用户文件里覆盖过一个 key → 内存回退到随包默认值，``flush``
+          把用户文件里那一行删掉（``DELETE``），默认文件毫发无伤；
+        * 节点只有当前这一份定义、且来自**只读**文件 → 什么也不做（它本来
+          就是默认值）；
+        * 节点只有一份定义、来自可写文件 → 节点从内存消失，``flush`` 删行。
+
+        Args:
+            section: 段名。
+            key: 键名。
+            persist: ``False`` 时只回退内存（不标脏、不落盘）。
+
+        Returns:
+            是否真的回退了。
+
+        写回目标由 :meth:`target_file_of` 决定——「恢复默认」永远删的是
+        **用户那一份**，不会去动随包默认表。
+
+        典型用法（快捷键「恢复默认」按钮）::
+
+            config.reset("shortcuts", "app.quit")   # 设置页 / 命令层
+        """
+        changed = self.resolver.reset(section, key, persist=persist)
+        if changed:
+            _logger.debug(
+                "reset: [%s]%s → %r",
+                section, key, self.resolver.get_typed(section, key)
+                if (section, key) in self.resolver else "<removed>",
+            )
+        return changed
 
     # ------------------------------------------------------------------
     # 变更广播

@@ -13,6 +13,7 @@
 ``serialization``   typed → 各后端的可写形态（``to_ini`` / ``to_json_native``）
 ``bootstrap``       ``FileInfo`` → 原始字典（只做分派，不认识格式）
 ``configue``        单例 + ``check()`` / ``load()`` / ``unload()`` / ``flush()``
+                    + ``subscribe()``（变更广播）/ ``reset()``（恢复默认）
 ``events``          变更广播（``EventHub``；``Configue.subscribe`` 订阅）
 ``tree``            ``c.tree.<file>.<section>.<key>`` 三层视图
 ``schema``          设置结构层：声明 → 可枚举 / 可校验 / 可写回的设置树
