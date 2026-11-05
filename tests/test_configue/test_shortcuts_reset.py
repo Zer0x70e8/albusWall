@@ -199,6 +199,64 @@ def test_reset_persist_false_only_touches_memory(config: Configue) -> None:
     assert config.resolver.get_typed(SECTION, "app.quit").keys == ("Ctrl+Q",)
 
 
+# ==================== reset → set → flush（安全链路） ====================
+
+def test_reset_then_set_then_flush_writes_user_file(
+        config: Configue, tmp_path: Path,
+) -> None:
+    """分支 2 之后 ```set``` 不改 origin：flush 靠段级兜底落用户表，不抛错。
+
+    reset 把 ``app.quit`` 的 origin 退到**只读**的随包默认表；``set`` 只改值
+    不改 origin，于是 ``target_file_of`` 必须能从段级映射推出可写文件。
+    """
+    assert config.reset(SECTION, "app.quit") is True
+    assert config.resolver.origin_of(SECTION, "app.quit") == _FILES[
+        SHORTCUT_DEFAULTS_FILE
+    ].resolved_path
+    assert config.is_readonly_path(
+        config.resolver.origin_of(SECTION, "app.quit")) is True
+
+    config.resolver.set(
+        SECTION, "app.quit", ShortcutRecord(keys=("Ctrl+Alt+R",)))
+
+    written = config.flush(file=SHORTCUT_USER_FILE)
+
+    assert written == [config.base_dir / "shortcuts.ini"]
+    assert config.last_flush_error is None
+    text = _user_text(tmp_path)
+    assert "app.quit" in text and "Ctrl+Alt+R" in text
+    # 随包默认表只读：一个字节都不许变
+    bundled = _FILES[SHORTCUT_DEFAULTS_FILE].resolved_path
+    assert bundled is not None
+    assert "Ctrl+Alt+R" not in bundled.read_text(encoding="utf-8")
+
+
+def test_reset_then_set_then_flush_for_a_declared_field(
+        config: Configue, tmp_path: Path,
+) -> None:
+    """分支 3 之后 ```set```：origin 仍是 None，flush 靠 ``_FIELD_OWNER`` 落主文件。
+
+    ``[ui] theme`` 是 ``@configclass`` 声明的字段：reset 回到声明默认值并
+    清空 origin，``set`` 之后 ``target_file_of`` 走 ``_FIELD_OWNER``（= main），
+    写的是**新值**而不是 DELETE（``set`` 已经把 ``_reset_pending`` 清掉）。
+    """
+    from albuswall.ui.presenter.theme import ThemeConfig
+
+    assert config.reset("ui", "theme") is True
+    assert config.resolver.origin_of("ui", "theme") is None
+    assert ThemeConfig().theme == "default"        # 声明默认值
+
+    config.resolver.set("ui", "theme", "dusk")
+    assert config.resolver.is_reset_pending(("ui", "theme")) is False
+
+    written = config.flush(file="main")
+
+    assert written == [config.base_dir / "config.ini"]
+    assert config.last_flush_error is None
+    assert "dusk" in (tmp_path / "config.ini").read_text(encoding="utf-8")
+    assert ThemeConfig().theme == "dusk"
+
+
 # ==================== 只有用户文件 ====================
 
 @pytest.fixture
