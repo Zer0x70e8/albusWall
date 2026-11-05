@@ -452,6 +452,15 @@ class Configue:
         回退到 machine 的 ``1``，但磁盘上 config.ini 仍是 ``2``——再次
         ``load()`` 读到的还是 ``2``。想让磁盘也回退，得在 ``save()`` **之前**
         ``unload()``，或者自己把旧值写回去。
+
+        **``_defaults`` 与本方法解耦**：``Resolver._defaults``（``@configclass``
+        声明的默认值）记录的是**声明**的副作用，不是**文件加载**的产物。
+        ``unload(name)`` 因此**不会**清除该文件所声明字段的默认值——这与
+        :meth:`reset` 的语义一致：reset 的分支 1 先看 ``origin``，而本方法已经
+        把 origin 摘掉了，残留的默认值不会被误用（``reset`` 直接返回
+        ``False``）。只有 ``_CLASSES`` 被清空时（测试 fixture 复用同一个
+        ``Resolver`` 的罕见场景）才需要手动 ``resolver._defaults.clear()``；
+        ``tests/conftest.py`` 的全局状态复位里就是这么做的。
         """
         finfo = _FILES.get(name)
         if finfo is None:
