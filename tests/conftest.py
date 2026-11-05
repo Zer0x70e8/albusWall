@@ -720,16 +720,37 @@ def clean_hooks():
 
 # ==================== 全局状态复位 ====================
 
+def _clear_resolver_defaults(instance: object) -> None:
+    """清掉某个 ``Configue`` 的 ``Resolver._defaults``（原地 clear）。
+
+    ``_defaults`` 记的是 **``@configclass`` 声明**的默认值,不是「文件加载」
+    的产物（见 ``Configue.unload`` 的 docstring）。用例之间复用同一个
+    ``Configue`` 实例时（本 fixture 恢复 ``Configue._instance`` 指针就是
+    这种情况），上一个用例里登记的声明默认值会跨用例残留——而声明表
+    （``_CLASSES``）在配置相关用例里是**会被清空**的，于是 ``reset()`` 的
+    分支 3 可能拿一个「当前已不存在的声明」当兜底。
+
+    只清 ``_defaults``：``_raw`` / ``_origins`` 等值是真实的加载状态，清掉
+    会破坏「同一个实例继续用」的语义。
+    """
+    resolver = getattr(instance, "resolver", None) if instance is not None else None
+    defaults = getattr(resolver, "_defaults", None)
+    if isinstance(defaults, dict):
+        defaults.clear()
+
+
 @pytest.fixture(autouse=True)
 def _reset_global_plugin_state():
-    """每个用例结束后复位进程级全局状态。
+    """每个用例前后复位进程级全局状态。
 
     插件系统把三处状态放在模块 / 类级（而不是实例上），它们天然跨用例泄漏：
 
     * ``core.registry.hooks_map``——插件 ``ctx.on(...)`` 会往里追加 hook；
     * ``core.plugins._pending``——``@plugin`` 的收集表，留着会让下个用例
       意外多出插件；
-    * ``Application`` / ``CoreApplication`` / ``Configue`` 的单例字段。
+    * ``Application`` / ``CoreApplication`` / ``Configue`` 的单例字段；
+    * 全局可达的那个 ``Configue`` 的 ``Resolver._defaults``（见
+      :func:`_clear_resolver_defaults`）。
 
     hook 用**原地切片赋值**恢复：``hooks_map[event]`` 这个 list 对象可能已经
     被别的模块持有引用（例如某个 hook 追加时拿到的就是它），换对象会让那些
@@ -746,6 +767,9 @@ def _reset_global_plugin_state():
     reg = CoreApplication._hooks_registered
     cfg = Configue._instance
 
+    # 用例开始前：把「它将要复用的那个实例」的声明默认值清干净
+    _clear_resolver_defaults(Configue._instance)
+
     yield
 
     for k, v in hook_snapshot.items():
@@ -754,3 +778,5 @@ def _reset_global_plugin_state():
     Application._instance, Application._self, Application._is_init = inst, self_, init
     CoreApplication._hooks_registered = reg
     Configue._instance = cfg
+    # 用例结束后：恢复出来的实例同样不该带着上一个用例的声明默认值
+    _clear_resolver_defaults(cfg)

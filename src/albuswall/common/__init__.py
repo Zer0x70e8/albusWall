@@ -7,6 +7,8 @@
 * ``constants/``     —— schema / 跨域常量（按域分文件，不做汇总 re-export）
 * ``exceptions.py``  —— 跨层业务异常
 * ``futures.py``     —— 跨域复用的并发原语
+* ``ipc.py``         —— 进程间通信的消息/字面量约定（IPC 服务与 CLI 共用）
+* ``keymap.py``      —— 快捷键记录的**配置值类型**（``ShortcutRecord``，纯标准库）
 
 约定正文见 ``common/CONVENTIONS.md``。
 """
