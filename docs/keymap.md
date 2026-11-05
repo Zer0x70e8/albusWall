@@ -102,22 +102,69 @@ album.new         = []
 * 命令名大小写有意义（`parser.optionxform = str`）；
 * 命令行内的键位书写要用 JSON 数组，不用逗号分隔——逗号是**和弦分隔符**。
 
-### 两份文件与优先级
+### 两份文件与优先级（由配置器 `reg()` 登记）
 
-| 优先级 | 文件 | 计算函数 | 说明 |
+| 优先级 | 注册名 | 文件 | 说明 |
 | --- | --- | --- | --- |
-| 1（高） | `<user config dir>/shortcuts.ini` | `user_config_path(file_name="shortcuts.ini")` = `get_user_config_dir(albuswall.__name__, albuswall.__author__) / file_name` | 可写，只存与默认表**不同**的条目（Linux 实测 `~/.config/albuswall/shortcuts.ini`） |
-| 2 | `src/albuswall/resources/config/shortcuts.ini` | `default_config_path()` = `albuswall.resources.get("shortcuts")` | 只读，随包分发 |
-| 3（低） | 槽装饰器的 `keys= / args= / kwargs=` | `ShortcutSlot.default_binding` | 只给配置里没有的命令补位 |
+| 1（高） | `shortcuts` | `<base_dir>/shortcuts.ini`（生产 = `~/.config/albuswall/shortcuts.ini`） | 可写，`order=30`，`autosave=manual`；只存与默认表**不同**的条目 |
+| 2 | `shortcuts.default` | `src/albuswall/resources/config/shortcuts.ini` | 只读（`mark_readonly_file`），`order=20`，`autosave=off`；随包分发 |
+| 3（低） | — | 槽装饰器的 `keys= / args= / kwargs=` | 只给配置里没有的命令补位 |
 
-* 覆盖粒度是**命令**：`ShortcutConfig.load()` = `load_defaults()` 之后被
-  `load_user()` 逐条 `update`，所以用户写 `album.new = []` 只清掉这一条；
-* 用户文件缺失 = 全部走默认；
-* `ShortcutRegistry.persist()` 只写差异：基线 = 随包默认表优先、槽兜底绑定兜底，
-  与基线一致的条目从用户表里消失；没有 `user_path` 时返回 `None`；
-* 还没 `load()` 就 `persist()` 只写本进程认识的命令，不会把默认表整片解绑；
-* `ShortcutConfig.reset()` 删掉用户文件即恢复全默认；写盘是原子的（同目录临时
-  文件 + `os.replace`），用户文件里的注释不保留（状态文件）。
+* 合并靠 `FileInfo.order` 的**升序 + `overwrite=True`**：用户表后注入、逐 key
+  覆盖，用户没写的 key 仍拿默认值（不是整表覆盖）；
+* 记录类型是 `albuswall.common.keymap.ShortcutRecord`（`keys` / `args` /
+  `kwargs`，纯标准库）；转换器与加载钩子由 `setup_config` 登记，所以
+  `[shortcuts]` 的每个 key 在 `load()` 的类型自检里就有类型；
+* 两份文件都 `optional=True`：用户文件在第一次保存前本来就不存在；
+* 写回目标由 `Configue.target_file_of` 推导：默认表只读 → 落到用户表
+  （`register_section_file("shortcuts", "shortcuts")` 是最后一步兜底，
+  因为 `[shortcuts]` 没有 `@configclass` 字段）；
+* 写盘是原子的（同目录临时文件 + `os.replace`），用户文件里的注释不保留。
+
+`ShortcutConfig`（旧路径）仍然保留：配置器没装配（单测、headless 诊断）时
+`ShortcutRegistry.load()` 读它，行为与改造前完全一致。
+
+### 配置器接管之后
+
+```python
+# 值一变就重建绑定（界面立即生效，不需要重启）
+config.subscribe(registry._on_config_change)      # bind_config() 内部就是这么做的
+
+# 写一条键位（走树视图：顺手把 origin 改成用户表，运行期新 key 也能写对文件）
+registry.save_shortcut("app.quit", ShortcutRecord(keys=("Ctrl+Alt+Q",)))
+
+# 恢复默认：内存回退随包默认值，flush 删掉用户文件里那一行
+config.reset("shortcuts", "app.quit")
+config.flush(file="shortcuts")
+```
+
+* 事件来源有四种：`set` / `remove` / `reset` / `reload`（`flush` **不**广播）；
+  同一事件循环内的多次变更合并成一次重建（`QTimer.singleShot(0, ...)`），
+  没有 `QCoreApplication` 时同步重建；
+* `Configue.reset(section, key)` 只删**用户那一份**，随包默认表永远不动；
+  只有只读文件定义过的 key 会直接返回 `False`（它本来就是默认值）。
+
+### 查看当前配置：`albusctl ui shortcuts`
+
+键位表不在 `config.ini` 里，所以 `setting.schema` 看不到它。只读视图由
+`albuswall.ui.window.settings.shortcut_config_info()` 提供，命令入口是
+`ui.shortcuts`（`service/command/handlers/ui.py`）：
+
+```bash
+albusctl ui shortcuts                  # 表格：命令 / 默认键 / 生效键 / 来源
+albusctl ui shortcuts --verbose        # 多一列 help
+albusctl ui shortcuts --source=user    # 只看用户覆盖过的条目
+albusctl ui shortcuts --format=json    # 机器可读（设置页直接吃）
+```
+
+* 数据来源两处：`shortcuts.ini`（默认表 + 用户覆盖，**总是**可读）与运行期
+  注册表（容器里的 `shortcuts` 键，界面起过才有）——后者提供 `help` 与
+  「最终生效」的键位（配置里没有的命令用槽的兜底绑定）；
+* 报告里带 `conflicts`（一键多命令）、`unbound`（没有任何键位的命令）、
+  `files`（两份文件的路径与是否存在）与 `errors`（读失败的诊断）；
+* **只读**：写键位仍是 `ShortcutRegistry.persist()` 或直接编辑用户表。
+  同样只读的 `albusctl ui state` 输出 `[window]` 段（窗口几何 / 上次相册 /
+  网格列数，见 `albuswall.ui.window.settings`）。
 
 ## 键位字符串语法
 
@@ -371,10 +418,10 @@ Qt 的 Tab 链只看焦点策略，**不看控件是否画了焦点指示器**�
 | 真实按键 | **已接通**：`keymap/qt_binder.py` 的 `ShortcutBinder` 在界面 boot（phase 5）装到 `QApplication` 上，单键 / 修饰键组合 / 和弦（1.2s 超时）都能触发 |
 | 视图 / presenter 接线 | **已接线**：`ui/presenter/shortcuts.py` 登记 18 个槽，`ui/bootstrap.py` 的 phase 5 调 `install_ui_shortcuts()` 并 `load_shortcuts()`；仍是按鸭子类型用容器里的注册表（`keymap` 不反向 import presenter） |
 | 默认表与代码的对应 | **已对上**：18 条命令都有槽；`load()` 之后 `unbound_slots()` 恰好是随包表里 `= []` 的 6 条；`tests/test_ui_shortcuts.py` 断言「`UI_SLOTS` 的命令集合 == `shortcuts.ini` 的命令集合」且「只有那 6 条没有键位」 |
-| 设置页 / 键位编辑 UI | 不存在：没有 Qt 行模型、没有录键控件、没有冲突提示、没有「恢复默认」按钮。`conflicts()` / `unbound_slots()` / `binding_for()` 是留给它的查询接口（槽的 `help` 文案现在是英文短句，设置页出现时再走 i18n） |
+| 设置页 / 键位编辑 UI | 不存在：没有 Qt 行模型、没有录键控件、没有冲突提示、没有「恢复默认」按钮。`conflicts()` / `unbound_slots()` / `binding_for()` 是留给它的查询接口；**只读**的查看入口已经有了（`albusctl ui shortcuts`，见上文，底层是 `shortcut_config_info()`），缺的是编辑与落盘那一半（槽的 `help` 文案现在是英文短句，设置页出现时再走 i18n） |
 | 提示未来的组件标记 | `ui/widgets/collapsible_group_box.py` 与 `ui/widgets/tile_view.py` 设的 Qt 属性 `keymap_passthrough` 由 `keymap/qt_binder.py` 读取（规则 5：空格 / 回车让渡给控件） |
 | 命令层接口 | `albuswall/command/registry.py` 的 docstring 有 `TODO(ui)`：快捷键绑定归界面层，命令注册表不提供接口 |
-| 设置写回 | 应用处于重构阶段、设置 GUI 未恢复。`albuswall.service.command.handlers.setting`（`setting.schema` / `setting.set` / `setting.save`）只对 `configue` 管的配置（如 `[ui]`）做写回，**不**管 `shortcuts.ini`——快捷键文件由 `ShortcutConfig` 自己读写，不进 `configue` schema |
-| 热重载 | 只在界面 boot 时 `load_shortcuts()` 一次：改了 `shortcuts.ini` 要重启（`QFileSystemWatcher` / 一条 reload 命令都还没做） |
+| 设置写回 | **已接入**：`shortcuts.ini`（默认表 + 用户表）由 `setup_config` 用 `reg()` 登记，值走 `Resolver`，写回走 `ShortcutRegistry.save_shortcut()` / `persist()`，恢复默认走 `Configue.reset()`。`[shortcuts]` 的 key 是运行期才知道的，所以**不**出现在 `setting.schema` 的自动树里（它没有 `@configclass` 字段）；只读视图是 `albusctl ui shortcuts` |
+| 热重载 | **已接通（进程内）**：`ShortcutRegistry.bind_config(config)` 订阅配置变更，`set` / `reset` / 重新 `load()` 都会重建绑定表。**外部改文件**仍然要重启（`QFileSystemWatcher` 没做——仓库没有 watcher 基础设施，task 明确不新造） |
 | 菜单里的键位提示 | `Menu` 的 `QAction` 没有 `setShortcut`：菜单不显示键位，也没有把键位变化同步回菜单（`binding_for()` 是留给它的查询接口） |
 | 输入法 / 非拉丁布局 | 组合输入期间的 `KeyPress` 不额外过滤（依赖「焦点在文本输入」那条放行）；无修饰键的字母在非 QWERTY 布局下拿到的是别的键码，所以默认表只用修饰键组合与功能键 |
