@@ -44,9 +44,10 @@
 
 from __future__ import annotations
 
+import logging
 import types
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -61,6 +62,8 @@ from .registry import (
     registered_files,
 )
 from .resolver import coerce_value
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     # 数据结构
@@ -310,6 +313,27 @@ def _is_advanced_id(group_id: str) -> bool:
 # 叶子
 # ══════════════════════════════════════════════════════════════
 
+def _resolve_text(value: Any) -> str:
+    """把 ``label`` / ``description`` 解析成字符串（**dump 时**调用）。
+
+    - ``None`` → ``""``
+    - ``Callable[[], str]`` → 调它；抛异常 → ``""``（翻译缺失不能炸 dump）
+    - 其它 → ``str(value)``
+
+    刻意**不**在 ``SettingItem.__post_init__`` / ``_auto_item`` 里求值：那里是
+    构造期，语言切了不会重跑，文案就会被冻在第一次 dump 的语言上。
+    """
+    if value is None:
+        return ""
+    if callable(value):
+        try:
+            return str(value())
+        except Exception:  # noqa: BLE001 - 翻译失败不该让 dump 失败
+            logger.warning("setting text callable failed", exc_info=True)
+            return ""
+    return str(value)
+
+
 @dataclass
 class SettingItem:
     """一个可编辑叶子，绑定一个配置节点 ``(section, key)``。
@@ -325,8 +349,11 @@ class SettingItem:
     name: str
     section: str
     key: str
-    label: str = ""
-    description: str = ""
+    #: 展示名：``str`` 或 ``Callable[[], str]``（**dump 时**求值，见
+    #: :func:`_resolve_text`）。切语言后重新 ``dump_schema`` 即得新文案。
+    label: str | Callable[[], str] = ""
+    #: 说明文案，同上。
+    description: str | Callable[[], str] = ""
     widget: SettingWidget | str | None = SettingWidget.AUTO
     choices: tuple[Any, ...] = ()
     choice_labels: Mapping[str, str] = field(default_factory=dict)
@@ -396,8 +423,12 @@ class SettingItem:
 
     @property
     def display_label(self) -> str:
-        """展示名：``label`` 为空时回落 ``name``。"""
-        return self.label or self.name
+        """展示名：``label`` 求值后为空时回落 ``name``。
+
+        **不在这里**做 i18n 求值的唯一入口：``dump`` 走 :func:`_resolve_text`，
+        本属性只是「不打印 callable 对象」的兜底。
+        """
+        return _resolve_text(self.label) or self.name
 
     def coerce(
             self,
@@ -1290,8 +1321,9 @@ def _resolve_item(
         "path": item.path_text,
         "section": item.section,
         "config_key": item.key,
-        "label": item.display_label,
-        "description": item.description,
+        # dump 时才求值：``label`` / ``description`` 可以是 i18n callable
+        "label": _resolve_text(item.label) or item.name,
+        "description": _resolve_text(item.description),
         "widget": widget.value,
         "value": jsonable(value),
         "value_repr": _value_repr(value),

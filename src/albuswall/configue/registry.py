@@ -17,6 +17,11 @@
 - 默认值相同（都写了且相等，或都没写）；
 - ``label`` / ``description`` 不参与判定（纯展示信息，谁非空用谁的）。
 
+``label`` / ``description`` 可以是 ``str``，也可以是 ``Callable[[], str]``——
+后者**在 dump 时求值**（不是装饰期），这样「切了语言再 dump 一次」就能拿到
+新文案；``albuswall.ui.config_i18n.field`` 就是把 i18n key 包成 callable 的
+薄封装（本层不认识翻译框架）。
+
 任一不一致 → 装饰期抛 ``ConfigDeclarationConflict``，不让「同一个格子两种解释」
 悄悄变成后写者赢。
 
@@ -147,8 +152,10 @@ class FieldInfo:
     path: tuple[str, ...]
     type: Any
     default: Any
-    label: str = ""
-    description: str = ""
+    #: 展示名。``str`` 或 ``Callable[[], str]``（**dump 时**才求值）。
+    label: str | Callable[[], str] = ""
+    #: 说明文案，同上。
+    description: str | Callable[[], str] = ""
 
     @property
     def has_default(self) -> bool:
@@ -170,15 +177,16 @@ class _FieldSpec:
     """``field()`` 的返回值，仅在 ``configclass`` 内被消费。"""
 
     default: Any = _MISSING
-    label: str = ""
-    description: str = ""
+    #: 展示名：``str`` 或「返回译文的可调用对象」（dump 时求值）。
+    label: str | Callable[[], str] = ""
+    description: str | Callable[[], str] = ""
 
 
 def field(
         *,
         default: Any = _MISSING,
-        label: str = "",
-        description: str = "",
+        label: str | Callable[[], str] = "",
+        description: str | Callable[[], str] = "",
 ) -> Any:
     """声明字段元数据，用法类似 ``dataclasses.field``。
 
@@ -188,6 +196,11 @@ def field(
         class Core:
             debug: bool = field(default=False, label="调试", description="打开调试日志")
             port: int = 8000  # 也可直接用普通默认值
+
+    ``label`` / ``description`` 也可以传 ``Callable[[], str]``：它**不在装饰期
+    求值**，而是在 ``dump_schema`` 时求值——于是语言切了之后再 dump 一次就是
+    新文案。需要 i18n 时用 :func:`albuswall.ui.config_i18n.field`（把 i18n key
+    包成 callable，本层不 import 任何翻译框架）。
     """
     return _FieldSpec(default=default, label=label, description=description)
 
