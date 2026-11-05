@@ -8,8 +8,14 @@
 
 以及一份脏集合 ``_dirty``（``set`` 缺省只标脏，不落盘）。
 
+变更广播：``Resolver`` 持有一个 :class:`~albuswall.configue.events.EventHub`
+（``self.events``），在 ``set`` / ``remove`` / ``reset`` / ``inject_raw`` **结束
+锁之后**发一条事件。订阅入口在 ``Configue.subscribe``；``flush`` 不广播
+（它只落盘，不改变值）。
+
 线程安全：所有读写共享状态的方法都在同一把 ``RLock`` 下执行；
 ``RLock`` 是必需的——``get_str`` 展开 ``${...}`` 时会递归调用自身。
+**回调一律在锁外执行**：回调里再 ``set`` 不会制造「锁中锁」。
 """
 
 from __future__ import annotations
@@ -31,11 +37,15 @@ from typing import (
     get_origin,
 )
 
+from .events import EventHub
 from .utils.ini_parser import _convert  # 复用现有转换器
 
 REF_RE = re.compile(r'\${([^}:]+)(?::([^}]+))?}')
 
 Node = tuple[str, str]
+
+#: 「节点原本不存在」的哨兵（区分「没有值」与「值是 None」）。
+_MISSING: Any = object()
 
 _UNION_ORIGINS = (Union, getattr(types, "UnionType", Union))
 _CONTAINER_ORIGINS = (list, tuple, set, frozenset)
@@ -175,6 +185,8 @@ class Resolver:
         self._file_raw: dict[Path, dict[Node, Any]] = {}
         self._readonly_files: set[Path] = set()  # 显式标记的只读来源
         self._dirty: set[Node] = set()  # 待回写节点
+        #: 变更广播（订阅表 + 分发）。**不在本锁下 emit**，见 events.py。
+        self.events = EventHub()
         self._lock = threading.RLock()
 
     # ---------- 字符串展开 ----------
@@ -243,7 +255,7 @@ class Resolver:
 
     # ---------- 写 + 失效 ----------
     def set(self, section: str, key: str, value, *, persist: bool = True) -> None:
-        """写入运行期值。
+        """写入运行期值（并在锁外广播 ``source="set"``）。
 
         Args:
             persist: True（默认）时把节点标脏，等待 ``flush`` 落盘；
@@ -255,9 +267,10 @@ class Resolver:
             if persist:
                 self._dirty.add(node)
             self._invalidate(node)
+        self.events.emit(node, value, source="set")
 
     def remove(self, section: str, key: str, *, persist: bool = True) -> None:
-        """删除运行期值（``set`` 的对称操作）。
+        """删除运行期值（``set`` 的对称操作；锁外广播 ``source="remove"``）。
 
         只弹出 ``_raw`` 里的值并失效缓存；**故意不动** ``_origins`` /
         ``_definitions`` / ``_by_file``——``flush`` 要靠 origin 找到
@@ -269,10 +282,15 @@ class Resolver:
         """
         node = (section, key)
         with self._lock:
+            existed = node in self._raw
             self._raw.pop(node, None)
             if persist:
                 self._dirty.add(node)
             self._invalidate(node)
+            # 本来就不存在：没有「值变了」可播（避免重复 remove 刷屏）
+            changed = existed
+        if changed:
+            self.events.emit(node, None, source="remove")
 
     def inject_raw(
             self,
@@ -292,6 +310,7 @@ class Resolver:
                 （但 origin 仍会被记录为定义来源，仅在值确实被采用时更新生效 origin）。
         """
         node = (section, key)
+        changed = False
         with self._lock:
             if origin is not None:
                 origin = Path(origin)
@@ -299,11 +318,19 @@ class Resolver:
                 # 记录「这个文件里这个 key 是什么」——注意与是否生效无关，
                 # unload 回退时要靠它。
                 self._file_raw.setdefault(origin, {})[node] = raw
+            previous = self._raw.get(node, _MISSING)
             if overwrite or node not in self._raw:
                 self._raw[node] = raw
                 if origin is not None:
                     self.set_origin(section, key, origin)
                 self._invalidate(node)
+                # 「值确实变化」才播：``load()`` 重复跑（同一批文件再读一次）
+                # 不该把订阅者刷屏。
+                changed = previous is _MISSING or previous != raw
+        if changed:
+            # 重新注入来自读盘：「reload」——注意它是**加载期**事件，
+            # 此时通常还没有订阅者（注册表在 UI 启动期才订阅）。
+            self.events.emit(node, raw, source="reload")
 
     def _invalidate(self, node) -> None:
         with self._lock:

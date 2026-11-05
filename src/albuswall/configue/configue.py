@@ -781,6 +781,55 @@ class Configue:
         """当前待回写的节点集合（``resolver.dirty_nodes()`` 的薄包装）。"""
         return self.resolver.dirty_nodes()
 
+    # ------------------------------------------------------------------
+    # 变更广播
+    # ------------------------------------------------------------------
+    def subscribe(
+            self,
+            callback: Any,
+            *,
+            nodes: Iterable[Node] | Node | None = None,
+    ) -> Any:
+        """订阅配置变更，返回**幂等**的取消函数。
+
+        ``callback(node, value, source)``，``node`` 是 ``(section, key)``，
+        ``source`` 是四种来源之一：
+
+        ==========  ==================================================
+        ``set``     运行期赋值（``resolver.set`` / 树视图写入）
+        ``remove``  运行期删值（``resolver.remove``）
+        ``reset``   恢复默认（``Configue.reset``）
+        ``reload``  ``load()`` 重新读到**不同的值**
+        ==========  ==================================================
+
+        ``flush()`` **不**触发广播：它只落盘，不改变任何值。
+
+        回调在**锁外**执行，因此回调里再 ``set`` 一个配置不会死锁；单个
+        回调抛异常会被 ``logger.exception`` 吃掉，不影响其它订阅者，也不
+        冒泡到写配置的调用方（广播是旁路，不能改变写配置的成败）。
+
+        Args:
+            callback: ``callback(node, value, source)``。
+            nodes: ``None`` 订阅全部；给了节点（``("section", "key")`` 或
+                其可迭代）就只收这些节点的事件。
+
+        Returns:
+            取消函数（重复调用不抛）。
+
+        典型用法（快捷键注册表订阅自己那个段）::
+
+            unsubscribe = config.subscribe(
+                lambda node, value, source: rebind(),
+                nodes=[(section, key) for key in config.resolver.keys_of("shortcuts")],
+            )
+
+        .. note::
+           订阅表在 ``resolver.events``（``EventHub``）里，不在 ``Resolver``
+           自己身上——事件分发与「值的唯一中枢」是两件事，混在一起会让
+           ``Resolver`` 的临界区变成锁中锁。
+        """
+        return self.resolver.events.subscribe(callback, nodes=nodes)
+
     def _finfo_for_path(self, path: Path) -> FileInfo:
         """``resolved_path`` → 已加载的 ``FileInfo``（找不到就是内部状态不一致）。"""
         name = self._path_to_file.get(path)
@@ -911,6 +960,10 @@ class Configue:
             self.flush()
         except Exception as exc:  # noqa: BLE001  close 不把写盘错误抛给调用方
             _logger.error("close: flush failed: %s", exc)
+
+        # 订阅者（典型是进程级快捷键注册表）不该被一个已关闭的配置实例
+        # 长期持有：清掉订阅表，避免「关了又开」时旧回调还在收事件。
+        self.resolver.events.clear()
 
     def __repr__(self) -> str:
         return (

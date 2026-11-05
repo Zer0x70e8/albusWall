@@ -13,6 +13,7 @@
 ``serialization``   typed → 各后端的可写形态（``to_ini`` / ``to_json_native``）
 ``bootstrap``       ``FileInfo`` → 原始字典（只做分派，不认识格式）
 ``configue``        单例 + ``check()`` / ``load()`` / ``unload()`` / ``flush()``
+``events``          变更广播（``EventHub``；``Configue.subscribe`` 订阅）
 ``tree``            ``c.tree.<file>.<section>.<key>`` 三层视图
 ``schema``          设置结构层：声明 → 可枚举 / 可校验 / 可写回的设置树
 ==================  ============================================================
@@ -98,6 +99,7 @@ from .errors import (
     LoadError,
     LoadReport,
 )
+from .events import EventHub
 from .registry import (
     ROOT,
     AutosavePolicy,
@@ -138,6 +140,8 @@ __all__ = [
     "classes_in", "declarations", "registered_files", "field_owner",
     # 主类
     "Configue",
+    # 变更广播（``c.subscribe(cb, nodes=...)`` 返回取消函数）
+    "EventHub",
     # 设置结构层（枚举 / 校验 / 写回）
     "SettingWidget", "SettingItem", "SettingGroup",
     "SettingSchemaRegistry", "SettingWriteResult", "UNSET",
