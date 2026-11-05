@@ -802,25 +802,42 @@ class Configue:
         return finfo.resolved_path
 
     def register_section_file(self, section: str, name: str) -> None:
-        """登记「某个段没有 ``@configclass`` 声明时，默认写回哪个文件」。
+        """为 ``section`` 登记「默认写回哪个注册文件」（段级写回落点）。
 
-        给运行期才知道 key 的段用（典型：``[shortcuts]``）。这类节点的 key
-        不是声明出来的，``_FIELD_OWNER`` 里没有它们，于是
-        :meth:`target_file_of` 在「origin 只读（随包默认表）+ 用户文件里还
-        没有这个 key」时推不出写回落点——本方法补的就是这一步。
+        用途：段里的 key 既没有 ``origin``、也不在 ``_FIELD_OWNER`` 里时
+        （典型：``[shortcuts]`` 这种由加载钩子动态注册类型的段），
+        :meth:`target_file_of` 靠它决定写哪个文件。
 
-        规则位置：``target_file_of`` 的**最后一步兜底**（origin 与
-        「其它定义过它的可写文件」都推不出来时才用），因此：
+        语义：
 
-        * 已声明字段（``config.ini`` 的段）不受影响；
-        * 用户文件里已经写了这个 key 时，生效 origin 就是它，本登记不参与。
+        * **精确匹配段名**：``"shortcuts"`` 只管 ``[shortcuts]``，不覆盖
+          ``[shortcuts.extra]``（不做前缀匹配；后者仍按原规则报
+          ``no owning file``）。
+        * **优先级最低的一档**：``origin`` → 其它定义过的可写文件 →
+          ``_FIELD_OWNER``（``@configclass`` 声明的字段）→ **段级映射** →
+          ``ConfigError``。也就是说已声明字段永远赢过段级映射；用户文件里
+          已经写了这个 key 时，生效 origin 就是它，本登记也不参与。
+        * **不参与 schema 建树**：``dump_schema_dict`` 的 ``by_file`` /
+          ``unbound`` 只统计有 ``SettingItem`` 的声明字段，段级映射既不新增
+          也不移除任何叶子——``[shortcuts]`` 的 key 不会因此出现在 dump 里。
+        * **与文件生命周期解耦**：:meth:`unload` 不清段级映射（它描述的是
+          「段 → 文件」的静态约定，不是「文件已加载」的运行时状态）。映射
+          还在、而目标文件已卸载时，``target_file_of`` 报
+          ``declares file ... which is not loaded``，不会悄悄换一个文件写。
+
+        **注册期不校验 ``name``**：这里只记下约定，真正的校验发生在
+        :meth:`target_file_of`——未 ``reg()`` 的名字报
+        ``declares file ... which is not registered``，未 ``load()`` 的报
+        ``... which is not loaded``（都是 ``ConfigError``）。不在这里抛
+        ``KeyError`` 是因为它允许在 ``reg()`` 之前登记（同一份装配代码里
+        顺序不同不该炸）。
 
         Args:
-            section: 段名，如 ``"shortcuts"``。
-            name: ``reg()`` 时用的注册名（如 ``"shortcuts"`` = 用户覆盖表）。
+            section: 精确段名（不含方括号），如 ``"shortcuts"``。
+            name: ``reg()`` 时用的注册名，如 ``"shortcuts"``（= 用户覆盖表）。
 
         Raises:
-            ValueError: ``section`` / ``name`` 为空。
+            ValueError: ``section`` / ``name`` 为空（纯参数校验）。
         """
         text = str(section or "").strip()
         target = str(name or "").strip()

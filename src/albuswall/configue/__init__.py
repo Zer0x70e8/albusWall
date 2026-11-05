@@ -66,6 +66,9 @@
 - ``register_converter(type_, reader, writer=)`` —— 「构造函数语义不对」的类型
 - ``register_load_hook(hook)`` —— 运行期才知道 key 的段（``[shortcuts]`` 之类）
 - ``register_backend(backend)`` —— 新文件格式（TOML / YAML 的落点）
+- ``Configue.register_section_file(section, name)`` —— 同上那些段的**写回落点**
+  （实例方法，故不在 ``__all__`` 里）：``target_file_of`` 的最后一档兜底，
+  优先级低于 ``@configclass`` 声明字段；精确匹配段名，不参与 schema 建树。
 
 两个**审计开关**（默认都关，零行为变化；打开后让「拼错的 key」显形）：
 
