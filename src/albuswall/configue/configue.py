@@ -652,8 +652,16 @@ class Configue:
                         raise error from exc
                     continue
 
-                resolver.mark_clean(plan_nodes[target])
-                resolver.clear_reset_pending(plan_nodes[target])
+                # 写盘已经成功：两个内存标记必须**一起**收尾。``mark_clean``
+                # 只做 ``_dirty.discard``，实际几乎不会抛；但一旦抛了（例如
+                # 并发改表），``clear_reset_pending`` 不能跟着被跳过 —— 否则
+                # 文件里那一行已删、内存仍标着「待删行」，下次 ``flush`` 会对
+                # 同一个 key 再发一次 ``DELETE``（``ini_transform`` 对不存在的
+                # key 是 no-op，不破坏数据，但状态不一致）。
+                try:
+                    resolver.mark_clean(plan_nodes[target])
+                finally:
+                    resolver.clear_reset_pending(plan_nodes[target])
                 written.append(target)
                 _logger.info(
                     "flush: file=%s nodes=%d", target, len(plan_nodes[target]),
