@@ -153,7 +153,7 @@ class SourcePresenter(Presenter):
         return self._model
 
     def _default_title(self) -> str:
-        return self.tr("未命名导入源")
+        return self.tr("Untitled ingest source")
 
     def reload(self) -> None:
         """从数据库全量拉取导入源，刷新卡片列表。"""
@@ -226,7 +226,7 @@ class SourcePresenter(Presenter):
     def _on_add_requested(self) -> None:
         """顶部「添加」：造一张内存草稿并直接打开详情页。"""
         if self._source_service is None:
-            self.error.emit(self.tr("导入源服务不可用"))
+            self.error.emit(self.tr("The ingest source service is unavailable"))
             return
         if self._draft_dto is None:
             self._draft_dto = _make_draft(self._default_title())
@@ -298,14 +298,14 @@ class SourcePresenter(Presenter):
             self, source_id: int, dto: Any, global_pos: QPoint) -> None:
         """两态循环：普通态 [删除][禁用/启用]，确认态 [恢复][确认删除]。"""
         disabled = bool(getattr(dto, "disabled", False))
-        toggle_label = self.tr("启用") if disabled else self.tr("禁用")
+        toggle_label = self.tr("Enable") if disabled else self.tr("Disable")
 
         confirm_mode = False
         while True:
             menu = QMenu(self._view)
             if confirm_mode:
-                restore_action = menu.addAction(self.tr("恢复"))
-                confirm_action = menu.addAction(self.tr("确认删除"))
+                restore_action = menu.addAction(self.tr("Restore"))
+                confirm_action = menu.addAction(self.tr("Confirm delete"))
                 choose = menu.exec(global_pos)
                 if choose is None:
                     return
@@ -317,7 +317,7 @@ class SourcePresenter(Presenter):
                     return
                 return
 
-            delete_action = menu.addAction(self.tr("删除"))
+            delete_action = menu.addAction(self.tr("Delete"))
             toggle_action = menu.addAction(toggle_label)
             choose = menu.exec(global_pos)
             if choose is None:
@@ -336,7 +336,7 @@ class SourcePresenter(Presenter):
     def delete_source(self, source_id: int) -> bool:
         """删除导入源（回收站可用时走软删 + 异步 purge）。"""
         if source_id == MANUAL_SOURCE_ID:
-            self.error.emit(self.tr("虚拟根导入源不可删除"))
+            self.error.emit(self.tr("A virtual root ingest source cannot be deleted"))
             return False
 
         service: Any = self._trash_service or self._source_service

@@ -72,6 +72,45 @@ def test_album_model_accepts_plain_objects():
     assert model.row_of("y") == 1
 
 
+def test_album_model_carries_row_icon():
+    """``ItemRole.Icon`` 是回收站单行列表的行首图标（当前是 emoji 文本）。
+
+    回归背景：``TrashAlbumDelegate`` 只从 role 取数据，模型不给这一格，
+    底部那行就只剩名称、左边空着。
+    """
+    from albuswall.ui.model import AlbumEntry, AlbumModel, ItemRole
+
+    model = AlbumModel()
+    model.set_albums([AlbumEntry(uuid="t", title="Trash")], icon="🗑️")
+
+    index = model.index(0, 0)
+    assert model.data(index, ItemRole.Icon) == "🗑️"
+    assert model.icon_at(0) == "🗑️"
+    assert model.data(index, ItemRole.Title) == "Trash"
+    # 顶部网格的条目没有图标概念，缺省是空串而不是 None
+    model.set_albums([AlbumEntry(uuid="a", title="A")])
+    assert model.data(model.index(0, 0), ItemRole.Icon) == ""
+
+    # 已经是 AlbumEntry 的条目在被统一覆盖时不能被原地改坏
+    entry = AlbumEntry(uuid="t", title="Trash")
+    built = AlbumModel.to_entries([entry], icon="🗑️")
+    assert built[0].icon == "🗑️"
+    assert entry.icon == ""
+
+
+def test_album_entry_from_object_reads_icon_attribute():
+    from albuswall.ui.model import AlbumEntry
+
+    @dataclass
+    class AlbumLike:
+        uuid: str
+        title: str
+        icon: str = "📁"
+
+    assert AlbumEntry.from_object(AlbumLike("x", "标题")).icon == "📁"
+    assert AlbumEntry.from_object(AlbumLike("x", "标题"), icon="🗑️").icon == "🗑️"
+
+
 def test_album_model_set_pixmap_only_touches_that_row(pixmap):
     from albuswall.ui.model import AlbumModel, ItemRole
 
@@ -160,7 +199,8 @@ def test_metadata_model_accepts_dataclass_and_skips_blank():
               for r in range(model.rowCount())]
 
     assert labels == ["标题", "已收藏"]
-    assert model.data(model.index(1, 0), MetadataRole.Value) in ("是", "True")
+    # 布尔值文案的源文是英文（``self.tr("Yes")``），测试环境不装翻译器
+    assert model.data(model.index(1, 0), MetadataRole.Value) in ("Yes", "True")
 
 
 def test_metadata_model_clear_and_retranslate_are_safe():
@@ -340,13 +380,72 @@ def test_asset_thumb_delegate_handles_rows_without_pixmap(qapp):
         painter.end()
 
 
+def test_album_cover_delegate_draws_selection_as_outline(qapp, pixmap):
+    """选中态画成贴着封面的描边，而不是铺满整格的半透明蓝底。
+
+    回归背景：相册格子没有文字行，样式表的 item 高亮仍会铺满整格，
+    于是封面下方多出一条蓝边（「超出 item 的蓝条」）。现在底色被压掉，
+    选中视觉是封面内沿的一圈圆角描边。
+    """
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QPainter
+    from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+
+    from albuswall.ui.delegate import AlbumCoverDelegate
+    from albuswall.ui.model import AlbumModel
+
+    model = AlbumModel()
+    model.append_album("a1", "相册", "", pixmap)
+
+    delegate = AlbumCoverDelegate(padding=4, radius=8)
+    assert delegate.selection_background_visible() is False
+
+    option = QStyleOptionViewItem()
+    option.rect = QRect(0, 0, 60, 60)
+    option.font = qapp.font()
+    option.state |= QStyle.StateFlag.State_Selected
+
+    canvas = QPixmap(60, 60)
+    canvas.fill(QColor("black"))
+    painter = QPainter(canvas)
+    try:
+        delegate.paint(painter, option, model.index(0, 0))
+    finally:
+        painter.end()
+
+    image = canvas.toImage()
+
+    def is_blue(x: int, y: int) -> bool:
+        color = image.pixelColor(x, y)
+        return (
+            color.blue() > color.red() + 25
+            and color.blue() > color.green() + 15
+        )
+
+    # 描边落在封面（rect 去掉 padding=4）的内沿
+    assert is_blue(5, 30), "左侧描边缺失"
+    assert is_blue(30, 5), "顶部描边缺失"
+    # 封面内部没有被蓝色覆盖
+    assert not is_blue(30, 30), "封面被蓝底盖住了"
+    # 格子底部（旧实现里溢出蓝边的位置）不再有蓝色
+    assert not is_blue(30, 58), "格子底部仍有多余蓝边"
+
+
+def _view_option(rect):
+    """构造一份交给 ``QStyledItemDelegate.paint`` 的选项（只关心 rect）。"""
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    option = QStyleOptionViewItem()
+    option.rect = rect
+    return option
+
+
 def test_info_cell_delegate_from_model_reads_item_roles(qapp, pixmap):
     from PySide6.QtCore import QRect
     from PySide6.QtGui import QPainter
 
     from albuswall.ui.delegate import InfoCellDelegate, InfoMode
     from albuswall.ui.model import AssetGridModel
-    from albuswall.ui.widgets.virtual_scroll.delegate import CellOption
 
     model = AssetGridModel()
     model.append_asset("a1", "图", pixmap, favorite=True, days_left=3)
@@ -356,8 +455,160 @@ def test_info_cell_delegate_from_model_reads_item_roles(qapp, pixmap):
     painter = QPainter(canvas)
     try:
         delegate.paint(
-            painter,
-            CellOption(index=0, rect=QRect(0, 0, 48, 48), cell_size=48),
-        )
+            painter, _view_option(QRect(0, 0, 48, 48)), model.index(0, 0))
     finally:
         painter.end()
+
+
+def test_info_cell_delegate_paints_roles_straight_from_index(qapp, pixmap):
+    """不注入 getter 也能画：``paint`` 拿到的 ``QModelIndex`` 本身就能读 role。"""
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QPainter
+
+    from albuswall.ui.delegate import InfoCellDelegate, InfoMode
+    from albuswall.ui.model import AssetGridModel
+
+    model = AssetGridModel()
+    model.append_asset("a1", "图", pixmap, favorite=True, days_left=None)
+
+    delegate = InfoCellDelegate(mode=InfoMode.AUTO)
+    assert delegate.mode_for(model.index(0, 0)) is InfoMode.FAVORITE
+
+    canvas = QPixmap(48, 48)
+    painter = QPainter(canvas)
+    try:
+        delegate.paint(
+            painter, _view_option(QRect(0, 0, 48, 48)), model.index(0, 0))
+    finally:
+        painter.end()
+
+
+def test_info_cell_delegate_auto_mode_shows_days_before_favorite(qapp, pixmap):
+    """``InfoMode.AUTO``：回收站格显示剩余天数，其余格显示收藏状态。
+
+    回归背景：``InfoMode.FAVORITE`` / ``DAYS`` 是整块互斥的，内容网格里既
+    有普通资产又有（回收站视图里的）已删资产，必须逐格判断。
+    """
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QPainter
+
+    from albuswall.ui.delegate import InfoCellDelegate, InfoMode
+    from albuswall.ui.model import AssetGridModel
+
+    model = AssetGridModel()
+    model.append_asset("fav", "收藏", pixmap, favorite=True, days_left=None)
+    model.append_asset("trash", "回收站", pixmap, favorite=True, days_left=3)
+    model.append_asset("plain", "普通", pixmap, favorite=False, days_left=None)
+
+    delegate = InfoCellDelegate.from_model(model, mode=InfoMode.AUTO)
+
+    assert delegate.mode is InfoMode.AUTO
+    assert delegate.mode_for(0) is InfoMode.FAVORITE
+    # 天数优先：回收站里的格子即使也是收藏的，也只显示剩余天数
+    assert delegate.mode_for(1) is InfoMode.DAYS
+    assert delegate.mode_for(2) is InfoMode.NONE
+
+    canvas = QPixmap(48, 48)
+    painter = QPainter(canvas)
+    try:
+        for row in range(3):
+            delegate.paint(
+                painter, _view_option(QRect(0, 0, 48, 48)),
+                model.index(row, 0))
+    finally:
+        painter.end()
+
+
+def test_info_cell_delegate_days_text_uses_english_source(qapp):
+    """倒计时文案的源文是英文（中文由 ``InfoCellDelegate`` 上下文翻译）。"""
+    from albuswall.ui.delegate import InfoCellDelegate, InfoMode
+    from albuswall.ui.model import AssetGridModel
+
+    model = AssetGridModel()
+    model.append_asset("a1", "图", days_left=3)
+
+    delegate = InfoCellDelegate.from_model(model, mode=InfoMode.AUTO)
+    assert delegate.format_days(3) == "3 days left"
+    assert delegate.format_days(0) == "Deleted today"
+    assert delegate.format_days(-1) == "Expired"
+
+
+def test_trash_album_delegate_paints_icon_left_and_title_right(qapp):
+    """回收站单行：左图标 / 中间弹簧（留白）/ 右名称。
+
+    回归背景：底部视图原先复用正方形的封面委托，一行 trash 会占掉一个
+    96px 的格子。现在换成单行委托：行高由 ``sizeHint`` 决定，图标贴左、
+    名称贴右，中间的空白就是「弹簧」。
+    """
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QPainter
+    from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+
+    from albuswall.ui.delegate import TrashAlbumDelegate
+    from albuswall.ui.model import AlbumEntry, AlbumModel
+
+    model = AlbumModel()
+    model.set_albums([AlbumEntry(uuid="t", title="Trash")], icon="T")
+
+    width, height = 260, 40
+    delegate = TrashAlbumDelegate(row_height=height, padding=8, gap=12)
+    assert delegate.sizeHint(QStyleOptionViewItem(), model.index(0, 0)).height() == height
+
+    option = QStyleOptionViewItem()
+    option.rect = QRect(0, 0, width, height)
+    option.font = qapp.font()
+
+    canvas = QPixmap(width, height)
+    canvas.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(canvas)
+    try:
+        delegate.paint(painter, option, model.index(0, 0))
+    finally:
+        painter.end()
+
+    image = canvas.toImage()
+
+    def has_ink(x_from: int, x_to: int) -> bool:
+        return any(
+            image.pixelColor(x, y).alpha() > 0
+            for x in range(max(0, x_from), min(width, x_to))
+            for y in range(height)
+        )
+
+    assert has_ink(0, 40), "左侧图标没画出来"
+    assert has_ink(width - 80, width), "右侧名称没画出来"
+    assert not has_ink(width // 2 - 12, width // 2 + 12), "中间弹簧区不该有内容"
+
+
+def test_trash_album_delegate_draws_selection_background(qapp):
+    """选中 / hover 由委托自绘（QSS 的 item 高亮已被压平）。"""
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QPainter
+    from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+
+    from albuswall.ui.delegate import TrashAlbumDelegate
+    from albuswall.ui.model import AlbumEntry, AlbumModel
+
+    model = AlbumModel()
+    model.set_albums([AlbumEntry(uuid="t", title="Trash")], icon="T")
+    delegate = TrashAlbumDelegate(row_height=40)
+
+    def paint(state_flags) -> "QImage":
+        option = QStyleOptionViewItem()
+        option.rect = QRect(0, 0, 200, 40)
+        option.font = qapp.font()
+        option.state |= state_flags
+        canvas = QPixmap(200, 40)
+        canvas.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(canvas)
+        try:
+            delegate.paint(painter, option, model.index(0, 0))
+        finally:
+            painter.end()
+        return canvas.toImage()
+
+    plain = paint(QStyle.StateFlag.State_None)
+    selected = paint(QStyle.StateFlag.State_Selected)
+    # 选中态在行内（远离文字的地方）铺了半透明底色
+    assert plain.pixelColor(100, 20).alpha() == 0
+    assert selected.pixelColor(100, 20).alpha() > 0

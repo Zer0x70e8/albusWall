@@ -41,6 +41,6 @@ class Menu(Retranslatable, QMenu):
     # ------------------------------------------------------------------ #
     def retranslate_ui(self) -> None:
         """重新设置各菜单项文字。"""
-        self.source_action.setText(self.tr("导入源"))
-        self.setting_action.setText(self.tr("设置"))
-        self.exit_action.setText(self.tr("退出"))
+        self.source_action.setText(self.tr("Import Source"))
+        self.setting_action.setText(self.tr("Settings"))
+        self.exit_action.setText(self.tr("Quit"))

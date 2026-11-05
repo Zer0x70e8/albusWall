@@ -11,9 +11,17 @@
    网格），纯键盘用户不会「焦点掉在已隐藏的控件上」；
 2. **窗口级反馈**：其它 presenter 的错误 / 提示统一走 ``window.show_toast``；
    菜单里「设置」这类还没有实现的动作，也给一条明确提示而不是静默吞掉；
-3. **主题图标**：把主题目录 ``<theme>/icons/`` 里的图标装到标题栏工具按钮
-   与详情页动作按钮上（图标不参与翻译，文案落到 tooltip），并同步窗口 /
-   应用图标。样式表只负责「48px 玻璃圆 + icon-size」，图标由这里装。
+3. **主题图标**：把主题里的图标装到标题栏工具按钮与详情页动作按钮上（图标不
+   参与翻译，文案落到 tooltip），并同步窗口 / 应用图标。样式表只负责「48px
+   玻璃圆 + icon-size」，图标由这里装。
+   详情页的动作按钮目前**全部用文字**（``DETAIL_ICONS`` 为空），主题里的
+   ``favorite_icon`` 归内容网格的收藏角标用。
+
+图标**全部可配**：按钮 → 图标逻辑名（:data:`TITLE_BAR_ICONS`）→ ``[ui]`` 的
+同名键，而那个键又是 ``[files]`` 里文件名与 ``${path:icons}`` / ``${ui:theme}``
+的组合式（见 :mod:`albuswall.ui.presenter.theme`）。所以换图标有两种做法：
+把文件放进 ``${path:theme}/<主题名>/icons/`` 覆盖，或改 ``[ui]`` 的键指向任意
+文件；两者都不需要改代码。
 
 窗口几何持久化、QSS 本体**不**在这里：样式表归
 :class:`~albuswall.ui.presenter.main.MainPresenter`，几何持久化等
@@ -42,17 +50,21 @@ __all__ = ["WindowPresenter"]
 
 logger = logging.getLogger(__package__)
 
-#: 标题栏工具按钮 → 主题图标名（``<theme>/icons/<name>.svg``）。
+#: 标题栏工具按钮 → 图标逻辑名（``[ui]`` / ``[files]`` 的同名键，见
+#: :mod:`albuswall.ui.presenter.theme`；不是文件名 —— 文件名在 ``[files]``）。
 TITLE_BAR_ICONS: tuple[tuple[str, str], ...] = (
     ("album", "album_button"),
     ("search", "search_button"),
     ("extra", "more_button"),
 )
 
-#: 详情页「只有图标」的动作按钮 —— 目前只有收藏有主题图标。
-DETAIL_ICONS: tuple[tuple[str, str], ...] = (
-    ("favourite_button", "favorite_icon"),
-)
+#: 详情页「只有图标」的动作按钮 → 图标逻辑名（同上）。
+#:
+#: 目前**为空**：详情页五个动作按钮统一走文字。主题里的 ``favorite_icon``
+#: （心形）是**缩略图角标**，由内容网格的委托画在已收藏的格子上
+#: （见 :mod:`albuswall.ui.presenter.content_presenter`），不是按钮图标 ——
+#: 48px 的圆按钮塞不下「Favorite」，和另外四个文字按钮也不一致。
+DETAIL_ICONS: tuple[tuple[str, str], ...] = ()
 
 
 class WindowPresenter(Presenter):
@@ -100,8 +112,7 @@ class WindowPresenter(Presenter):
 
         # 「设置」页尚未重建：给一条明确提示，不留死按钮。
         try:
-            w.menu.setting_action.triggered.connect(
-                self._on_settings_requested)
+            w.menu.setting_action.triggered.connect(self.open_settings)
         except (AttributeError, RuntimeError, TypeError):
             logger.warning("window presenter: setting action not available")
 
@@ -185,6 +196,38 @@ class WindowPresenter(Presenter):
             self._window.content.setFocus()
 
     # ------------------------------------------------------------------ #
+    # 窗口级动作（快捷键 app.* / window.* 的落点）
+    # ------------------------------------------------------------------ #
+    def open_settings(self) -> None:
+        """``app.settings``：「设置」页尚未重建，给一条明确提示。
+
+        同时也是标题栏菜单项「设置」的处理函数（不留死按钮）。
+        """
+        self.toast(self.tr("The settings page is not implemented yet"))
+
+    def toggle_fullscreen(self) -> bool:
+        """``window.fullscreen``：全屏 / 还原，返回切换后是否全屏。"""
+        return self._window.toggle_fullscreen()
+
+    def toggle_album(self) -> bool:
+        """``window.album``：打开 / 收起相册页；返回操作后它是否在前台。"""
+        self._window.toggle_album()
+        return self._window.overlay.currentWidget() is self._window.album
+
+    def toggle_source(self) -> bool:
+        """``window.source``：打开 / 收起导入源页；返回操作后它是否在前台。"""
+        self._window.toggle_source()
+        return self._window.overlay.currentWidget() is self._window.source
+
+    def close_layer(self) -> bool:
+        """``window.close``：先收浮层页，没有浮层页时关窗口。"""
+        return self._window.close_layer()
+
+    def quit(self) -> None:
+        """``app.quit``：请求停事件循环并关窗口（与菜单「退出」同一条路）。"""
+        self._window.request_exit()
+
+    # ------------------------------------------------------------------ #
     # 槽
     # ------------------------------------------------------------------ #
     def _on_overlay_changed(self, _index: int) -> None:
@@ -206,9 +249,6 @@ class WindowPresenter(Presenter):
             target = None
         if target is not None:
             target.setFocus()
-
-    def _on_settings_requested(self) -> None:
-        self.toast(self.tr("设置页尚未实现"))
 
 
 # --------------------------------------------------------------------------- #

@@ -2,7 +2,7 @@
 """资产格子委托：缩略图 + 收藏 / 倒计时角标（+ 可选标题）。
 
 旧版把「收藏图标 / 回收站倒计时」做成一个独立的 ``InfoCellDelegate``，
-既绑死在虚拟滚动控件上，又要求外部注入一堆 getter。这里改成**数据驱动**：
+只服务虚拟滚动网格、还要求外部注入一堆 getter。这里改成**数据驱动**：
 状态直接读 :class:`~albuswall.ui.model.roles.ItemRole` 的 ``Favorite`` /
 ``DaysLeft`` / ``Deleted``，模型有什么就画什么，没有（``None``）就不画。
 
@@ -13,6 +13,10 @@
 
 ``None`` 与 ``False`` 语义不同：``None`` 表示「状态未知」，不画角标；
 ``False`` 才表示「明确未收藏」。
+
+角标互斥：``DaysLeft`` 有值（被回收的资产）时只画剩余天数，否则才看
+``Favorite`` —— 规则与内容网格的
+:class:`~albuswall.ui.delegate.InfoCellDelegate`（``InfoMode.AUTO``）一致。
 """
 
 from __future__ import annotations
@@ -94,10 +98,8 @@ class AssetThumbDelegate(SquareThumbDelegate):
         if self._show_title:
             self._draw_title(painter, target, option, index, deleted)
 
-        favorite = index.data(ItemRole.Favorite)
-        if self._show_favorite and favorite is True:
-            self._draw_star(painter, target)
-
+        # 两枚角标互斥：回收站里的格子只显示剩余天数，其余格子显示收藏状态
+        # （与内容网格的 InfoCellDelegate ``InfoMode.AUTO`` 同一套规则）。
         days_left = index.data(ItemRole.DaysLeft)
         if self._show_days_left and days_left is not None:
             self.draw_badge(
@@ -106,6 +108,8 @@ class AssetThumbDelegate(SquareThumbDelegate):
                 self._days_text(int(days_left)),
                 background=QColor(180, 60, 60, 200),
             )
+        elif self._show_favorite and index.data(ItemRole.Favorite) is True:
+            self._draw_star(painter, target)
 
     # ------------------------------------------------------------------ #
     # 内部
@@ -163,6 +167,6 @@ class AssetThumbDelegate(SquareThumbDelegate):
     def _days_text(self, days: int) -> str:
         """剩余天数文案（本地化；``<=0`` 表示今天清空）。"""
         if days <= 0:
-            return self.tr("今天清除")
-        template = self.tr("剩余 %1 天")
+            return self.tr("Deleted today")
+        template = self.tr("%1 days left")
         return template.replace("%1", str(days))

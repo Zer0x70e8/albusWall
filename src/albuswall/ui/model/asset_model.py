@@ -106,7 +106,7 @@ class AssetGridModel(EntryListModel[AssetEntry]):
         return entries
 
     # ------------------------------------------------------------------ #
-    # 按 index-based 数据源（``VirtualScrollWidget``）对齐的便捷接口
+    # 按行号（= 网格全局索引）操作的便捷接口
     # ------------------------------------------------------------------ #
     def append_asset(
             self,

@@ -74,7 +74,7 @@ class SearchSuggestionPopup(Retranslatable, QFrame):
     def _render(self, rows: List[Tuple[str, str]]) -> None:
         self.list.clear()
         if not rows:
-            item = QListWidgetItem(self.tr("无匹配标签"))
+            item = QListWidgetItem(self.tr("No matching tags"))
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             self.list.addItem(item)
         else:
@@ -246,14 +246,14 @@ class FloatingSearchBar(Retranslatable, QFrame):
 
     def _placeholder_text(self) -> str:
         if self.mode == self.MODE_COMMAND:
-            return self.tr("命令模式（未实现）")
-        return self.tr("输入标签名筛选当前相册...")
+            return self.tr("Command mode (not implemented)")
+        return self.tr("Type a tag name to filter the current album...")
 
     def _mode_text(self, mode: str) -> str:
         """模式标识 → 展示文本（唯一需要翻译的地方）。"""
         if mode == self.MODE_COMMAND:
-            return self.tr("命令模式")
-        return self.tr("简单模式")
+            return self.tr("Command mode")
+        return self.tr("Simple mode")
 
     def retranslate_ui(self) -> None:
         """重新应用模式条目 / 输入提示 / 按钮文案，并保持当前选择。"""
@@ -270,8 +270,8 @@ class FloatingSearchBar(Retranslatable, QFrame):
             self.option_combo.blockSignals(blocked)
 
         self.line_edit.setPlaceholderText(self._placeholder_text())
-        self.search_btn.setToolTip(self.tr("搜索"))
-        self.close_btn.setToolTip(self.tr("关闭搜索栏"))
+        self.search_btn.setToolTip(self.tr("Search"))
+        self.close_btn.setToolTip(self.tr("Close search bar"))
 
     def set_mode(self, mode: str) -> None:
         """按稳定标识切换模式（不依赖下拉框当前文本）。"""

@@ -13,6 +13,22 @@
   服务补生成；像素解码交给 :class:`~albuswall.ui.widgets.image_loader.ImageLoader`
   的线程池，回主线程按行号回填 ``AssetGridModel``。
 
+绘制
+====
+
+内容层就是一个 ``QListView``（
+:class:`~albuswall.ui.widgets.tile_view.TileView`），模型直接投给视图，
+**委托仍由这里显式装上**（``QListView`` 默认委托只画图标 + 文字，收藏角标
+就丢了）。这里装的是 :class:`~albuswall.ui.delegate.InfoCellDelegate` 的
+``AUTO`` 模式：
+
+* 被回收的格子（``ItemRole.DaysLeft`` 有值）→ 显示回收站剩余天数；
+* 其余格子 → 显示收藏状态（已收藏画主题里的 ``favorite_icon``，没有图标
+  时降级成 ``★``）。
+
+``AUTO`` 的逐格判断在委托内部完成，presenter 不按相册类型切换模式；
+主题切换时通过 ``MainPresenter.theme_changed`` 重新装收藏图标。
+
 主内容层是 ``Window.content``（虚拟滚动网格）唯一的资产视图：相册页顶部
 放的是相册网格、底部是回收站，都不展示资产。
 
@@ -49,12 +65,13 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import Signal
-from PySide6.QtGui import QCursor, QPixmap
+from PySide6.QtGui import QCursor, QIcon, QPixmap
 from PySide6.QtWidgets import QInputDialog, QMenu
 
 from albuswall.common.enums import ThumbSpec
 from albuswall.dto.album.command import AlbumCreate
 from albuswall.service.view.service import SCOPE_DELETED
+from albuswall.ui.delegate import InfoCellDelegate, InfoMode
 from albuswall.ui.model import AssetEntry, AssetGridModel
 
 from ..widgets.image_loader import get_loader
@@ -82,6 +99,13 @@ TRASH_RETENTION_DAYS = 30
 
 #: 加载 token 前缀：区分「网格缩略图」与其它 presenter 的加载请求。
 TOKEN_PREFIX = "grid:"
+
+#: 收藏角标的图标逻辑名 —— ``[ui]`` / ``[files]`` 的同名键，文件名与目录都由
+#: 配置的 ``${...}`` 组合（见 :mod:`albuswall.ui.presenter.theme`）。
+#:
+#: 这张「心形」是**缩略图角标**，不是按钮图标 —— 详情页的收藏按钮和其它动作
+#: 按钮一样用文字（见 :mod:`albuswall.ui.presenter.window_presenter`）。
+FAVORITE_ICON_NAME = "favorite_icon"
 
 
 def remaining_days(deleted_at: Any) -> int | None:
@@ -113,6 +137,8 @@ class ContentPresenter(Presenter):
     assets_changed = Signal()
     #: 面向用户的成功提示（窗口 toast）。
     notice = Signal(str)
+    #: 面向用户的错误提示（窗口 toast）；主 presenter 会自动接线。
+    error = Signal(str)
 
     def __init__(
             self,
@@ -130,6 +156,11 @@ class ContentPresenter(Presenter):
         self._album_service = self.service("album_service")
 
         self._model = AssetGridModel(parent=self)
+        #: 内容网格的绘制委托：``AUTO`` = 逐格判断「回收站剩余天数 / 收藏状态」。
+        #: ``QListView`` 的默认委托只画图标和文字，角标必须由这里装。
+        self._delegate = InfoCellDelegate(mode=InfoMode.AUTO)
+        #: 主题信号（用于重新装收藏角标图标）；没有主 presenter 时为 ``None``。
+        self._theme_signal: Any | None = None
         self._loader = get_loader()
 
         self._album_uuid: Any | None = None
@@ -147,7 +178,9 @@ class ContentPresenter(Presenter):
     # ------------------------------------------------------------------ #
     def on_start(self) -> None:
         grid = self._window.content
-        grid.bind_model(self._model)
+        # 委托先装：``QListView`` 会在 setModel 之后立刻布局并绘制。
+        grid.setItemDelegate(self._delegate)
+        grid.setModel(self._model)
         grid.visible_range_changed.connect(self._on_visible_range)
         grid.unit_activated.connect(self._on_unit_activated)
         grid.unit_previewed.connect(self._on_unit_previewed)
@@ -155,6 +188,12 @@ class ContentPresenter(Presenter):
         grid.unit_right_clicked.connect(self._on_unit_right_clicked)
         grid.cursor_changed.connect(self._on_cursor_changed)
 
+        self._wire_theme()
+
+        # 首次装载发生在 ``setModel`` 之前（相册已经在父节点启动时选好），
+        # 那时视图还没有数据、光标是 -1；``setModel`` 之后视图才把光标落到
+        # 第一格。这里补播一次，标签栏开机就指向光标资产。
+        self._emit_current_selection()
 
         if self._thumb_service is not None:
             self._thumb_service.thumbnail_ready.connect(
@@ -163,6 +202,13 @@ class ContentPresenter(Presenter):
             self._loader.thumb_loaded.connect(self._on_thumb_loaded)
 
     def on_stop(self) -> None:
+        signal = self._theme_signal
+        self._theme_signal = None
+        if signal is not None:
+            try:
+                signal.disconnect(self.apply_theme)
+            except (RuntimeError, TypeError):
+                pass
         if self._loader is not None:
             try:
                 self._loader.thumb_loaded.disconnect(self._on_thumb_loaded)
@@ -180,11 +226,57 @@ class ContentPresenter(Presenter):
         self._window.content.update()
 
     # ------------------------------------------------------------------ #
+    # 主题：收藏角标图标
+    # ------------------------------------------------------------------ #
+    def _wire_theme(self) -> None:
+        """跟主 presenter 的主题走：首次装图标 + 主题切换时重装。"""
+        parent = self.parent
+        signal = getattr(parent, "theme_changed", None)
+        if signal is not None:
+            try:
+                signal.connect(self.apply_theme)
+                self._theme_signal = signal
+            except (RuntimeError, TypeError):
+                logger.warning(
+                    "content presenter: cannot hook theme_changed")
+        self.apply_theme(getattr(parent, "theme", None))
+
+    def apply_theme(self, theme: Any | None) -> None:
+        """把主题的 ``favorite_icon`` 装成格子的收藏角标。
+
+        ``theme`` 为 ``None``（或主题里没有这张图）时委托回退成 ``★`` 文本，
+        不会出现「没有图标就什么都不画」的空状态。
+        """
+        path = None
+        if theme is not None:
+            icon_lookup = getattr(theme, "icon", None)
+            if callable(icon_lookup):
+                try:
+                    path = icon_lookup(FAVORITE_ICON_NAME)
+                except Exception:  # noqa: BLE001 - 主题坏了不该拖垮网格
+                    logger.exception(
+                        "content presenter: theme icon lookup failed")
+                    path = None
+
+        icon = None
+        if path is not None:
+            icon = QIcon(str(path))
+            if icon.isNull():
+                icon = None
+        self._delegate.set_icon(icon, checked=True)
+        self._window.content.update()
+
+    # ------------------------------------------------------------------ #
     # 对外接口
     # ------------------------------------------------------------------ #
     @property
     def model(self) -> AssetGridModel:
         return self._model
+
+    @property
+    def delegate(self) -> InfoCellDelegate:
+        """内容网格的委托（``AUTO`` 模式：逐格显示天数 / 收藏）。"""
+        return self._delegate
 
     @property
     def album_uuid(self) -> Any | None:
@@ -234,6 +326,9 @@ class ContentPresenter(Presenter):
             "content presenter: %d assets loaded (album=%s, filter=%s)",
             len(self._uids), self._album_uuid, self._tag_filter)
         self._load_visible()
+        # 换源时光标由视图自己挪（``emit=False``），不会发 ``cursor_changed``；
+        # 这里补播一次，标签栏这类「跟随当前资产」的消费者才拿得到新对象。
+        self._emit_current_selection()
         self.assets_changed.emit()
 
     def refresh(self) -> None:
@@ -284,6 +379,81 @@ class ContentPresenter(Presenter):
         except ValueError:
             return
         self._window.content.set_cursor_index(row)
+
+    # ------------------------------------------------------------------ #
+    # 快捷键入口（asset.*）：详情页没开时由网格光标所在资产承担
+    # ------------------------------------------------------------------ #
+    def toggle_favorite(self) -> bool:
+        """``asset.favorite``：收藏 / 取消收藏网格光标所在资产。
+
+        「当前是否已收藏」优先读模型里的懒查结果；模型还是「未知」
+        （``None``）时按未收藏处理，点一下就是收藏。
+        """
+        asset_uuid = self.current_asset_uuid()
+        if asset_uuid is None or self._asset_ops is None:
+            return False
+        row = self._model.row_of(asset_uuid)
+        entry = self._model.entry_at(row) if row >= 0 else None
+        current = bool(getattr(entry, "favorite", False))
+        target = not current
+        try:
+            result = self._asset_ops.set_favorite(asset_uuid, target)
+        except Exception as exc:  # noqa: BLE001 - 写库失败转成 toast
+            logger.exception("content presenter: set_favorite failed")
+            self.error.emit(str(exc))
+            return False
+        if getattr(result, "outcome", "") == "not_found":
+            return False
+        if row >= 0:
+            self._model.set_favorite(row, target)
+        self.assets_changed.emit()
+        return True
+
+    def trash_current(self) -> bool:
+        """``asset.delete``：把网格光标所在资产移入回收站。"""
+        asset_uuid = self.current_asset_uuid()
+        if asset_uuid is None or self._asset_ops is None:
+            return False
+        try:
+            result = self._asset_ops.trash([asset_uuid])
+        except Exception as exc:  # noqa: BLE001 - 写库失败转成 toast
+            logger.exception("content presenter: trash failed")
+            self.error.emit(str(exc))
+            return False
+        changed = [str(u) for u in (getattr(result, "changed", ()) or ())]
+        if not changed:
+            return False
+        # 列表去掉这一格（refresh 走「列表变了 → 重建模型」那条路），
+        # 再广播一次数据面变化，让相册封面等跟着刷新。
+        self.refresh()
+        self.assets_changed.emit()
+        return True
+
+    def restore_current(self) -> bool:
+        """``asset.restore``：把网格光标所在资产从回收站恢复。"""
+        asset_uuid = self.current_asset_uuid()
+        if asset_uuid is None or self._asset_ops is None:
+            return False
+        try:
+            result = self._asset_ops.restore([asset_uuid])
+        except Exception as exc:  # noqa: BLE001 - 写库失败转成 toast
+            logger.exception("content presenter: restore failed")
+            self.error.emit(str(exc))
+            return False
+        restored = [str(u) for u in (getattr(result, "restored", ()) or ())]
+        if not restored:
+            return False
+        self.refresh()
+        self.assets_changed.emit()
+        return True
+
+    def preview_current(self) -> bool:
+        """``content.preview``：对光标所在资产发起快速预览（与空格同一条出口）。"""
+        asset_uuid = self.current_asset_uuid()
+        if asset_uuid is None:
+            return False
+        self.asset_previewed.emit(asset_uuid)
+        return True
 
     # ------------------------------------------------------------------ #
     # 过滤
@@ -408,18 +578,18 @@ class ContentPresenter(Presenter):
 
         if not move_allowed:
             hint = menu.addAction(
-                self.tr("「回收站」不是相册，无法移动或移除资产"))
+                self.tr("“Trash” is not an album, so assets cannot be moved or removed"))
             hint.setEnabled(False)
             menu.addSeparator()
 
         move_menu = menu.addMenu(
-            self.tr("移动到指定相册") if mutable
-            else self.tr("添加到指定相册"))
+            self.tr("Move to album") if mutable
+            else self.tr("Add to album"))
         move_menu.setObjectName("ContentContextMenuMoveMenu")
         self._populate_move_menu(move_menu, asset_uuid)
         move_menu.setEnabled(move_allowed)
 
-        remove_action = menu.addAction(self.tr("从本相册移除"))
+        remove_action = menu.addAction(self.tr("Remove from this album"))
         remove_action.setEnabled(mutable)
         remove_action.triggered.connect(
             lambda _checked=False: self.remove_asset_from_album(asset_uuid))
@@ -429,7 +599,7 @@ class ContentPresenter(Presenter):
         """填「移动到指定相册」二级菜单：可写相册 + 新建并移入。"""
         targets = self._movable_albums()
         if not targets:
-            empty = menu.addAction(self.tr("（还没有其它相册）"))
+            empty = menu.addAction(self.tr("(no other album yet)"))
             empty.setEnabled(False)
         for album in targets:
             action = menu.addAction(str(getattr(album, "title", "") or ""))
@@ -437,7 +607,7 @@ class ContentPresenter(Presenter):
                 lambda _checked=False, uuid=album.uuid: self.move_asset_to_album(
                     asset_uuid, uuid))
         menu.addSeparator()
-        create_action = menu.addAction(self.tr("新建相册并移入…"))
+        create_action = menu.addAction(self.tr("New album and move into it…"))
         create_action.triggered.connect(
             lambda _checked=False: self.create_album_and_move(asset_uuid))
 
@@ -489,7 +659,7 @@ class ContentPresenter(Presenter):
         * 虚拟「全部」视图 → 只能添加（``add_to_album``，资产仍留在原相册）。
         """
         if self._asset_ops is None or self._album_uuid is None:
-            self.error.emit(self.tr("文件服务不可用"))
+            self.error.emit(self.tr("The file service is unavailable"))
             return False
 
         target = self._get_album(target_uuid)
@@ -502,7 +672,7 @@ class ContentPresenter(Presenter):
                     self._album_uuid, target_uuid, [asset_uuid])
             else:
                 if self._album_scope() != "active":
-                    self.error.emit(self.tr("回收站视图不支持相册操作"))
+                    self.error.emit(self.tr("Album actions are unavailable in the trash view"))
                     return False
                 result = self._asset_ops.add_to_album(
                     target_uuid, [asset_uuid])
@@ -517,25 +687,25 @@ class ContentPresenter(Presenter):
         ) or ()
         if not changed:
             self.error.emit(
-                self.tr("资产不在当前相册里，未移动") if mutable
-                else self.tr("未能添加到相册"))
+                self.tr("The asset is not in the current album; nothing was moved") if mutable
+                else self.tr("Could not add to the album"))
             return False
 
         self._after_membership_change()
         if mutable:
             self.notice.emit(
-                self.tr("已移动到「{album}」").format(album=title) if title
-                else self.tr("已移动"))
+                self.tr("Moved to “{album}”").format(album=title) if title
+                else self.tr("Moved"))
         else:
             self.notice.emit(
-                self.tr("已添加到「{album}」").format(album=title) if title
-                else self.tr("已添加"))
+                self.tr("Added to “{album}”").format(album=title) if title
+                else self.tr("Added"))
         return True
 
     def remove_asset_from_album(self, asset_uuid: str) -> bool:
         """把资产从当前相册移除（只摘成员关系，不删资产）。"""
         if self._asset_ops is None or self._album_uuid is None:
-            self.error.emit(self.tr("文件服务不可用"))
+            self.error.emit(self.tr("The file service is unavailable"))
             return False
         try:
             result = self._asset_ops.remove_from_album(
@@ -546,16 +716,16 @@ class ContentPresenter(Presenter):
             return False
         removed = getattr(result, "removed", ()) or ()
         if not removed:
-            self.error.emit(self.tr("资产不在当前相册里"))
+            self.error.emit(self.tr("The asset is not in the current album"))
             return False
         self._after_membership_change()
-        self.notice.emit(self.tr("已从本相册移除"))
+        self.notice.emit(self.tr("Removed from this album"))
         return True
 
     def create_album_and_move(self, asset_uuid: str) -> bool:
         """新建相册并把这格资产移进去（取消 / 空标题 = 什么都不做）。"""
         if self._album_service is None:
-            self.error.emit(self.tr("相册服务不可用"))
+            self.error.emit(self.tr("The album service is unavailable"))
             return False
         title = self._ask_new_album_title()
         if not title:
@@ -571,8 +741,8 @@ class ContentPresenter(Presenter):
     def _ask_new_album_title(self) -> str:
         """弹「新建相册」标题输入框；取消 / 空输入返回空串。"""
         dialog = QInputDialog(self._window.content)
-        dialog.setWindowTitle(self.tr("新建相册"))
-        dialog.setLabelText(self.tr("相册标题："))
+        dialog.setWindowTitle(self.tr("New album"))
+        dialog.setLabelText(self.tr("Album title:"))
         if dialog.exec() != QInputDialog.DialogCode.Accepted:
             return ""
         return dialog.textValue().strip()
@@ -631,6 +801,16 @@ class ContentPresenter(Presenter):
             self.selection_changed.emit(self._uids[index])
         else:
             self.selection_changed.emit("")
+
+    def _emit_current_selection(self) -> None:
+        """把「光标所在资产」再广播一次（模型换源后补发）。
+
+        视图在模型重置后把光标挪到合法位置（行数不足时收敛到末行、无数据
+        时清空），但 ``cursor_changed`` 未必随换相册 / 过滤再发一次：不补这
+        一发，标签栏就停在上一个资产（或一直是空）上，看起来「标签栏不会根
+        据当前资产刷新」。
+        """
+        self.selection_changed.emit(self.current_asset_uuid() or "")
 
 
 

@@ -8,8 +8,7 @@
 
 * 相册页顶部网格（``Album.album_view``）与底部回收站（``Album.trash_view``）
   的高亮；
-* 标题栏的主标题 / 副标题 / 封面图标（``TitleBar.set_*``）；
-* 窗口标题（``Window.setWindowTitle``）。
+* 标题栏的主标题 / 副标题 / 封面图标（``TitleBar.set_*``）。
 
 所以「切换相册」只有一条路径：:meth:`set_album`。它广播
 ``album_changed``，由主 presenter 把新相册转给内容网格 / 详情页。
@@ -34,7 +33,6 @@ from PySide6.QtCore import QModelIndex, QItemSelectionModel, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QDialog, QInputDialog
 
-import albuswall
 from albuswall.dto.album.command import AlbumCreate
 from albuswall.ui.model import AlbumModel, AlbumRole
 
@@ -54,6 +52,9 @@ logger = logging.getLogger(__package__)
 
 #: 封面缩略图的解码边长（短边），paint 时不再放大。
 COVER_EDGE = 512
+
+#: 回收站相册的行首图标（暂时用 emoji，将来换资源图只改这里）。
+TRASH_ALBUM_ICON = "🗑️"
 
 
 class AlbumPresenter(Presenter):
@@ -230,7 +231,9 @@ class AlbumPresenter(Presenter):
         self._cover_paths.clear()
         self._cover_inflight.clear()
         self._model.set_albums(albums)
-        self._trash_model.set_albums(trash)
+        # 回收站是单行列表（左图标 / 弹簧 / 右名称）：图标由这里统一下发，
+        # 名称仍取相册 DTO 的 title。
+        self._trash_model.set_albums(trash, icon=TRASH_ALBUM_ICON)
         self.reload_covers()
         logger.debug(
             "album presenter: %d albums + %d trash loaded",
@@ -305,10 +308,15 @@ class AlbumPresenter(Presenter):
                 model.set_pixmap(row, square)
 
     # ------------------------------------------------------------------ #
-    # 标题栏 / 窗口标题
+    # 标题栏
     # ------------------------------------------------------------------ #
     def _apply_chrome(self, album: Any | None) -> None:
-        """把当前相册写进标题栏与窗口标题。"""
+        """把当前相册写进标题栏的工具栏（主标题 / 副标题 / 封面）。
+
+        窗口标题（``Window.windowTitle``）是**应用级**信息，由 boot 设置并
+        可能被配置覆盖；相册只是业务文案，只进 ``TitleBar.title_label`` /
+        ``sub_title``，不参与窗口标题 —— 否则操作栏会把相册名当成窗口名。
+        """
         title = "" if album is None else str(getattr(album, "title", "") or "")
         description = (
             "" if album is None else str(getattr(album, "description", "") or "")
@@ -318,9 +326,6 @@ class AlbumPresenter(Presenter):
 
         cover = None if album is None else self._cover_paths.get(str(album.uuid))
         self._title_bar.set_icon(cover)
-
-        window_title = title or albuswall.__title__
-        self._window.setWindowTitle(window_title)
 
     def _sync_selection(self, album: Any | None) -> None:
         """让网格（或底部回收站）高亮 / 滚动到当前相册。"""
@@ -352,9 +357,9 @@ class AlbumPresenter(Presenter):
     def create_album(self) -> None:
         """新建相册（标题从输入框拿，创建成功后切到新相册）。"""
         if self._album_service is None:
-            self.error.emit(self.tr("相册服务不可用"))
+            self.error.emit(self.tr("The album service is unavailable"))
             return
-        title = self._ask_title(self.tr("新建相册"))
+        title = self._ask_title(self.tr("New album"))
         if not title:
             return
         try:
@@ -373,7 +378,7 @@ class AlbumPresenter(Presenter):
             return
         album = self._current
         title = self._ask_title(
-            self.tr("重命名相册"),
+            self.tr("Rename album"),
             initial=str(getattr(album, "title", "") or ""),
         )
         if not title or title == getattr(album, "title", ""):
@@ -390,7 +395,7 @@ class AlbumPresenter(Presenter):
         """弹一个「相册标题」输入框；取消 / 空输入返回空串。"""
         dialog = QInputDialog(self._window)
         dialog.setWindowTitle(title)
-        dialog.setLabelText(self.tr("相册标题："))
+        dialog.setLabelText(self.tr("Album title:"))
         dialog.setTextValue(initial)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return ""

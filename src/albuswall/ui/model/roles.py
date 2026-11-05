@@ -95,6 +95,9 @@ class ItemRole(IntEnum):
     Deleted = THUMBNAIL_ROLE_BAND + 7
     #: 资产数量（相册封面角标用）。
     AssetCount = THUMBNAIL_ROLE_BAND + 8
+    #: 行首图标（单行列表用；当前是 emoji 文本，将来可换 ``QIcon`` /
+    #: 资源路径，委托按「能转成 str 就画字」处理）。
+    Icon = THUMBNAIL_ROLE_BAND + 9
 
 
 #: 相册格子的 role —— 与 :class:`ItemRole` 同槽位，只是语义别名。

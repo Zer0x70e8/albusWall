@@ -11,26 +11,37 @@
 * ``padding``       格子内边距
 * ``overlay_ratio`` 底部渐变占格子高度的比例（默认 1/3）
 * ``show_description`` / ``show_count``  是否画副标题 / 数量角标
+* ``selection_color`` / ``selection_width``  选中描边颜色 / 线宽
+
+选中态说明：默认的 item 高亮会**铺满整个格子**（相册格子没有文字行，
+所以看上去是「封面下方多出一条蓝边」）。这里把它换成贴在封面上的圆角
+描边：底色交给样式表压掉（见 :meth:`SquareThumbDelegate.
+set_selection_background_visible`），描边由 :meth:`_draw_selection` 画在
+封面内沿，圆角与封面一致。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QRect, Qt
+from PySide6.QtCore import QRect, QRectF, Qt
 from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
     QLinearGradient,
     QPainter,
+    QPen,
 )
-from PySide6.QtWidgets import QStyleOptionViewItem
+from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
 
 from ..model.roles import ItemRole
 from .square_thumb_delegate import SquareThumbDelegate
 
 __all__ = ["AlbumCoverDelegate"]
+
+#: 选中描边默认色（与全局 ``selection-background-color`` 同色系，但不透明）
+_DEFAULT_SELECTION_COLOR = QColor(0, 122, 255, 235)
 
 
 class AlbumCoverDelegate(SquareThumbDelegate):
@@ -45,6 +56,8 @@ class AlbumCoverDelegate(SquareThumbDelegate):
             overlay_ratio: float = 1 / 3,
             show_description: bool = True,
             show_count: bool = True,
+            selection_color: QColor | None = None,
+            selection_width: int = 2,
     ) -> None:
         super().__init__(
             parent,
@@ -55,10 +68,30 @@ class AlbumCoverDelegate(SquareThumbDelegate):
         self._overlay_ratio = _clamp(overlay_ratio, 0.0, 1.0)
         self._show_description = bool(show_description)
         self._show_count = bool(show_count)
+        self._selection_color = QColor(selection_color or _DEFAULT_SELECTION_COLOR)
+        self._selection_width = max(1, int(selection_width))
+        # 选中底色不交给样式表：整格铺蓝会溢出到封面下方，改成封面描边
+        self.set_selection_background_visible(False)
 
     # ------------------------------------------------------------------ #
     # 外观配置
     # ------------------------------------------------------------------ #
+    def set_selection_color(self, color: QColor) -> None:
+        """选中描边颜色。"""
+        self._selection_color = QColor(color)
+        self._invalidate()
+
+    def selection_color(self) -> QColor:
+        return QColor(self._selection_color)
+
+    def set_selection_width(self, width: int) -> None:
+        """选中描边线宽（像素，最小 1）。"""
+        self._selection_width = max(1, int(width))
+        self._invalidate()
+
+    def selection_width(self) -> int:
+        return self._selection_width
+
     def set_show_description(self, visible: bool) -> None:
         self._show_description = bool(visible)
         self._invalidate()
@@ -151,6 +184,36 @@ class AlbumCoverDelegate(SquareThumbDelegate):
                 title_metrics.elidedText(
                     title, Qt.TextElideMode.ElideRight, rect.width()),
             )
+
+    def _draw_selection(
+            self,
+            painter: QPainter,
+            target: QRect,
+            option: QStyleOptionViewItem,
+            index,  # noqa: ARG002
+    ) -> None:
+        """选中态：沿封面内沿画一圈圆角蓝色描边（不再铺整格蓝底）。"""
+        if not (option.state & QStyle.StateFlag.State_Selected):
+            return
+        if target.isEmpty():
+            return
+
+        width = self._selection_width
+        inset = width / 2.0
+        rect = QRectF(target).adjusted(inset, inset, -inset, -inset)
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+        radius = max(0.0, self.border_radius() - inset)
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pen = QPen(self._selection_color, width)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(rect, radius, radius)
+        painter.restore()
 
     # ------------------------------------------------------------------ #
     # 内部

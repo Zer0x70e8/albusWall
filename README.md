@@ -218,6 +218,53 @@ installed programmatically by `WindowPresenter` (icon-only capsule buttons,
 text moved into tooltips), and fall back to plain text buttons when a theme
 ships no icons.
 
+#### Theme paths are composed by the config resolver
+
+The UI owns **no** path constants: every theme file location is a `${...}`
+expression that `albuswall.configue` expands at read time. `[path]` holds the
+directories, `[files]` the file names, and `[ui]` glues them together:
+
+```ini
+[path]
+theme = ${path:config}/theme                 # user theme root: <theme>/<name>/…
+icons = ${theme}/${ui:theme}/icons           # icons/ of the *active* theme
+
+[files]
+main_window_qss = main_window.qss
+app_icon      = albuswall.svg
+album_button  = album_button.svg
+search_button = search_button.svg
+more_button   = more_button.svg
+favorite_icon = favorite_icon.svg
+
+[ui]
+theme       = default
+style_sheet = ${path:theme}/${ui:theme}/${files:main_window_qss}
+album_button = ${path:icons}/${files:album_button}
+# … the other icons follow the same shape
+```
+
+Consequences worth knowing:
+
+- **One key switches everything.** Writing `[ui] theme` (what
+  `MainPresenter.set_theme` persists) invalidates the `${ui:theme}` expansion, so
+  the stylesheet *and* every icon path move together — no repathing code in the
+  UI.
+- **User themes override bundled ones.** Drop
+  `~/.config/albuswall/theme/<name>/main_window.qss` (and optionally
+  `icons/`) and it is used instead of `resources/themes/<name>/`; anything the
+  user theme does not provide falls back to the bundled theme (unknown names
+  fall back to `default`).
+- **Every icon is configurable.** A button/target asks the theme for a *logical
+  name* (`album_button`, `search_button`, `more_button`, `favorite_icon`,
+  `app_icon`); the file name comes from `[files] <same key>`, the directory from
+  `[path] icons`. Rename the file there, or point the `[ui]` key at any absolute
+  path.
+- The defaults of the declaration classes (`ThemeConfig`, `Paths`, `Files`) are
+  byte-for-byte the shipped `conf.ini` expressions, so a config file is optional
+  (`tests/test_ui_presenter.py::test_defaults_equal_shipped_conf` guards the
+  drift).
+
 ---
 
 ## 🔗 Cross-Process Calls (IPC)
@@ -384,7 +431,7 @@ src/
     │   ├── window/ widgets/   # views: they only emit intent signals
     │   ├── presenter/         # one presenter per screen, MainPresenter root
     │   ├── delegate/ dialog/ model/ anims/
-    │   ├── keymap/            # shortcut library (not yet attached to views)
+    │   ├── keymap/            # key identities, bindings, config, Qt key binder
     │   ├── i18n.py languages.py
     │   └── utils/             # objectName inspector, signal adapter
     └── utils/                 # paths, images, thumbnails, time, SQL helpers
@@ -449,8 +496,11 @@ resources/
 
 `shortcuts.ini` is the default key map: one line per command, in the
 `command.path = [keys, positional_args, keyword_args]` form documented inside
-the file itself. User overrides live in `<user config dir>/shortcuts.ini` and
-win per command path.
+the file itself. Every command the built-in UI registers is listed there; the
+six that ship unbound (`window.album`, `window.source`, `viewer.next`,
+`viewer.prev`, `content.preview`, `asset.restore`) are written as `= []` --
+give them a key in the user file to switch them on. User overrides live in
+`<user config dir>/shortcuts.ini` and win per command path.
 
 Translations are generated, not hand-edited. `scripts/i18n_catalog.py` holds
 the translation table; `scripts/build_i18n.py` runs `pyside6-lupdate` over
@@ -538,7 +588,8 @@ else.
 ### Restoring / In Progress
 
 - [ ] Settings GUI (settings page, key-binding page, about page)
-- [ ] Attaching the `ui/keymap` shortcut library to the real views
+- [x] Registering the current UI's actions as shortcut slots (config-driven)
+- [x] Real key events: application-level `ShortcutBinder` (single keys, modifier combos, chords)
 - [ ] Multi-file config includes (`[configue] include`)
 - [ ] Publishing to PyPI / AUR
 
@@ -565,7 +616,7 @@ The new architecture is intended to make these features faster to restore and ea
 | `docs/plugin-author-guide.md` | writing a plugin: declaration, hooks, lifecycle, examples |
 | `docs/plugin-system-pr-description.md` | rationale behind the plugin architecture |
 | `docs/i18n.md` | translation pipeline: `tr()` conventions, catalogs, language switching |
-| `docs/keymap.md` | shortcut model: config file format, registry, chords |
+| `docs/keymap.md` | shortcut model: config format, key identities (aliases), registry, chords, UI slots, Qt binder |
 | `MIGRATION_CONFIGUE1.md` | how the `configue` refactor maps onto the previous config layer |
 | `src/albuswall/dto/CONVENTIONS.md` | DTO ownership (Command vs Query) and naming |
 

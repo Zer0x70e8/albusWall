@@ -1,19 +1,24 @@
 #
-"""``albuswall.ui.keymap`` —— 快捷键槽 + 键位绑定表的**注册层**。
+"""``albuswall.ui.keymap`` —— 快捷键：注册层 + Qt 事件层。
 
 ``albuswall.command`` 有意把键盘快捷键留给界面层（见 ``command/registry.py``
 的 ``TODO(ui)``）：命令知道「叫什么」，不知道「哪个键能触发我」。这个子包
-只做「注册」这件事：
+做两件事：**注册**（谁能被触发）与**接管按键**（按下去要落到谁）：
 
 ====================================  ======================================
 模块                                  职责
 ====================================  ======================================
 ``sequence``                          Qt 键位字符串的解析 / 规范化 / 分类
+``keys``                              按键身份枚举：一个物理键的全部写法
+                                      (:class:`KeyAlias`；``Shift+Tab`` ==
+                                      ``Shift+Backtab`` == ``Backtab``)
 ``model``                             快捷键槽 / 绑定记录
                                       (:class:`ShortcutSlot` /
                                       :class:`ShortcutBinding`)
 ``registry``                          槽注册表 + 双向一对多绑定表
 ``config``                            默认表（resources）+ 用户表（持久化）
+``qt_binder``                         ``QKeyEvent`` → 槽的事件过滤器
+                                      (:class:`ShortcutBinder`)
 ``errors``                            本层异常
 ====================================  ======================================
 
@@ -58,8 +63,17 @@
 声明兜底实参。触发路径统一走 :meth:`ShortcutRegistry.invoke`，它会用
 「配置实参 + 显式实参」调用处理函数。
 
-本包**只做注册**：不 import ``QtWidgets``、不安装事件过滤器、不接管真实
-按键——把键位接到 ``QShortcut`` / 事件过滤器上是另一个独立层的事。
+``qt_binder`` 是唯一 import ``QtWidgets`` 的模块（其余模块只碰
+``QtGui.QKeySequence``）；它**只认识键盘事件与绑定表**，不认识 presenter /
+视图，是「按键 → 命令」的最后一段。焦点链、Esc 层级、回车→空格这些语义
+都不归它，见 :mod:`albuswall.ui.keymap.qt_binder` 的模块注释。
+
+.. code-block:: python
+
+    from albuswall.ui.keymap import install_shortcut_binder
+
+    install_shortcut_binder(QApplication.instance(), registry, owner=main_window)
+    # 之后按 F11 / Ctrl+N 就会走 registry.trigger(...)
 """
 
 from __future__ import annotations
@@ -77,7 +91,24 @@ from .errors import (
     KeymapError,
     ShortcutConfigError,
 )
+from .keys import (
+    NAVIGATION_KEYS,
+    WIDGET_KEYS,
+    KeyAlias,
+    is_navigation_step,
+    is_widget_step,
+    key_alias_of,
+    sequence_identity,
+    split_step,
+    step_identity,
+)
 from .model import ShortcutBinding, ShortcutSlot
+from .qt_binder import (
+    DEFAULT_CHORD_TIMEOUT_MS,
+    ShortcutBinder,
+    install_shortcut_binder,
+    uninstall_shortcut_binder,
+)
 from .registry import (
     KeyInput,
     ShortcutRegistry,
@@ -102,15 +133,20 @@ from .sequence import (
 
 __all__ = [
     "CHORD_SEPARATOR",
+    "DEFAULT_CHORD_TIMEOUT_MS",
     "DEFAULT_FILE_NAME",
     "DEFAULT_SECTION",
     "MAX_CHORDS",
     "MODIFIERS",
+    "NAVIGATION_KEYS",
+    "WIDGET_KEYS",
     "DuplicateShortcutSlot",
     "InvalidKeySequence",
+    "KeyAlias",
     "KeyInput",
     "KeySequence",
     "KeymapError",
+    "ShortcutBinder",
     "ShortcutBinding",
     "ShortcutConfig",
     "ShortcutConfigError",
@@ -123,10 +159,18 @@ __all__ = [
     "default_config_path",
     "format_sequences",
     "get_default_registry",
+    "install_shortcut_binder",
+    "is_navigation_step",
+    "is_widget_step",
+    "key_alias_of",
     "load_shortcuts",
     "parse_sequence",
     "parse_sequences",
     "registry_shortcut_registry",
+    "sequence_identity",
     "shortcut_slot",
+    "split_step",
+    "step_identity",
+    "uninstall_shortcut_binder",
     "user_config_path",
 ]

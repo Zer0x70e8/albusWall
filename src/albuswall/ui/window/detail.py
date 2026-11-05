@@ -247,6 +247,19 @@ class Detail(Retranslatable, BlurLabel):
         """显示一张图片；``None`` 表示清空。"""
         self.image_viewer.set_pixmap(pixmap)
 
+    # ---- 缩放（快捷键 view.zoom_in / view.zoom_out / view.reset 的落点） ----
+    def zoom_in(self) -> bool:
+        """放大一档；返回视图是否真的变了。"""
+        return self.image_viewer.zoom_in()
+
+    def zoom_out(self) -> bool:
+        """缩小一档；返回视图是否真的变了。"""
+        return self.image_viewer.zoom_out()
+
+    def reset_zoom(self) -> bool:
+        """恢复「适应窗口」；返回视图是否真的变了。"""
+        return self.image_viewer.zoom_fit()
+
     # ------------------------------------------------------------------ #
     # 导航栏（纯展示）
     # ------------------------------------------------------------------ #
@@ -356,7 +369,7 @@ class Detail(Retranslatable, BlurLabel):
         self._apply_button_text(self.trash_button, self._trash_button_text())
 
     def _trash_button_text(self) -> str:
-        return self.tr("恢复") if self._is_deleted else self.tr("移入回收站")
+        return self.tr("Restore") if self._is_deleted else self.tr("Move to Trash")
 
     def _on_trash_clicked(self) -> None:
         """统一入口：按当前展示状态路由到 trash / recover 意图。"""
@@ -374,10 +387,10 @@ class Detail(Retranslatable, BlurLabel):
     # ------------------------------------------------------------------ #
     def retranslate_ui(self) -> None:
         """重新应用详情页所有按钮文案（含 trash 的双态文案）。"""
-        self._apply_button_text(self.multiple_choice_button, self.tr("多选"))
-        self._apply_button_text(self.favourite_button, self.tr("收藏"))
-        self._apply_button_text(self.information_button, self.tr("信息"))
-        self._apply_button_text(self.edit_button, self.tr("编辑"))
+        self._apply_button_text(self.multiple_choice_button, self.tr("Select"))
+        self._apply_button_text(self.favourite_button, self.tr("Favorite"))
+        self._apply_button_text(self.information_button, self.tr("Info"))
+        self._apply_button_text(self.edit_button, self.tr("Edit"))
         self._apply_button_text(self.trash_button, self._trash_button_text())
         self.preview_hint.setText(self._preview_hint_text())
 
@@ -482,7 +495,7 @@ class Detail(Retranslatable, BlurLabel):
             self._preview_hint_timer.start()
 
     def _preview_hint_text(self) -> str:
-        return self.tr("空格退出 · K 播放 / 暂停")
+        return self.tr("Space to exit · K to play / pause")
 
     def _place_preview_hint(self) -> None:
         """提示条贴在底部居中；不参与 layout，随 resize 重算。"""

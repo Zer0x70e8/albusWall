@@ -1,23 +1,34 @@
 #
-"""虚拟滚动控件的「带底部信息条」单元格委托。
+"""网格单元格的「缩略图 + 底部信息条」委托。
 
-``VirtualScrollWidget`` 用 ``CellDelegate`` + 全局索引作数据源（不是 Qt 的
-item model），因此这里保留 getter 注入的形态；同时提供
-:meth:`InfoCellDelegate.from_model`，直接把任意提供
-:class:`~albuswall.ui.model.roles.ItemRole` 的 Qt 模型挂上来 ——
-「虚拟滚动 + 模型」不再需要手工写两个 getter。
+内容网格（``Content`` → :class:`~albuswall.ui.widgets.tile_view.TileView`）是
+标准的 ``QListView``，所以这里的委托是普通的 ``QStyledItemDelegate``：
+格子几何来自 ``option.rect``（视图已强制成 ``cell_size × cell_size``），数据
+按 :class:`~albuswall.ui.model.roles.ItemRole` 契约直接问模型 —— 不再需要
+外部注入一堆 getter。getter 仍然保留（``pixmap_getter`` / ``favorite_getter``
+/ ``days_getter``），用于不走模型的纯索引场景。
 
-信息条两种互斥模式（:class:`InfoMode`）::
+信息条三种模式（:class:`InfoMode`）::
 
     FAVORITE  ┌───────────────────────────┐
               │          缩略图            │
-              │░░ [★] ░░░░░░░░░░░░░░░░░░░│
+              │░░ [♥] ░░░░░░░░░░░░░░░░░░░│
               └───────────────────────────┘
 
     DAYS      ┌───────────────────────────┐
               │          缩略图            │
               │░░ 剩余 3 天 ░░░░░░░░░░░░░░│
               └───────────────────────────┘
+
+    AUTO      ┌───────────────────────────┐   逐格判断（内容网格用这个）：
+              │  普通资产 ░ ×  ♥ 角标      │   ``ItemRole.DaysLeft`` 有值
+              │  回收站资产 ░ 剩余 3 天    │   → 画剩余天数，否则画收藏状态
+              └───────────────────────────┘
+
+``FAVORITE`` / ``DAYS`` 是**整块**互斥的（一个委托只显示一种）；内容网格
+同时装着「普通资产」和（回收站视图里的）「已删资产」，需要按格判断，所以
+用 ``AUTO``：被回收的那格显示剩余天数，其余格显示收藏状态。判断逻辑见
+:meth:`InfoCellDelegate.mode_for`。
 
 数据缺失（``None``）时按「未知」处理，回退到默认文本，不会把未知当成
 「未收藏」；缩略图缺失时默认连阴影条一起不画，避免占位格挂一条黑带。
@@ -30,7 +41,7 @@ from collections.abc import Callable
 from enum import Enum, auto
 from typing import Any
 
-from PySide6.QtCore import QCoreApplication, QRect, QRectF, Qt
+from PySide6.QtCore import QCoreApplication, QModelIndex, QRect, QRectF, Qt
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -41,9 +52,9 @@ from PySide6.QtGui import (
     QPainterPath,
     QPixmap,
 )
+from PySide6.QtWidgets import QStyle, QStyledItemDelegate
 
 from ..model.roles import ItemRole
-from ..widgets.virtual_scroll.delegate import CellDelegate, CellOption
 
 __all__ = ["InfoCellDelegate", "InfoMode"]
 
@@ -61,38 +72,48 @@ def _tr(text: str) -> str:
 
 
 class InfoMode(Enum):
-    """信息条的显示模式（互斥）。"""
+    """信息条的显示模式。
+
+    ``NONE`` / ``FAVORITE`` / ``DAYS`` 是整块互斥的；``AUTO`` 按格判断
+    （回收站里的格子显示剩余天数，其余的显示收藏状态）。
+    """
 
     NONE = auto()
     FAVORITE = auto()
     DAYS = auto()
+    AUTO = auto()
 
 
-class InfoCellDelegate(CellDelegate):
-    """缩略图 + 底部信息条。
+class InfoCellDelegate(QStyledItemDelegate):
+    """缩略图 + 底部信息条（``QListView`` 委托）。
 
     Args:
-        pixmap_getter: 接收全局索引，返回 ``QPixmap`` 或 ``None``。
-        mode: 信息条模式，见 :class:`InfoMode`。
-        favorite_getter: 收藏状态源（返回 ``bool`` / ``None``）。
-        days_getter: 回收站剩余天数源（返回 ``int`` / ``None``）。
+        parent: ``QObject`` 父对象（交给 ``QStyledItemDelegate``）。
+        mode: 信息条模式，见 :class:`InfoMode`（``AUTO`` = 逐格判断）。
+        pixmap_getter: 可选；接收全局索引返回 ``QPixmap``（不传就读
+            ``ItemRole.Pixmap`` / ``DecorationRole``）。
+        favorite_getter: 可选；收藏状态源（``bool`` / ``None``）。
+        days_getter: 可选；回收站剩余天数源（``int`` / ``None``）。
         days_formatter: 天数 → 文本；``None`` 时用内置本地化规则。
         placeholder_color: 无缩略图时的填充色；``None`` 表示不填充。
         border_radius: 单元格圆角半径（像素）。
         default_favorite_text: 收藏状态未知时的文本。
         default_days_text: 天数未知时的文本。
         favorite_text_true / favorite_text_false: 无图标时的降级文本。
+        text_color / overlay_color / font: 信息条样式。
         icon_size: 收藏图标边长。
         padding: 信息条内边距。
         overlay_ratio: 阴影条占单元格高度的比例（默认 0.25）。
         hide_info_without_pixmap: 缩略图缺失时是否连信息条一起不画。
+        show_focus_ring: 当前格（键盘焦点）是否画一圈高亮描边。
     """
 
     def __init__(
             self,
-            pixmap_getter: Callable[[int], QPixmap | None] | None = None,
+            parent: Any = None,
             *,
             mode: InfoMode = InfoMode.FAVORITE,
+            pixmap_getter: Callable[[int], QPixmap | None] | None = None,
             favorite_getter: Callable[[int], bool | None] | None = None,
             days_getter: Callable[[int], int | None] | None = None,
             days_formatter: Callable[[int], str] | None = None,
@@ -109,7 +130,9 @@ class InfoCellDelegate(CellDelegate):
             padding: int = 6,
             overlay_ratio: float = 0.25,
             hide_info_without_pixmap: bool = True,
+            show_focus_ring: bool = True,
     ) -> None:
+        super().__init__(parent)
         self._get_pixmap = pixmap_getter
         self._mode = mode
         self._favorite_getter = favorite_getter
@@ -135,6 +158,7 @@ class InfoCellDelegate(CellDelegate):
         #: 收藏图标：``{True: 已收藏图标, False: 未收藏图标}``
         self._icons: dict[bool, QIcon | None] = {True: None, False: None}
         self._hide_info_without_pixmap = bool(hide_info_without_pixmap)
+        self._show_focus_ring = bool(show_focus_ring)
 
     # ------------------------------------------------------------------ #
     # 直接接模型
@@ -151,14 +175,18 @@ class InfoCellDelegate(CellDelegate):
 
         模型只需按行号提供 ``ItemRole.Pixmap`` / ``ItemRole.Favorite`` /
         ``ItemRole.DaysLeft``；缺失的 role 会按「未知」处理。
+
+        注：直接 ``InfoCellDelegate(mode=...)`` 也能用 —— ``paint`` 拿到的是
+        ``QModelIndex``，本来就能读 role；``from_model`` 额外把同样的读取
+        包成 getter，供 :meth:`mode_for` 这类「只有行号」的调用使用。
         """
         def read(index: int, role: ItemRole) -> Any:
             qt_index = model.index(int(index), 0)
             return qt_index.data(role) if qt_index.isValid() else None
 
         return cls(
-            lambda index: read(index, ItemRole.Pixmap),
             mode=mode,
+            pixmap_getter=lambda index: read(index, ItemRole.Pixmap),
             favorite_getter=lambda index: read(index, ItemRole.Favorite),
             days_getter=lambda index: read(index, ItemRole.DaysLeft),
             **options,
@@ -182,7 +210,7 @@ class InfoCellDelegate(CellDelegate):
 
     @property
     def show_favorite(self) -> bool:
-        return self._mode is InfoMode.FAVORITE
+        return self._mode in (InfoMode.FAVORITE, InfoMode.AUTO)
 
     @show_favorite.setter
     def show_favorite(self, enabled: bool) -> None:
@@ -190,11 +218,38 @@ class InfoCellDelegate(CellDelegate):
 
     @property
     def show_days(self) -> bool:
-        return self._mode is InfoMode.DAYS
+        return self._mode in (InfoMode.DAYS, InfoMode.AUTO)
 
     @show_days.setter
     def show_days(self, enabled: bool) -> None:
         self._mode = InfoMode.DAYS if enabled else InfoMode.NONE
+
+    def mode_for(self, target: int | QModelIndex) -> InfoMode:
+        """某一格实际该画什么（``AUTO`` 的逐格判断落在这里）。
+
+        规则（互斥，按优先级）：
+
+        1. ``ItemRole.DaysLeft`` 有值 → :attr:`InfoMode.DAYS`
+           —— 被回收的资产显示回收站剩余天数；
+        2. 否则 ``ItemRole.Favorite`` 为 ``True`` → :attr:`InfoMode.FAVORITE`
+           —— 普通资产显示收藏状态；
+        3. 其余（未收藏 / 状态未知）→ :attr:`InfoMode.NONE`，不占画面。
+
+        非 ``AUTO`` 模式直接返回配置的模式（整块互斥）。
+
+        Args:
+            target: 行号，或该格的 ``QModelIndex``（给了索引就能直接读
+                role；只给行号时依赖注入的 getter，见 :meth:`from_model`）。
+        """
+        mode = self._mode
+        if mode is not InfoMode.AUTO:
+            return mode
+        row, index = _target_parts(target)
+        if self._resolve_days(row, index) is not None:
+            return InfoMode.DAYS
+        if self._resolve_favorite(row, index) is True:
+            return InfoMode.FAVORITE
+        return InfoMode.NONE
 
     def set_icon(self, icon: IconLike, *, checked: bool = True) -> None:
         """设置收藏状态图标（``True`` = 已收藏，``False`` = 未收藏）。"""
@@ -216,10 +271,13 @@ class InfoCellDelegate(CellDelegate):
     # ------------------------------------------------------------------ #
     # paint
     # ------------------------------------------------------------------ #
-    def paint(self, painter: QPainter, option: CellOption) -> None:
-        rect = option.rect
+    def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
+        rect: QRect = option.rect
         if rect.isEmpty():
             return
+
+        row = index.row() if isinstance(index, QModelIndex) else -1
+        model_index = index if isinstance(index, QModelIndex) else None
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
@@ -233,38 +291,70 @@ class InfoCellDelegate(CellDelegate):
             )
             painter.setClipPath(path, Qt.ClipOperation.IntersectClip)
 
-        has_thumb = self._paint_pixmap(painter, option)
+        has_thumb = self._paint_pixmap(painter, rect, row, model_index)
         if has_thumb or not self._hide_info_without_pixmap:
-            if self._mode is InfoMode.FAVORITE:
-                self._paint_favorite(painter, option)
-            elif self._mode is InfoMode.DAYS:
-                self._paint_days(painter, option)
+            mode = self.mode_for(model_index if model_index is not None else row)
+            if mode is InfoMode.FAVORITE:
+                self._paint_favorite(painter, rect, row, model_index)
+            elif mode is InfoMode.DAYS:
+                self._paint_days(painter, rect, row, model_index)
 
+        self._paint_focus_ring(painter, rect, option)
         painter.restore()
+
+    # ------------------------------------------------------------------ #
+    # 内部：焦点描边
+    # ------------------------------------------------------------------ #
+    def _paint_focus_ring(self, painter: QPainter, rect: QRect, option) -> None:
+        """当前格（键盘光标）在视图持有焦点时画一圈描边。"""
+        if not self._show_focus_ring:
+            return
+        if not (option.state & QStyle.StateFlag.State_HasFocus):
+            return
+        pen_color = QColor(0, 122, 255, 235)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(pen_color)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 6, 6)
 
     # ------------------------------------------------------------------ #
     # 内部：缩略图
     # ------------------------------------------------------------------ #
-    def _paint_pixmap(self, painter: QPainter, option: CellOption) -> bool:
+    def _paint_pixmap(
+            self,
+            painter: QPainter,
+            rect: QRect,
+            row: int,
+            index: QModelIndex | None,
+    ) -> bool:
         pixmap = None
         if self._get_pixmap is not None:
             try:
-                pixmap = self._get_pixmap(option.index)
+                pixmap = self._get_pixmap(row)
             except Exception:  # noqa: BLE001 —— paint 期间不允许异常外泄
-                _logger.exception(
-                    "pixmap_getter failed at index=%s", option.index)
-        if pixmap is not None and not pixmap.isNull():
-            painter.drawPixmap(option.rect, pixmap)
+                _logger.exception("pixmap_getter failed at index=%s", row)
+        elif index is not None:
+            pixmap = index.data(ItemRole.Pixmap)
+            if not isinstance(pixmap, QPixmap):
+                pixmap = index.data(Qt.ItemDataRole.DecorationRole)
+        if isinstance(pixmap, QPixmap) and not pixmap.isNull():
+            painter.drawPixmap(rect, pixmap)
             return True
         if self._placeholder_color is not None:
-            painter.fillRect(option.rect, self._placeholder_color)
+            painter.fillRect(rect, self._placeholder_color)
         return False
 
     # ------------------------------------------------------------------ #
     # 内部：两种模式
     # ------------------------------------------------------------------ #
-    def _paint_favorite(self, painter: QPainter, option: CellOption) -> None:
-        favorite = self._resolve_favorite(option.index)
+    def _paint_favorite(
+            self,
+            painter: QPainter,
+            rect: QRect,
+            row: int,
+            index: QModelIndex | None,
+    ) -> None:
+        favorite = self._resolve_favorite(row, index)
 
         icon: QIcon | None = None
         text = ""
@@ -281,7 +371,7 @@ class InfoCellDelegate(CellDelegate):
         if icon is None and not text:
             return
 
-        band = self._make_band(painter, option)
+        band = self._make_band(painter, rect)
         if band is None:
             return
 
@@ -301,15 +391,21 @@ class InfoCellDelegate(CellDelegate):
             self._draw_text(
                 painter, metrics, text, x, center_y, band, band.right())
 
-    def _paint_days(self, painter: QPainter, option: CellOption) -> None:
-        days = self._resolve_days(option.index)
+    def _paint_days(
+            self,
+            painter: QPainter,
+            rect: QRect,
+            row: int,
+            index: QModelIndex | None,
+    ) -> None:
+        days = self._resolve_days(row, index)
         text = (
-            self._default_days_text if days is None else self._format_days(days)
+            self._default_days_text if days is None else self.format_days(days)
         )
         if not text:
             return
 
-        band = self._make_band(painter, option)
+        band = self._make_band(painter, rect)
         if band is None:
             return
 
@@ -323,11 +419,8 @@ class InfoCellDelegate(CellDelegate):
     # ------------------------------------------------------------------ #
     # 内部：阴影条 / 文本
     # ------------------------------------------------------------------ #
-    def _make_band(
-            self, painter: QPainter, option: CellOption) -> QRect | None:
+    def _make_band(self, painter: QPainter, rect: QRect) -> QRect | None:
         """准备字体与画笔、画出阴影条，返回条带矩形。"""
-        rect = option.rect
-
         font = self._resolve_font(painter)
         painter.setFont(font)
         metrics = QFontMetrics(font)
@@ -404,24 +497,34 @@ class InfoCellDelegate(CellDelegate):
     # ------------------------------------------------------------------ #
     # 内部：数据取值
     # ------------------------------------------------------------------ #
-    def _resolve_favorite(self, index: int) -> bool | None:
+    def _resolve_favorite(
+            self, row: int, index: QModelIndex | None = None,
+    ) -> bool | None:
         if self._favorite_getter is None:
-            return None
+            if index is None:
+                return None
+            value = index.data(ItemRole.Favorite)
+            return None if value is None else bool(value)
         try:
-            value = self._favorite_getter(index)
+            value = self._favorite_getter(row)
         except Exception:  # noqa: BLE001
-            _logger.exception("favorite_getter failed at index=%s", index)
+            _logger.exception("favorite_getter failed at index=%s", row)
             return None
         return None if value is None else bool(value)
 
-    def _resolve_days(self, index: int) -> int | None:
+    def _resolve_days(
+            self, row: int, index: QModelIndex | None = None,
+    ) -> int | None:
         if self._days_getter is None:
-            return None
-        try:
-            value = self._days_getter(index)
-        except Exception:  # noqa: BLE001
-            _logger.exception("days_getter failed at index=%s", index)
-            return None
+            if index is None:
+                return None
+            value = index.data(ItemRole.DaysLeft)
+        else:
+            try:
+                value = self._days_getter(row)
+            except Exception:  # noqa: BLE001
+                _logger.exception("days_getter failed at index=%s", row)
+                return None
         if value is None:
             return None
         try:
@@ -429,14 +532,27 @@ class InfoCellDelegate(CellDelegate):
         except (TypeError, ValueError):
             return None
 
-    def _format_days(self, days: int) -> str:
+    def format_days(self, days: int) -> str:
+        """剩余天数 → 信息条文本（``days_formatter`` 优先，其次内置规则）。
+
+        内置规则的源文是**英文**（``%1 days left`` / ``Deleted today`` /
+        ``Expired``），由 ``InfoCellDelegate`` 上下文的翻译表翻成中文。
+        """
         if self._days_formatter is not None:
             return self._days_formatter(days)
         if days > 0:
-            return _tr("剩余 %1 天").replace("%1", str(days))
+            return _tr("%1 days left").replace("%1", str(days))
         if days == 0:
-            return _tr("今天删除")
-        return _tr("已过期")
+            return _tr("Deleted today")
+        return _tr("Expired")
+
+
+def _target_parts(target: int | QModelIndex) -> tuple[int, QModelIndex | None]:
+    """把「行号 / 索引」拆成 (行号, 索引)；索引无效时索引按 ``None``。"""
+    if isinstance(target, QModelIndex):
+        return (target.row() if target.isValid() else -1,
+                target if target.isValid() else None)
+    return int(target), None
 
 
 def _clamp(ratio: float) -> float:

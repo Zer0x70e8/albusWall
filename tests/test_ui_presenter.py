@@ -209,6 +209,155 @@ def test_configured_theme_without_configue_uses_declared_default():
     assert theme.configured_style_sheet() == ""
 
 
+# ------------ 配置器插值：主题路径由 [path] / [files] / [ui] 组合 ------------
+
+def _write_shipped_conf(tmp_path):
+    """把随包 ``conf.ini`` 拷成用户配置（它的 [ui] 组合式就是默认值文档）。"""
+    from albuswall import resources
+
+    shipped = resources.CURRENT_PATH / "config" / "conf.ini"
+    (tmp_path / "config.ini").write_text(
+        shipped.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def test_shipped_conf_composes_theme_paths(isolated_configue, tmp_path):
+    """``[ui]`` 的组合式由配置器展开：路径 = [path] + [ui] theme + [files]。"""
+    from albuswall.configue.bootstrap import setup_config
+    from albuswall.core import Container
+    from albuswall.ui.presenter.theme import ThemeConfig
+
+    _write_shipped_conf(tmp_path)
+    setup_config(Container(), base_dir=tmp_path, portable=True)
+
+    theme_root = tmp_path.resolve() / "theme"
+    config = ThemeConfig()
+    assert config.style_sheet == str(
+        theme_root / "default" / "main_window.qss")
+    assert config.album_button == str(
+        theme_root / "default" / "icons" / "album_button.svg")
+    assert config.favorite_icon == str(
+        theme_root / "default" / "icons" / "favorite_icon.svg")
+
+
+def test_defaults_equal_shipped_conf(isolated_configue, tmp_path):
+    """没写配置文件时，声明期默认值展开出的路径与 ``conf.ini`` 的**一致**。
+
+    两边必须逐字等价：模板是给人看的文档，真正兜底的是 ``ThemeConfig`` /
+    ``Paths`` 的默认值，二者漂移过一次（``${ui:theme}`` 多写了一段）。
+    """
+    from albuswall.configue.bootstrap import setup_config
+    from albuswall.core import Container
+    from albuswall.ui.presenter.theme import ThemeConfig
+
+    setup_config(
+        Container(), base_dir=tmp_path, portable=True, ignore_missing=True)
+
+    theme_root = tmp_path.resolve() / "theme" / "default"
+    config = ThemeConfig()
+    assert config.style_sheet == str(theme_root / "main_window.qss")
+    assert config.app_icon == str(theme_root / "icons" / "albuswall.svg")
+    assert config.more_button == str(
+        theme_root / "icons" / "more_button.svg")
+
+
+def test_switching_theme_moves_every_composed_path(isolated_configue, tmp_path):
+    """回写 ``[ui] theme`` 就够：派生路径跟着 ``${ui:theme}`` 重新展开。
+
+    这是「UI 走配置器解析」的核心证据 —— UI 侧没有任何重新拼路径的代码。
+    """
+    from albuswall.configue.bootstrap import Paths, setup_config
+    from albuswall.core import Container
+    from albuswall.ui.presenter.theme import ThemeConfig
+
+    _write_shipped_conf(tmp_path)
+    setup_config(Container(), base_dir=tmp_path, portable=True)
+
+    ThemeConfig().theme = "midnight"
+
+    theme_root = tmp_path.resolve() / "theme"
+    assert Paths().icons == theme_root / "midnight" / "icons"
+    assert ThemeConfig().style_sheet == str(
+        theme_root / "midnight" / "main_window.qss")
+    assert ThemeConfig().more_button == str(
+        theme_root / "midnight" / "icons" / "more_button.svg")
+
+
+def test_user_theme_dir_wins_over_bundled(isolated_configue, tmp_path):
+    """用户主题目录里有文件就用它；缺的图标回退到随包主题。"""
+    from albuswall.configue.bootstrap import setup_config
+    from albuswall.core import Container
+    from albuswall.ui.presenter import theme
+
+    _write_shipped_conf(tmp_path)
+    setup_config(Container(), base_dir=tmp_path, portable=True)
+
+    theme_dir = tmp_path / "theme" / "default"
+    icons = theme_dir / "icons"
+    icons.mkdir(parents=True)
+    (theme_dir / "main_window.qss").write_text(
+        "QWidget { color: red; }", encoding="utf-8")
+    album = icons / "album_button.svg"
+    album.write_text("<svg/>", encoding="utf-8")
+
+    resolved = theme.resolve_theme()
+
+    assert resolved.source == "config"
+    assert "color: red" in resolved.style_sheet
+    assert resolved.icon("album_button") == album
+    # 用户主题没放的图标：落到随包 default 主题
+    fallback = resolved.icon("more_button")
+    assert fallback is not None and fallback.is_file()
+    assert fallback.parent.name == theme.ICON_DIR_NAME
+    assert fallback.parent.parent.name == theme.DEFAULT_THEME
+
+
+def test_icon_key_points_at_any_file(isolated_configue, tmp_path):
+    """「图标都可以被配置」：``[ui] <key>`` 指到任意文件都算数。"""
+    from albuswall.configue.bootstrap import setup_config
+    from albuswall.core import Container
+    from albuswall.ui.presenter import theme
+
+    _write_shipped_conf(tmp_path)
+    custom = tmp_path / "art" / "heart.svg"
+    custom.parent.mkdir()
+    custom.write_text("<svg/>", encoding="utf-8")
+    (tmp_path / "config.ini").write_text(
+        (tmp_path / "config.ini").read_text(encoding="utf-8").replace(
+            "favorite_icon = ${path:icons}/${files:favorite_icon}",
+            f"favorite_icon = {custom}",
+        ),
+        encoding="utf-8",
+    )
+    setup_config(Container(), base_dir=tmp_path, portable=True)
+
+    resolved = theme.resolve_theme()
+
+    assert resolved.icon("favorite_icon") == custom
+    assert resolved.icon("album_button") is not None  # 没改的键照旧
+
+
+def test_explicit_name_uses_the_same_layout(isolated_configue, tmp_path):
+    """显式主题名按同一套目录布局找用户主题（不认 ``[ui] style_sheet``）。"""
+    from albuswall.configue.bootstrap import setup_config
+    from albuswall.core import Container
+    from albuswall.ui.presenter import theme
+
+    _write_shipped_conf(tmp_path)
+    setup_config(Container(), base_dir=tmp_path, portable=True)
+
+    target = tmp_path / "theme" / "midnight"
+    target.mkdir(parents=True)
+    (target / "main_window.qss").write_text(
+        "QWidget { color: teal; }", encoding="utf-8")
+
+    resolved = theme.resolve_theme("midnight")
+
+    assert resolved.name == "midnight"
+    assert resolved.source == "config"
+    assert resolved.qss_path == target / "main_window.qss"
+    assert theme.configured_theme_qss("midnight") == target / "main_window.qss"
+
+
 # ==================== Presenter 树 ====================
 
 def test_children_start_in_order_and_stop_in_reverse(presenter_registry):

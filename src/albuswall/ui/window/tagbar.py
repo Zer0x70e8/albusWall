@@ -198,12 +198,12 @@ class TagBar(Retranslatable, QFrame):
     # ------------------------------------------------------------------ #
     def retranslate_ui(self) -> None:
         """重新应用输入提示 / 按钮 / tooltip 文案。"""
-        self.tag_line_edit.setPlaceholderText(self.tr("标签名，可用 / 分层"))
-        self.tag_apply_button.setText(self.tr("应用"))
-        self.tag_apply_button.setToolTip(self.tr("添加到当前图片"))
-        self.layer_tree_button.setText(self.tr("标签树"))
-        self.tag_create_button.setText(self.tr("新建"))
-        self.tag_create_button.setToolTip(self.tr("新建标签"))
+        self.tag_line_edit.setPlaceholderText(self.tr("Tag name; use / for hierarchy"))
+        self.tag_apply_button.setText(self.tr("Apply"))
+        self.tag_apply_button.setToolTip(self.tr("Add to the current image"))
+        self.layer_tree_button.setText(self.tr("Tag tree"))
+        self.tag_create_button.setText(self.tr("New"))
+        self.tag_create_button.setToolTip(self.tr("New tag"))
         self._apply_toggle_symbol()
 
     def _apply_toggle_symbol(self) -> None:
@@ -306,16 +306,16 @@ class TagBar(Retranslatable, QFrame):
 
         menu = QMenu(tree)
         create_action = menu.addAction(
-            self.tr("新建子标签") if tag_id else self.tr("新建根标签"))
+            self.tr("New child tag") if tag_id else self.tr("New root tag"))
         create_action.triggered.connect(
             lambda: self.tag_create_requested.emit(tag_id))
 
         if tag_id:
             menu.addSeparator()
-            rename_action = menu.addAction(self.tr("重命名标签"))
+            rename_action = menu.addAction(self.tr("Rename tag"))
             rename_action.triggered.connect(
                 lambda: self.tag_rename_requested.emit(tag_id))
-            delete_action = menu.addAction(self.tr("删除标签"))
+            delete_action = menu.addAction(self.tr("Delete tag"))
             delete_action.triggered.connect(
                 lambda: self.tag_delete_requested.emit(tag_id))
 

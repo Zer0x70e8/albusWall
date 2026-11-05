@@ -17,8 +17,9 @@
     set_language("en_US")      # 也接受 "en" / "en-US" / "English"
     set_language("zh_CN")      # 也接受 "zh" / "zh-CN" / "简体中文"
 
-用源文兜底的语种（``zh_CN``：源文本身就是中文，``.qm`` 里没有条目）切换时
-需要手动补一次广播 —— Qt 只在翻译器非空时才发 ``LanguageChange``。
+没有翻译条目的语种（例如 ``en_US``：``self.tr`` 的源文本身就是英文，
+``.qm`` 里几乎没有条目）切换时需要手动补一次广播 —— Qt 只在翻译器非空时
+才发 ``LanguageChange``。
 """
 
 from __future__ import annotations
@@ -183,7 +184,8 @@ class TranslationManager:
 
         * 未知写法：保持当前语言，返回 ``False``；
         * 与当前语言相同：直接返回 ``True``；
-        * 目标语言的 ``.qm`` 缺失或为空：界面回退到源文（中文）。
+        * 目标语言的 ``.qm`` 缺失或为空：界面回退到源文（``self.tr`` 用英文，
+          动态数据标签用中文）。
 
         切换后 Qt 会广播 ``LanguageChange``（空翻译器时由本类补发），
         控件在事件循环下一轮完成重绘 —— 不要在调用后立刻断言界面文字。
@@ -226,7 +228,7 @@ class TranslationManager:
         return True
 
     def reset(self) -> None:
-        """撤掉自己装的翻译器，界面回到源文（中文）。"""
+        """撤掉自己装的翻译器，界面回到源文（英文 + 少量中文数据）。"""
         app = self._app if self._app is not None else QCoreApplication.instance()
         if app is not None and self._translator is not None:
             app.removeTranslator(self._translator)

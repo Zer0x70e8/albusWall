@@ -11,7 +11,8 @@
 :meth:`_draw_placeholder` 什么都不画（无图时占位）
 :meth:`_draw_content`     居中裁剪铺满（正方形）
 :meth:`_draw_overlay`     什么都不画（标题 / 描述 / 角标从这里进）
-:meth:`_draw_selection`   什么都不画（选中态默认交给 QSS 背景）
+:meth:`_draw_selection`   什么都不画（选中态默认交给 QSS 背景；
+                          可 :meth:`set_selection_background_visible` 关掉底色改自绘）
 ========================  ==============================================
 
 复用工具：:meth:`crop_square`（把任意图裁成 ``side×side``）。
@@ -55,6 +56,8 @@ class SquareThumbDelegate(QStyledItemDelegate):
             border_radius: int = 0,
     ) -> None:
         super().__init__(parent)
+        #: 选中态是否沿用样式表的 item 高亮底色；关掉后由子类自绘（如描边）
+        self._selection_background = True
         self._decoration_role = int(decoration_role)
         self._default_size = QSize(default_size or QSize(96, 96))
         self._padding = max(0, int(padding))
@@ -87,6 +90,18 @@ class SquareThumbDelegate(QStyledItemDelegate):
 
     def border_radius(self) -> int:
         return self._border_radius
+
+    def set_selection_background_visible(self, visible: bool) -> None:
+        """选中态是否由样式表铺高亮底色（默认 ``True``）。
+
+        置 ``False`` 时 :meth:`_draw_background` 会把 ``State_Selected``
+        摘掉再交给样式表 —— 于是「整个格子刷一层半透明蓝」的默认高亮不再
+        出现，选中视觉完全交给 :meth:`_draw_selection` 自绘（例如圆角描边）。
+        """
+        self._selection_background = bool(visible)
+
+    def selection_background_visible(self) -> bool:
+        return self._selection_background
 
     # ------------------------------------------------------------------ #
     # QStyledItemDelegate
@@ -143,6 +158,9 @@ class SquareThumbDelegate(QStyledItemDelegate):
         self.initStyleOption(opt, index)
         opt.text = ""
         opt.icon = QIcon()
+        if not self._selection_background:
+            # 选中底色交给自己画（描边），别让样式表再铺一层蓝底
+            opt.state &= ~QStyle.StateFlag.State_Selected
 
         widget = opt.widget
         style = widget.style() if widget is not None else QApplication.style()

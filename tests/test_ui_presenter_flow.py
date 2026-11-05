@@ -279,6 +279,11 @@ class FakeTagService:
         self.tree: list = []
         self.ensure_path_calls: list[str] = []
         self.created: list[str] = []
+        #: 按标签过滤用的命中表（``tag_uuid -> [asset_uuid, ...]``）。
+        self.tag_assets: dict[str, list[str]] = {}
+
+    def asset_uuids(self, tag_uuid, *, scope="active"):
+        return list(self.tag_assets.get(str(tag_uuid), ()))
 
     def list_tree(self):
         return list(self.tree)
@@ -492,12 +497,29 @@ def test_album_list_populates_and_selects_first_album(stack, qapp):
     assert album_p.current is not None
     assert album_p.current.title == "旅行"
     assert album_p.model.rowCount() == 1
-    # 标题栏 / 窗口标题
+    # 标题栏：业务文案只进工具栏，窗口标题保持应用级（不跟随相册）
     assert built.window.title_bar.title_label.text() == "旅行"
     assert built.window.title_bar.sub_title.text() == "我的照片"
-    assert built.window.windowTitle() == "旅行"
+    assert built.window.windowTitle() == ""
+    assert built.window.title_bar.window_title.text() == ""
     # 内容网格拿到的是同一个相册
     assert content.album_uuid == album.uuid
+
+
+def test_album_switch_keeps_the_window_title(stack, qapp):
+    """相册标题不得覆盖窗口标题（窗口标题由 boot / 配置决定）。"""
+    first = make_album("旅行")
+    second = make_album("Ricing")
+    built = stack(albums=[first, second], assets=[])
+    built.window.setWindowTitle("AlbusWall")
+
+    album_p = built.child("album")
+    album_p.set_album_uuid(second.uuid)
+
+    assert album_p.current.title == "Ricing"
+    assert built.window.title_bar.title_label.text() == "Ricing"
+    assert built.window.windowTitle() == "AlbusWall"
+    assert built.window.title_bar.window_title.text() == "AlbusWall"
 
 
 def test_content_grid_loads_assets_and_requests_thumbnails(
@@ -525,6 +547,57 @@ def test_content_grid_loads_assets_and_requests_thumbnails(
     assert content.model.pixmap_at(0) is not None
 
 
+def test_content_grid_uses_auto_info_delegate(stack, qapp, make_image):
+    """内容网格必须装委托：默认委托只画缩略图，收藏状态就丢了。"""
+    from albuswall.ui.delegate import InfoCellDelegate, InfoMode
+
+    first = make_asset(title="one.jpg", favorite=True)
+    second = make_asset(title="two.jpg")
+    built = stack(albums=[make_album()], assets=[first, second])
+    content = built.child("content")
+    grid = built.window.content
+
+    delegate = grid.itemDelegate()
+    assert isinstance(delegate, InfoCellDelegate)
+    assert delegate.mode is InfoMode.AUTO
+    # 视图与 presenter 拿的是同一个委托
+    assert content.delegate is delegate
+    # 主题里的收藏图标装到了委托上（心形 = 缩略图角标）
+    assert delegate.icon(checked=True) is not None
+
+    pump(qapp)
+    model = content.model
+    assert delegate.mode_for(model.index(0, 0)) is InfoMode.FAVORITE
+    assert delegate.mode_for(model.index(1, 0)) is InfoMode.NONE
+
+    # 主题里没有这张图：回退成 ★ 文本，不是「什么都不画」
+    content.apply_theme(None)
+    assert delegate.icon(checked=True) is None
+
+
+def test_content_delegate_shows_days_left_for_trashed_assets(stack, qapp):
+    """回收站视图里：被回收的格子显示剩余天数（优先于收藏状态）。"""
+    from datetime import UTC, datetime, timedelta
+
+    from albuswall.ui.delegate import InfoMode
+
+    trash = make_album("回收站")
+    asset = make_asset(title="gone.jpg", favorite=True, deleted=True)
+    object.__setattr__(
+        asset, "deleted_at",
+        (datetime.now(UTC) - timedelta(days=28)).isoformat())
+    built = stack(albums=[], assets=[asset], trash=[trash])
+    album_p = built.child("album")
+    album_p.set_album_uuid(trash.uuid)
+    pump(qapp)
+
+    content = built.child("content")
+    days_left = content.model.entry_at(0).days_left
+    assert days_left is not None and 0 <= days_left <= 30
+    assert content.delegate.mode_for(
+        content.model.index(0, 0)) is InfoMode.DAYS
+
+
 def test_album_switch_refreshes_content_grid(stack, qapp):
     first = make_album("A")
     second = make_album("B")
@@ -536,6 +609,39 @@ def test_album_switch_refreshes_content_grid(stack, qapp):
 
     assert content.album_uuid == second.uuid
     assert built.window.title_bar.title_label.text() == "B"
+
+
+def test_reload_keeps_the_user_scroll_position(stack, qapp, make_image):
+    """刷新（模型 reset / 重装数据）不许把网格弹回顶部。
+
+    回归背景：模型 reset 后光标失效，视图把光标重新落到第 0 行；``QListView``
+    会「跟着 current 走」把第 0 行滚进视野 —— 于是用户滚到哪儿都被拉回顶部。
+    """
+    assets = [make_asset(title=f"a{i}.jpg") for i in range(200)]
+    built = stack(albums=[make_album()], assets=assets)
+    window = built.window
+    window.resize(960, 720)
+    window.show()
+    pump(qapp)
+
+    grid = window.content
+    presenter = built.child("content")
+    grid.set_scroll_y(500)
+    pump(qapp)
+    assert grid.scroll_y == 500
+
+    presenter.reload()
+    pump(qapp)
+    assert grid.scroll_y == 500, "刷新把用户滚到的位置挪走了"
+    assert grid.cursor_index() == 0
+
+    # 过滚态下刷新：偏移也保住（内容不能自己弹回去）
+    grid.set_scroll_y(-100)
+    pump(qapp)
+    assert grid.overscroll == -100
+    presenter.reload()
+    pump(qapp)
+    assert grid.overscroll == -100
 
 
 # ==================== 网格 → 详情页 ====================
@@ -619,6 +725,80 @@ def test_detail_favorite_trash_recover_write_through(stack, qapp):
 
 
 # ==================== 标签 ====================
+
+def test_tagbar_follows_current_asset_at_startup(stack, qapp):
+    """开机就指向光标资产（不能等用户挪光标才刷新）。
+
+    回归背景：首次装载发生在 ``setModel`` 之前，那时网格光标还是 -1；
+    视图装模型后把光标落到第一格时调用方不一定收到 ``cursor_changed``，
+    于是 ``selection_changed`` 从没发过，标签栏一直是空对象。
+    """
+    first = make_asset(title="one.jpg")
+    second = make_asset(title="two.jpg")
+    built = stack(albums=[make_album()], assets=[first, second])
+    tagbar = built.child("tagbar")
+    content = built.child("content")
+
+    assert content.current_asset_uuid() == str(first.uuid)
+    assert tagbar.current_asset_uuid == str(first.uuid)
+
+    # chip 列表也是这个资产的
+    built.tags.tree = []
+    built.asset_tags.bindings[str(first.uuid)] = [FakeTag("旅行")]
+    content.reload()
+    assert tagbar._chip_model.rowCount() == 1
+
+
+def test_tagbar_follows_asset_when_navigating_in_detail(stack, qapp):
+    """详情页翻页 / 重新打开 → 标签栏换对象并重读标签。"""
+    first = make_asset(title="one.jpg")
+    second = make_asset(title="two.jpg")
+    built = stack(albums=[make_album()], assets=[first, second])
+    tagbar = built.child("tagbar")
+    content = built.child("content")
+    viewer = built.child("viewer")
+
+    built.asset_tags.bindings[str(first.uuid)] = [FakeTag("旅行")]
+    built.asset_tags.bindings[str(second.uuid)] = [
+        FakeTag("海"), FakeTag("山")]
+
+    content.asset_activated.emit(str(first.uuid))
+    pump(qapp)
+    assert tagbar.current_asset_uuid == str(first.uuid)
+    assert tagbar._chip_model.rowCount() == 1
+
+    # 详情页里翻到下一张
+    viewer.navigate(str(second.uuid))
+    pump(qapp)
+    assert tagbar.current_asset_uuid == str(second.uuid)
+    assert tagbar._chip_model.rowCount() == 2
+
+    # 回到第一张：chip 跟着缩回去
+    viewer.navigate(str(first.uuid))
+    pump(qapp)
+    assert tagbar._chip_model.rowCount() == 1
+
+    # 关闭详情页 → 作用对象回到网格光标
+    built.window.detail.close_requested.emit()
+    pump(qapp)
+    assert tagbar.current_asset_uuid == content.current_asset_uuid()
+
+
+def test_tagbar_follows_cursor_after_tag_filter(stack, qapp):
+    """按标签过滤后网格换了内容：标签栏也要指向过滤后的光标资产。"""
+    first = make_asset(title="one.jpg")
+    second = make_asset(title="two.jpg")
+    built = stack(albums=[make_album()], assets=[first, second])
+    tagbar = built.child("tagbar")
+    content = built.child("content")
+
+    built.tags.tag_assets["tag-uuid"] = [str(second.uuid)]
+    content.set_tag_filter("tag-uuid")
+    qapp.processEvents()
+
+    assert content.model.uuids() == [str(second.uuid)]
+    assert tagbar.current_asset_uuid == str(second.uuid)
+
 
 def test_tagbar_binds_and_filters(stack, qapp):
     asset = make_asset(title="one.jpg")
@@ -853,6 +1033,24 @@ def test_album_page_top_holds_albums_and_bottom_holds_trash(stack, qapp, tmp_pat
     assert album_p.trash_model.uuid_at(0) == str(trash.uuid)
     assert page.trash_view.model() is album_p.trash_model
 
+    # 单行版式：左图标（emoji）/ 弹簧 / 右名称，委托与图标都由 presenter 装配
+    from albuswall.ui.delegate import AlbumCoverDelegate, TrashAlbumDelegate
+    from albuswall.ui.model import AlbumRole
+    from albuswall.ui.presenter.album_presenter import TRASH_ALBUM_ICON
+
+    trash_delegate = page.trash_delegate()
+    assert isinstance(trash_delegate, TrashAlbumDelegate)
+    assert trash_delegate.row_height() > 0
+    # 视图高度跟着行数走（一行 → 行高 + 上下留白）
+    assert page.trash_view.height() >= trash_delegate.row_height()
+    trash_index = album_p.trash_model.index(0, 0)
+    assert album_p.trash_model.data(
+        trash_index, AlbumRole.Icon) == TRASH_ALBUM_ICON
+    # 名称仍取相册 DTO 的 title
+    assert album_p.trash_model.data(trash_index, AlbumRole.Title) == "回收站"
+    # 顶部网格不受影响：仍是封面委托
+    assert isinstance(page.album_delegate(), AlbumCoverDelegate)
+
     # 切到回收站：标题栏跟随，高亮落在底部列表
     album_p.set_album_uuid(trash.uuid)
     assert album_p.current_uuid == trash.uuid
@@ -945,7 +1143,8 @@ def test_content_is_the_hit_target_and_detail_reopens(stack, qapp):
     # 标题栏之下、第一行第一列（只有一张资产时也只命中它）
     point = QPoint(20, window.title_bar.height() + 40)
     target = QApplication.widgetAt(window.mapToGlobal(point))
-    assert target is window.content, (
+    # ``Content`` 是 ``QListView``：命中的是它内部的 viewport，不是外壳本身。
+    assert target is window.content or window.content.isAncestorOf(target), (
         f"expected content under the cursor, got {type(target).__name__}")
 
     for _ in range(2):
@@ -978,9 +1177,10 @@ def test_theme_icons_are_applied_to_window(stack, qapp):
         assert button.toolTip()  # 文案落到 tooltip
 
     favourite = detail.favourite_button
-    assert detail.is_action_icon_mode(favourite) is True
-    assert not favourite.icon().isNull()
-    assert favourite.toolTip() == "收藏"
+    # 详情页的动作按钮统一用文字：主题里的 favorite_icon 归网格角标用
+    assert detail.is_action_icon_mode(favourite) is False
+    assert favourite.icon().isNull()
+    assert favourite.text() == "Favorite"
 
     # 窗口 / 应用图标
     assert not built.window.windowIcon().isNull()
@@ -997,12 +1197,12 @@ def test_icon_buttons_fall_back_to_text_without_theme_icons(stack, qapp):
     title_bar = built.window.title_bar
     assert title_bar.button_icon_mode("album") is False
     assert title_bar.album_button.icon().isNull()
-    assert title_bar.album_button.text() == "相册"
+    assert title_bar.album_button.text() == "Album"
 
     favourite = built.window.detail.favourite_button
     assert built.window.detail.is_action_icon_mode(favourite) is False
     assert favourite.icon().isNull()
-    assert favourite.text() == "收藏"
+    assert favourite.text() == "Favorite"
 
 
 def test_theme_qss_selectors_match_widget_object_names(stack, qapp):
@@ -1058,13 +1258,13 @@ def test_content_context_menu_has_move_and_remove(stack, qapp):
     menu = content.build_asset_menu(str(asset.uuid))
     texts = [action.text() for action in menu.actions()]
 
-    assert "移动到指定相册" in texts
-    assert "从本相册移除" in texts
+    assert "Move to album" in texts
+    assert "Remove from this album" in texts
     move_menu = menu.actions()[0].menu()
     move_texts = [action.text() for action in move_menu.actions()]
     assert "Ricing" in move_texts          # 其它相册是可选目标
     assert "旅行" not in move_texts        # 当前相册不出现
-    assert "新建相册并移入…" in move_texts
+    assert "New album and move into it…" in move_texts
 
 
 def test_context_menu_move_copies_to_target_album(stack, qapp):
@@ -1092,7 +1292,7 @@ def test_context_menu_remove_from_album(stack, qapp):
     content = built.child("content")
 
     menu = content.build_asset_menu(str(asset.uuid))
-    remove_action = next(a for a in menu.actions() if a.text() == "从本相册移除")
+    remove_action = next(a for a in menu.actions() if a.text() == "Remove from this album")
     remove_action.trigger()
 
     assert built.ops.remove_calls == [(str(album.uuid), [str(asset.uuid)])]
@@ -1108,7 +1308,7 @@ def test_context_menu_create_album_and_move(stack, qapp, monkeypatch):
     menu = content.build_asset_menu(str(asset.uuid))
     move_menu = menu.actions()[0].menu()
     create = next(
-        a for a in move_menu.actions() if a.text() == "新建相册并移入…")
+        a for a in move_menu.actions() if a.text() == "New album and move into it…")
     create.trigger()
 
     assert built.albums.created
@@ -1127,8 +1327,8 @@ def test_context_menu_disabled_on_trash_album(stack, qapp):
 
     menu = content.build_asset_menu(str(asset.uuid))
     actions = {action.text(): action for action in menu.actions() if action.text()}
-    assert actions["添加到指定相册"].isEnabled() is False
-    assert actions["从本相册移除"].isEnabled() is False
+    assert actions["Add to album"].isEnabled() is False
+    assert actions["Remove from this album"].isEnabled() is False
 
 
 def test_context_menu_on_all_view_adds_instead_of_moving(stack, qapp):
@@ -1146,9 +1346,9 @@ def test_context_menu_on_all_view_adds_instead_of_moving(stack, qapp):
 
     menu = content.build_asset_menu(str(asset.uuid))
     texts = [action.text() for action in menu.actions()]
-    assert "添加到指定相册" in texts
-    assert "从本相册移除" in texts
-    remove_action = next(a for a in menu.actions() if a.text() == "从本相册移除")
+    assert "Add to album" in texts
+    assert "Remove from this album" in texts
+    remove_action = next(a for a in menu.actions() if a.text() == "Remove from this album")
     assert remove_action.isEnabled() is False
 
     move_menu = move_menu_of(menu)
@@ -1204,3 +1404,116 @@ def test_album_cover_refreshes_after_move(stack, qapp, make_image):
     pixmap = album_p.model.pixmap_at(row)
     assert pixmap is not None
     assert pixmap.width() == pixmap.height()   # 封面同样是正方形
+
+
+# ==================== 快捷键槽（keymap）驱动界面 ====================
+
+def _install_shortcuts(built):
+    """登记这一套界面动作，并载入**随包**默认表（不看用户覆盖）。"""
+    from albuswall.ui.keymap import ShortcutRegistry, load_shortcuts
+    from albuswall.ui.keymap.config import ShortcutConfig
+    from albuswall.ui.presenter.shortcuts import install_ui_shortcuts
+
+    registry = install_ui_shortcuts(
+        built.presenter.container, registry=ShortcutRegistry(), load=False)
+    load_shortcuts(
+        ShortcutConfig(user_path=None), registry=registry, strict=True)
+    return registry
+
+
+def test_shortcut_slots_drive_the_ui(stack, qapp, make_image):
+    """``ui.presenter.shortcuts`` 登记的槽真的能驱动现在这套界面。
+
+    只走**不弹模态框**的命令（``album.new`` / ``album.rename`` 要输入标题，
+    留给人工验证）：搜索聚焦、全屏、收藏、软删、缩放、关层。
+    """
+    asset = make_asset(title="one.jpg")
+    built = stack(
+        albums=[make_album()],
+        assets=[asset],
+        paths={str(asset.uuid): make_image("full.png")},
+    )
+    shortcuts = _install_shortcuts(built)
+    content = built.child("content")
+    viewer = built.child("viewer")
+
+    # ---- content.search：展开搜索栏 ----
+    assert shortcuts.trigger("Ctrl+F") == (True,)
+    assert built.window.title_bar.floating_search_bar.is_expanded is True
+
+    # ---- window.fullscreen：全屏 / 还原 ----
+    assert shortcuts.trigger("F11") == (True,)
+    assert built.window.isFullScreen() is True
+    assert shortcuts.trigger("F11") == (False,)
+    assert built.window.isFullScreen() is False
+
+    # ---- asset.favorite：详情页没开 → 网格光标那一格 ----
+    assert shortcuts.trigger("Ctrl+D") == (True,)
+    assert built.ops.favorite_calls == [(str(asset.uuid), True)]
+    pump(qapp)
+    assert content.model.entry_at(0).favorite is True
+
+    # ---- 详情页打开后：asset.* / view.zoom_* 改落详情页 ----
+    content.asset_activated.emit(str(asset.uuid))
+    pump(qapp)
+    assert viewer.is_detail_open is True
+
+    assert shortcuts.trigger("Ctrl+D") == (True,)
+    assert built.ops.favorite_calls[-1] == (str(asset.uuid), False)
+
+    image_viewer = built.window.detail.image_viewer
+    before = image_viewer._scale
+    assert shortcuts.trigger("Ctrl++") == (True,)
+    assert image_viewer._scale > before
+    assert shortcuts.trigger("Ctrl+0") == (True,)
+    assert image_viewer._scale == pytest.approx(1.0)
+
+    # ---- window.close：先收浮层页（窗口还在） ----
+    assert shortcuts.trigger("Ctrl+W") == (True,)
+    assert built.window.overlay.is_blank() is True
+    assert viewer.is_detail_open is False
+
+    # 详情页收起后，asset.delete 回到网格那一格
+    assert shortcuts.trigger("Delete") == (True,)
+    assert built.ops.trash_calls == [[str(asset.uuid)]]
+
+
+def test_unbound_by_default_commands_can_be_bound_and_drive_the_ui(
+        stack, qapp, make_image):
+    """随包表里写成 ``= []`` 的 6 条命令：给个键位就能用。"""
+    first = make_asset(title="one.jpg")
+    second = make_asset(title="two.jpg")
+    built = stack(
+        albums=[make_album()],
+        assets=[first, second],
+        paths={
+            str(first.uuid): make_image("one.png"),
+            str(second.uuid): make_image("two.png"),
+        },
+    )
+    shortcuts = _install_shortcuts(built)
+    for command, key in (
+            ("window.album", "Ctrl+1"),
+            ("viewer.next", "Alt+Right"),
+            ("content.preview", "Ctrl+Return"),
+    ):
+        shortcuts.bind_command(command, key)
+
+    # window.album：打开 → 再按收起（返回值 = 现在是否在前台）
+    assert shortcuts.trigger("Ctrl+1") == (True,)
+    assert built.window.overlay.currentWidget() is built.window.album
+    assert shortcuts.trigger("Ctrl+1") == (False,)
+    assert built.window.overlay.is_blank() is True
+
+    # content.preview：网格光标那一格 → 快速预览（详情页）
+    assert shortcuts.trigger("Ctrl+Return") == (True,)
+    pump(qapp)
+    assert built.window.overlay.currentWidget() is built.window.detail
+    assert built.window.detail.is_preview_mode is True
+
+    # viewer.next：详情页翻到下一张
+    viewer = built.child("viewer")
+    assert viewer.current_asset_uuid == str(first.uuid)
+    assert shortcuts.trigger("Alt+Right") == (True,)
+    pump(qapp)
+    assert viewer.current_asset_uuid == str(second.uuid)

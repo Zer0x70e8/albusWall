@@ -6,8 +6,8 @@
 
 * 缩略图文件**不是**正方形：``service/thumbnail/renderer.py`` 用
   ``PIL.Image.thumbnail`` 生成，保持原始宽高比（长边等于 spec 边长）；
-* 虚拟滚动网格的默认委托 ``PixmapCellDelegate`` 用
-  ``drawPixmap(rect, pixmap)`` 直接铺满正方形格子，会把非方图**拉伸变形**；
+* 网格委托 ``InfoCellDelegate`` 用 ``drawPixmap(rect, pixmap)`` 直接铺满
+  正方形格子，会把非方图**拉伸变形**；
 * ``QListView`` 的 IconMode + ``QIcon`` 缩放，也会保持宽高比，留下空白边。
 
 三处都要求「格子是方的、图也要是方的」，所以统一在 presenter 里把图

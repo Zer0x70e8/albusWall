@@ -280,8 +280,15 @@ python -m pytest tests/test_configue -q # 配置包
   会在 `load()` 时报 `read_failed`（no backend registered）。
 - **`[configue] include` 多文件合并**：未移植。
 - **N 层 path**：只支持 `section.key` 两层；`("ui", "theme", "color")` 不支持。
-- **`path.theme` 当前无消费者**：随包 `conf.ini` 仍保留 `theme = ${path:config}/theme`；
-  读它的 UI 代码（`ui/bootstrap.py` 等）在本轮重构中被移除，新包只保证该值能读出来。
+- **~~`path.theme` 当前无消费者~~（已补上）**：UI 主题改回走配置器的 `${...}`
+  组合式 —— `[path]` 放目录（`theme` / `icons`）、`[files]` 放文件名
+  （`main_window_qss` + 各图标文件名）、`[ui]` 用插值把两者拼成绝对路径
+  （`style_sheet` / `app_icon` / `album_button` / …）。因此 `[ui] theme` 一个键
+  就能让样式表与全部图标路径一起切走，UI 侧不再有硬编码的文件名。
+  实现要点见 `albuswall/ui/presenter/theme.py` 与
+  `common/constants/ui.py`；`UiSelection` 之所以在 `configue/bootstrap.py` 里
+  提前声明 `[ui] theme` 的默认值，是因为 `load()` 的 `check_all()` 会展开文件里
+  所有字符串节点，`${ui:theme}` 在加载期就必须能解析。
 - **`[logger]` 旧键不再被读取**：`[logger] level`、`[files] logger`、`[logger] _config`
   已废弃；`_config` 这个下划线 key 在新模型里既不能声明（`@configclass` 跳过 `_` 开头）
   也不能经树视图访问（`_FileView` / `_SectionView` 屏蔽 `_` 开头）。

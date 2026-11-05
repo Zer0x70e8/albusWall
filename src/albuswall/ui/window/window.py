@@ -32,10 +32,11 @@ from .utils import FocusIsolator
 __all__ = ["Window"]
 
 #: 带这些修饰键的 Esc 不参与窗口的 Esc 层级（留给其它消费者）。
+# noinspection unsupported-operator
 _ESCAPE_IGNORED_MODIFIERS = (
-    Qt.KeyboardModifier.ControlModifier
-    | Qt.KeyboardModifier.AltModifier
-    | Qt.KeyboardModifier.MetaModifier
+        Qt.KeyboardModifier.ControlModifier
+        | Qt.KeyboardModifier.AltModifier
+        | Qt.KeyboardModifier.MetaModifier
 )
 
 
@@ -111,6 +112,7 @@ class Window(QWidget):
         """把窗口标题写进标题栏（``title_bar`` 还没建时静默跳过）。"""
         title_bar = getattr(self, "title_bar", None)
         if title_bar is not None:
+            # noinspection unresolved-references
             title_bar.set_window_title(self.windowTitle())
 
     def changeEvent(self, event):  # noqa: N802 - Qt 命名
@@ -185,7 +187,7 @@ class Window(QWidget):
         # ---- 视图内接线：切页 / 收起 / 退出（都是窗口自身行为，不涉及业务）----
         self.title_bar.album_button.clicked.connect(self.toggle_album)
         self.menu.source_action.triggered.connect(self.toggle_source)
-        self.menu.exit_action.triggered.connect(self._on_exit_requested)
+        self.menu.exit_action.triggered.connect(self.request_exit)
 
         self.album.close_button.clicked.connect(self.close_overlay)
         self.source.close_requested.connect(self.close_overlay)
@@ -221,6 +223,26 @@ class Window(QWidget):
     def close_overlay(self) -> None:
         """收起当前浮层页，回到空白层（内容层重新可交互）。"""
         self.overlay.show_blank()
+
+    def close_layer(self) -> bool:
+        """``window.close``：收起当前浮层页；没有浮层页时关窗口。
+
+        Returns:
+            ``True`` = 只收起了浮层页（窗口还在）；``False`` = 关的是窗口。
+        """
+        if self.overlay.is_blank():
+            self.close()
+            return False
+        self.close_overlay()
+        return True
+
+    def toggle_fullscreen(self) -> bool:
+        """``window.fullscreen``：全屏 / 还原；返回切换**之后**是否全屏。"""
+        if self.isFullScreen():
+            self.showNormal()
+            return False
+        self.showFullScreen()
+        return True
 
     def focus_default_region(self) -> None:
         """把键盘焦点交给内容网格（外部在窗口显示 / 收起浮层时调用）。"""
@@ -261,6 +283,7 @@ class Window(QWidget):
     def cancel_focus(self) -> bool:
         """取消本窗口内的键盘焦点；本来就没有焦点控件时返回 ``False``。"""
         focused = self.focusWidget()
+        # noinspection unreachable-code
         if focused is None:
             return False
         focused.clearFocus()
@@ -308,6 +331,7 @@ class Window(QWidget):
         app = QApplication.instance()
         if app is None:
             return
+        app: QApplication
         focused = app.focusWidget()
         if focused is None or not self._focus_isolator.is_isolated(focused):
             return
@@ -336,8 +360,10 @@ class Window(QWidget):
         else:
             self.overlay.setCurrentWidget(page)
 
-    def _on_exit_requested(self) -> None:
-        """「更多 → 退出」：先请求停事件循环，再关窗口。
+    def request_exit(self) -> None:
+        """「更多 → 退出」（``app.quit`` 快捷键也走这里）：
+
+        先请求停事件循环，再关窗口。
 
         注意 Qt 行为：``quit()`` 会先请求关闭窗口；任一窗口在
         ``closeEvent`` 里 ``ignore()`` 时，这次 quit 会被中止，事件循环

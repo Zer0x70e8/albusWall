@@ -4,414 +4,414 @@
     <context>
         <name>Album</name>
         <message>
-            <location filename="src/albuswall/ui/window/album.py" line="139" />
-            <source>编辑</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/album.py" line="155" />
+            <source>Edit</source>
+            <translation>编辑</translation>
         </message>
     </context>
     <context>
         <name>AlbumPresenter</name>
         <message>
-            <location filename="src/albuswall/ui/presenter/album_presenter.py" line="355" />
-            <source>相册服务不可用</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/album_presenter.py" line="360" />
+            <source>The album service is unavailable</source>
+            <translation>相册服务不可用</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/album_presenter.py" line="357" />
-            <source>新建相册</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/album_presenter.py" line="362" />
+            <source>New album</source>
+            <translation>新建相册</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/album_presenter.py" line="376" />
-            <source>重命名相册</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/album_presenter.py" line="381" />
+            <source>Rename album</source>
+            <translation>重命名相册</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/album_presenter.py" line="393" />
-            <source>相册标题：</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/album_presenter.py" line="398" />
+            <source>Album title:</source>
+            <translation>相册标题：</translation>
         </message>
     </context>
     <context>
         <name>AssetThumbDelegate</name>
         <message>
             <location filename="src/albuswall/ui/delegate/asset_thumb_delegate.py" line="166" />
-            <source>今天清除</source>
-            <translation type="unfinished" />
+            <source>Deleted today</source>
+            <translation>今天清除</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/delegate/asset_thumb_delegate.py" line="167" />
-            <source>剩余 %1 天</source>
-            <translation type="unfinished" />
+            <source>%1 days left</source>
+            <translation>剩余 %1 天</translation>
         </message>
     </context>
     <context>
         <name>ContentPresenter</name>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="408" />
-            <source>「回收站」不是相册，无法移动或移除资产</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="495" />
+            <source>“Trash” is not an album, so assets cannot be moved or removed</source>
+            <translation>「回收站」不是相册，无法移动或移除资产</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="413" />
-            <source>移动到指定相册</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="500" />
+            <source>Move to album</source>
+            <translation>移动到指定相册</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="414" />
-            <source>添加到指定相册</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="501" />
+            <source>Add to album</source>
+            <translation>添加到指定相册</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="419" />
-            <source>从本相册移除</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="506" />
+            <source>Remove from this album</source>
+            <translation>从本相册移除</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="429" />
-            <source>（还没有其它相册）</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="437" />
-            <source>新建相册并移入…</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="489" />
-            <source>文件服务不可用</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="502" />
-            <source>回收站视图不支持相册操作</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="517" />
-            <source>资产不在当前相册里，未移动</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="518" />
-            <source>未能添加到相册</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="516" />
+            <source>(no other album yet)</source>
+            <translation>（还没有其它相册）</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/content_presenter.py" line="524" />
-            <source>已移动到「{album}」</source>
-            <translation type="unfinished" />
+            <source>New album and move into it…</source>
+            <translation>新建相册并移入…</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="525" />
-            <source>已移动</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="576" />
+            <source>The file service is unavailable</source>
+            <translation>文件服务不可用</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="528" />
-            <source>已添加到「{album}」</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="589" />
+            <source>Album actions are unavailable in the trash view</source>
+            <translation>回收站视图不支持相册操作</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="529" />
-            <source>已添加</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="604" />
+            <source>The asset is not in the current album; nothing was moved</source>
+            <translation>资产不在当前相册里，未移动</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="546" />
-            <source>资产不在当前相册里</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="605" />
+            <source>Could not add to the album</source>
+            <translation>未能添加到相册</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="549" />
-            <source>已从本相册移除</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="611" />
+            <source>Moved to “{album}”</source>
+            <translation>已移动到「{album}」</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="555" />
-            <source>相册服务不可用</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="612" />
+            <source>Moved</source>
+            <translation>已移动</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="571" />
-            <source>新建相册</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="615" />
+            <source>Added to “{album}”</source>
+            <translation>已添加到「{album}」</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="572" />
-            <source>相册标题：</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="616" />
+            <source>Added</source>
+            <translation>已添加</translation>
+        </message>
+        <message>
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="633" />
+            <source>The asset is not in the current album</source>
+            <translation>资产不在当前相册里</translation>
+        </message>
+        <message>
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="636" />
+            <source>Removed from this album</source>
+            <translation>已从本相册移除</translation>
+        </message>
+        <message>
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="642" />
+            <source>The album service is unavailable</source>
+            <translation>相册服务不可用</translation>
+        </message>
+        <message>
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="658" />
+            <source>New album</source>
+            <translation>新建相册</translation>
+        </message>
+        <message>
+            <location filename="src/albuswall/ui/presenter/content_presenter.py" line="659" />
+            <source>Album title:</source>
+            <translation>相册标题：</translation>
         </message>
     </context>
     <context>
         <name>Detail</name>
         <message>
-            <location filename="src/albuswall/ui/window/detail.py" line="347" />
-            <source>恢复</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/detail.py" line="359" />
+            <source>Restore</source>
+            <translation>恢复</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/detail.py" line="347" />
-            <source>移入回收站</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/detail.py" line="359" />
+            <source>Move to Trash</source>
+            <translation>移入回收站</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/detail.py" line="365" />
-            <source>多选</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/detail.py" line="377" />
+            <source>Select</source>
+            <translation>多选</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/detail.py" line="366" />
-            <source>收藏</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/detail.py" line="378" />
+            <source>Favorite</source>
+            <translation>收藏</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/detail.py" line="367" />
-            <source>信息</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/detail.py" line="379" />
+            <source>Info</source>
+            <translation>信息</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/detail.py" line="368" />
-            <source>编辑</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/detail.py" line="380" />
+            <source>Edit</source>
+            <translation>编辑</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/detail.py" line="446" />
-            <source>空格退出 · K 播放 / 暂停</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/detail.py" line="485" />
+            <source>Space to exit · K to play / pause</source>
+            <translation>空格退出 · K 播放 / 暂停</translation>
         </message>
     </context>
     <context>
         <name>FloatingSearchBar</name>
         <message>
             <location filename="src/albuswall/ui/widgets/floating_search_bar.py" line="249" />
-            <source>命令模式（未实现）</source>
-            <translation type="unfinished" />
+            <source>Command mode (not implemented)</source>
+            <translation>命令模式（未实现）</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/widgets/floating_search_bar.py" line="250" />
-            <source>输入标签名筛选当前相册...</source>
-            <translation type="unfinished" />
+            <source>Type a tag name to filter the current album...</source>
+            <translation>输入标签名筛选当前相册...</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/widgets/floating_search_bar.py" line="255" />
-            <source>命令模式</source>
-            <translation type="unfinished" />
+            <source>Command mode</source>
+            <translation>命令模式</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/widgets/floating_search_bar.py" line="256" />
-            <source>简单模式</source>
-            <translation type="unfinished" />
+            <source>Simple mode</source>
+            <translation>简单模式</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/widgets/floating_search_bar.py" line="273" />
-            <source>搜索</source>
-            <translation type="unfinished" />
+            <source>Search</source>
+            <translation>搜索</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/widgets/floating_search_bar.py" line="274" />
-            <source>关闭搜索栏</source>
-            <translation type="unfinished" />
+            <source>Close search bar</source>
+            <translation>关闭搜索栏</translation>
         </message>
     </context>
     <context>
         <name>InformationPanel</name>
         <message>
             <location filename="src/albuswall/ui/window/panel.py" line="121" />
-            <source>关闭</source>
-            <translation type="unfinished" />
+            <source>Close</source>
+            <translation>关闭</translation>
         </message>
     </context>
     <context>
         <name>IngestSource</name>
         <message>
-            <location filename="src/albuswall/ui/window/source/core.py" line="174" />
-            <source>应用</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/core.py" line="201" />
+            <source>Apply</source>
+            <translation>应用</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/core.py" line="175" />
-            <source>添加</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/core.py" line="202" />
+            <source>Add</source>
+            <translation>添加</translation>
         </message>
     </context>
     <context>
         <name>IngestSourceDetailWidget</name>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="357" />
-            <source>元信息</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="417" />
+            <source>Meta info</source>
+            <translation>元信息</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="358" />
-            <source>标题</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="418" />
+            <source>Title</source>
+            <translation>标题</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="359" />
-            <source>新建导入源</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="419" />
+            <source>New ingest source</source>
+            <translation>新建导入源</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="360" />
-            <source>描述</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="420" />
+            <source>Description</source>
+            <translation>描述</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="361" />
-            <source>示例</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="421" />
+            <source>Example</source>
+            <translation>示例</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="362" />
-            <source>标签：</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="422" />
+            <source>Tags:</source>
+            <translation>标签：</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="363" />
-            <source>标签1</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="423" />
+            <source>Tag 1</source>
+            <translation>标签1</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="364" />
-            <source>添加</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="424" />
+            <source>Add</source>
+            <translation>添加</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="367" />
-            <source>导入源</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="427" />
+            <source>Ingest Source</source>
+            <translation>导入源</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="368" />
-            <source>浏览</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="428" />
+            <source>Browse</source>
+            <translation>浏览</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="369" />
-            <source>源路径（图库路径）</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="429" />
+            <source>Source path (library path)</source>
+            <translation>源路径（图库路径）</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="370" />
-            <source>文件类型</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="430" />
+            <source>File type(s)</source>
+            <translation>文件类型</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="373" />
-            <source>文件类型校验方式</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="433" />
+            <source>File type verification method</source>
+            <translation>文件类型校验方式</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="374" />
-            <source>后缀检查</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="434" />
+            <source>Suffix check</source>
+            <translation>后缀检查</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="376" />
-            <source>魔数检查</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="436" />
+            <source>Magic number check</source>
+            <translation>魔数检查</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="378" />
-            <source>子文件夹递归</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="438" />
+            <source>Subfolder recursion</source>
+            <translation>子文件夹递归</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="380" />
-            <source>子文件夹递归深度</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="440" />
+            <source>Subfolder recursion depth</source>
+            <translation>子文件夹递归深度</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="381" />
-            <source>不限</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="441" />
+            <source>No limit</source>
+            <translation>不限</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="384" />
-            <source>触发器</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="444" />
+            <source>Triggers</source>
+            <translation>触发器</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="385" />
-            <source>定时更新</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="445" />
+            <source>Scheduled update</source>
+            <translation>定时更新</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="386" />
-            <source>模式</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="446" />
+            <source>Mode</source>
+            <translation>模式</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="388" />
-            <source>定时时间</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="448" />
+            <source>Scheduled time</source>
+            <translation>定时时间</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="390" />
-            <source>间隔时间</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="450" />
+            <source>Interval time</source>
+            <translation>间隔时间</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="391" />
-            <source>例如 30m 或 1h</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="451" />
+            <source>e.g., 30m or 1h</source>
+            <translation>例如 30m 或 1h</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="394" />
-            <source>设备插入触发器</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="454" />
+            <source>Device insertion trigger</source>
+            <translation>设备插入触发器</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="395" />
-            <source>目标</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="455" />
+            <source>Target</source>
+            <translation>目标</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="397" />
-            <source>自动挂载（仅 Linux，需要权限）</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="457" />
+            <source>Auto-mount (Linux only, requires permissions)</source>
+            <translation>自动挂载（仅 Linux，需要权限）</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="398" />
-            <source>挂载点</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="458" />
+            <source>Mount point</source>
+            <translation>挂载点</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="475" />
-            <source>选择源目录</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/source/detail_widget.py" line="535" />
+            <source>Select source directory</source>
+            <translation>选择源目录</translation>
         </message>
     </context>
     <context>
         <name>Menu</name>
         <message>
             <location filename="src/albuswall/ui/window/menu.py" line="44" />
-            <source>导入源</source>
-            <translation type="unfinished" />
+            <source>Import Source</source>
+            <translation>导入源</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/window/menu.py" line="45" />
-            <source>设置</source>
-            <translation type="unfinished" />
+            <source>Settings</source>
+            <translation>设置</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/window/menu.py" line="46" />
-            <source>退出</source>
-            <translation type="unfinished" />
+            <source>Quit</source>
+            <translation>退出</translation>
         </message>
     </context>
     <context>
         <name>MetadataModel</name>
         <message>
             <location filename="src/albuswall/ui/model/metadata_model.py" line="217" />
-            <source>是</source>
-            <translation type="unfinished" />
+            <source>Yes</source>
+            <translation>是</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/model/metadata_model.py" line="217" />
-            <source>否</source>
-            <translation type="unfinished" />
+            <source>No</source>
+            <translation>否</translation>
         </message>
         <message>
             <source>标题</source>
@@ -470,217 +470,217 @@
         <name>SearchPresenter</name>
         <message>
             <location filename="src/albuswall/ui/presenter/search_presenter.py" line="151" />
-            <source>命令模式尚未实现</source>
-            <translation type="unfinished" />
+            <source>Command mode is not implemented yet</source>
+            <translation>命令模式尚未实现</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/search_presenter.py" line="162" />
-            <source>当前相册没有匹配的标签：{text}</source>
-            <translation type="unfinished" />
+            <source>No matching tags in the current album: {text}</source>
+            <translation>当前相册没有匹配的标签：{text}</translation>
         </message>
     </context>
     <context>
         <name>SearchSuggestionPopup</name>
         <message>
             <location filename="src/albuswall/ui/widgets/floating_search_bar.py" line="77" />
-            <source>无匹配标签</source>
-            <translation type="unfinished" />
+            <source>No matching tags</source>
+            <translation>无匹配标签</translation>
         </message>
     </context>
     <context>
         <name>SourcePresenter</name>
         <message>
             <location filename="src/albuswall/ui/presenter/source_presenter.py" line="156" />
-            <source>未命名导入源</source>
-            <translation type="unfinished" />
+            <source>Untitled ingest source</source>
+            <translation>未命名导入源</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/source_presenter.py" line="229" />
-            <source>导入源服务不可用</source>
-            <translation type="unfinished" />
+            <source>The ingest source service is unavailable</source>
+            <translation>导入源服务不可用</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/source_presenter.py" line="301" />
-            <source>启用</source>
-            <translation type="unfinished" />
+            <source>Enable</source>
+            <translation>启用</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/source_presenter.py" line="301" />
-            <source>禁用</source>
-            <translation type="unfinished" />
+            <source>Disable</source>
+            <translation>禁用</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/source_presenter.py" line="307" />
-            <source>恢复</source>
-            <translation type="unfinished" />
+            <source>Restore</source>
+            <translation>恢复</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/source_presenter.py" line="308" />
-            <source>确认删除</source>
-            <translation type="unfinished" />
+            <source>Confirm delete</source>
+            <translation>确认删除</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/source_presenter.py" line="320" />
-            <source>删除</source>
-            <translation type="unfinished" />
+            <source>Delete</source>
+            <translation>删除</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/source_presenter.py" line="339" />
-            <source>虚拟根导入源不可删除</source>
-            <translation type="unfinished" />
+            <source>A virtual root ingest source cannot be deleted</source>
+            <translation>虚拟根导入源不可删除</translation>
         </message>
     </context>
     <context>
         <name>TagBar</name>
         <message>
-            <location filename="src/albuswall/ui/window/tagbar.py" line="200" />
-            <source>标签名，可用 / 分层</source>
-            <translation type="unfinished" />
-        </message>
-        <message>
             <location filename="src/albuswall/ui/window/tagbar.py" line="201" />
-            <source>应用</source>
-            <translation type="unfinished" />
+            <source>Tag name; use / for hierarchy</source>
+            <translation>标签名，可用 / 分层</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/window/tagbar.py" line="202" />
-            <source>添加到当前图片</source>
-            <translation type="unfinished" />
+            <source>Apply</source>
+            <translation>应用</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/window/tagbar.py" line="203" />
-            <source>标签树</source>
-            <translation type="unfinished" />
+            <source>Add to the current image</source>
+            <translation>添加到当前图片</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/window/tagbar.py" line="204" />
-            <source>新建</source>
-            <translation type="unfinished" />
+            <source>Tag tree</source>
+            <translation>标签树</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/window/tagbar.py" line="205" />
-            <source>新建标签</source>
-            <translation type="unfinished" />
+            <source>New</source>
+            <translation>新建</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/tagbar.py" line="307" />
-            <source>新建子标签</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/tagbar.py" line="206" />
+            <source>New tag</source>
+            <translation>新建标签</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/tagbar.py" line="307" />
-            <source>新建根标签</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/tagbar.py" line="309" />
+            <source>New child tag</source>
+            <translation>新建子标签</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/tagbar.py" line="313" />
-            <source>重命名标签</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/tagbar.py" line="309" />
+            <source>New root tag</source>
+            <translation>新建根标签</translation>
         </message>
         <message>
-            <location filename="src/albuswall/ui/window/tagbar.py" line="316" />
-            <source>删除标签</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/window/tagbar.py" line="315" />
+            <source>Rename tag</source>
+            <translation>重命名标签</translation>
+        </message>
+        <message>
+            <location filename="src/albuswall/ui/window/tagbar.py" line="318" />
+            <source>Delete tag</source>
+            <translation>删除标签</translation>
         </message>
     </context>
     <context>
         <name>TagEditDialog</name>
         <message>
             <location filename="src/albuswall/ui/dialog/tag_edit_dialog.py" line="86" />
-            <source>新建标签</source>
-            <translation type="unfinished" />
+            <source>New tag</source>
+            <translation>新建标签</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/dialog/tag_edit_dialog.py" line="88" />
-            <source>重命名标签</source>
-            <translation type="unfinished" />
+            <source>Rename tag</source>
+            <translation>重命名标签</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/dialog/tag_edit_dialog.py" line="89" />
-            <source>名称</source>
-            <translation type="unfinished" />
+            <source>Name</source>
+            <translation>名称</translation>
         </message>
     </context>
     <context>
         <name>TagEditorPresenter</name>
         <message>
             <location filename="src/albuswall/ui/presenter/tag_editor_presenter.py" line="81" />
-            <source>父标签不存在</source>
-            <translation type="unfinished" />
+            <source>The parent tag does not exist</source>
+            <translation>父标签不存在</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/tag_editor_presenter.py" line="95" />
-            <source>标签不存在</source>
-            <translation type="unfinished" />
+            <source>The tag does not exist</source>
+            <translation>标签不存在</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/tag_editor_presenter.py" line="122" />
-            <source>标签含子标签</source>
-            <translation type="unfinished" />
+            <source>The tag has child tags</source>
+            <translation>标签含子标签</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/tag_editor_presenter.py" line="123" />
-            <source>该标签下有 {count} 个子标签，是否连同子标签一起删除？</source>
-            <translation type="unfinished" />
+            <source>This tag has {count} child tags. Delete them as well?</source>
+            <translation>该标签下有 {count} 个子标签，是否连同子标签一起删除？</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/tag_editor_presenter.py" line="155" />
-            <source>父标签仍在回收站</source>
-            <translation type="unfinished" />
+            <source>Parent tag is still in the trash</source>
+            <translation>父标签仍在回收站</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/presenter/tag_editor_presenter.py" line="156" />
-            <source>标签已恢复，但父标签仍在回收站，当前为孤儿状态。</source>
-            <translation type="unfinished" />
+            <source>The tag was restored, but its parent is still in the trash; it is currently orphaned.</source>
+            <translation>标签已恢复，但父标签仍在回收站，当前为孤儿状态。</translation>
         </message>
     </context>
     <context>
         <name>TitleBar</name>
         <message>
             <location filename="src/albuswall/ui/window/titlebar.py" line="316" />
-            <source>相册</source>
-            <translation type="unfinished" />
+            <source>Album</source>
+            <translation>相册</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/window/titlebar.py" line="318" />
-            <source>搜索</source>
-            <translation type="unfinished" />
+            <source>Search</source>
+            <translation>搜索</translation>
         </message>
         <message>
             <location filename="src/albuswall/ui/window/titlebar.py" line="320" />
-            <source>更多</source>
-            <translation type="unfinished" />
+            <source>More</source>
+            <translation>更多</translation>
         </message>
     </context>
     <context>
         <name>ViewerPresenter</name>
         <message>
             <location filename="src/albuswall/ui/presenter/viewer_presenter.py" line="493" />
-            <source>该功能尚未实现</source>
-            <translation type="unfinished" />
+            <source>This feature is not implemented yet</source>
+            <translation>该功能尚未实现</translation>
         </message>
     </context>
     <context>
         <name>WindowPresenter</name>
         <message>
-            <location filename="src/albuswall/ui/presenter/window_presenter.py" line="211" />
-            <source>设置页尚未实现</source>
-            <translation type="unfinished" />
+            <location filename="src/albuswall/ui/presenter/window_presenter.py" line="216" />
+            <source>The settings page is not implemented yet</source>
+            <translation>设置页尚未实现</translation>
         </message>
     </context>
     <context>
         <name>InfoCellDelegate</name>
         <message>
-            <source>剩余 {days} 天</source>
-            <translation type="unfinished" />
+            <source>%1 days left</source>
+            <translation>剩余 %1 天</translation>
         </message>
         <message>
-            <source>今天删除</source>
-            <translation type="unfinished" />
+            <source>Deleted today</source>
+            <translation>今天清除</translation>
         </message>
         <message>
-            <source>已过期</source>
-            <translation type="unfinished" />
+            <source>Expired</source>
+            <translation>已过期</translation>
         </message>
     </context>
     <context>

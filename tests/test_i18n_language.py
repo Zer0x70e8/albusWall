@@ -88,11 +88,21 @@ def test_reset_returns_to_source(manager):
 
 
 def test_translator_translates(manager):
+    """源文是英文：en_US 直接回退源文，zh_CN 才带英文 → 中文的条目。"""
+    from PySide6.QtCore import QCoreApplication
+
     manager.set_language("en_US")
-    tr = manager.translator
-    assert tr is not None
-    assert tr.translate("TitleBar", "相册") == "Album"
-    assert tr.translate("Menu", "退出") == "Quit"
+    en = manager.translator
+    assert en is not None
+    assert en.translate("TitleBar", "Album") == ""
+    assert QCoreApplication.translate("TitleBar", "Album") == "Album"
+    assert QCoreApplication.translate("Menu", "Quit") == "Quit"
+
+    manager.set_language("zh_CN")
+    zh = manager.translator
+    assert zh is not None
+    assert zh.translate("TitleBar", "Album") == "相册"
+    assert QCoreApplication.translate("Menu", "Quit") == "退出"
 
 
 # ==================== 运行期切换（真实窗口） ====================
@@ -105,9 +115,10 @@ def test_switching_updates_live_widgets(qapp, manager):
     window.show()
     qapp.processEvents()
     try:
-        # 默认（源文）是中文
-        assert window.title_bar.album_button.text() == "相册"
-        assert window.menu.source_action.text() == "导入源"
+        # 默认（没装翻译器）显示英文源文
+        assert window.title_bar.album_button.text() == "Album"
+        assert window.menu.source_action.text() == "Import Source"
+        assert window.detail.trash_button.text() == "Move to Trash"
 
         assert manager.set_language("en_US") is True
         qapp.processEvents()
@@ -119,6 +130,7 @@ def test_switching_updates_live_widgets(qapp, manager):
         qapp.processEvents()
         assert window.title_bar.album_button.text() == "相册"
         assert window.menu.source_action.text() == "导入源"
+        assert window.detail.trash_button.text() == "移入回收站"
     finally:
         window.close()
 

@@ -83,10 +83,10 @@ class TagEditDialog(Retranslatable, QDialog):
         if self._explicit_title:
             self.setWindowTitle(self._explicit_title)
         elif self._mode is TagEditMode.CREATE:
-            self.setWindowTitle(self.tr("新建标签"))
+            self.setWindowTitle(self.tr("New tag"))
         else:
-            self.setWindowTitle(self.tr("重命名标签"))
-        self.prompt_label.setText(self.tr("名称"))
+            self.setWindowTitle(self.tr("Rename tag"))
+        self.prompt_label.setText(self.tr("Name"))
 
     # ------------------------------------------------------------------ #
     # 数据

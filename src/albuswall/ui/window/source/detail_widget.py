@@ -414,54 +414,54 @@ class IngestSourceDetailWidget(Retranslatable, QFrame):
         注意：下拉框的条目要按索引改文案，否则会把用户的当前选择重置回第一项。
         """
         # ---- meta ----
-        self.grp_meta.setTitle(self.tr("元信息"))
-        self.title_label.setText(self.tr("标题"))
-        self.title_line_edit.setPlaceholderText(self.tr("新建导入源"))
-        self.description_label.setText(self.tr("描述"))
-        self.description_line_edit.setPlaceholderText(self.tr("示例"))
-        self.tags_label.setText(self.tr("标签："))
-        self.tags_line_edit.setPlaceholderText(self.tr("标签1"))
-        self.tags_button.setText(self.tr("添加"))
+        self.grp_meta.setTitle(self.tr("Meta info"))
+        self.title_label.setText(self.tr("Title"))
+        self.title_line_edit.setPlaceholderText(self.tr("New ingest source"))
+        self.description_label.setText(self.tr("Description"))
+        self.description_line_edit.setPlaceholderText(self.tr("Example"))
+        self.tags_label.setText(self.tr("Tags:"))
+        self.tags_line_edit.setPlaceholderText(self.tr("Tag 1"))
+        self.tags_button.setText(self.tr("Add"))
 
         # ---- source ----
-        self.grp_source.setTitle(self.tr("导入源"))
-        self.source_path_browser_button.setText(self.tr("浏览"))
-        self.source_path_label.setText(self.tr("源路径（图库路径）"))
-        self.file_type_label.setText(self.tr("文件类型"))
-        self.file_type_add_button.setText(self.tr("添加"))
+        self.grp_source.setTitle(self.tr("Ingest Source"))
+        self.source_path_browser_button.setText(self.tr("Browse"))
+        self.source_path_label.setText(self.tr("Source path (library path)"))
+        self.file_type_label.setText(self.tr("File type(s)"))
+        self.file_type_add_button.setText(self.tr("Add"))
         self.file_type_check_label.setText(
-            self.tr("文件类型校验方式"))
-        self.file_type_check_s_radio_button.setText(self.tr("后缀检查"))
+            self.tr("File type verification method"))
+        self.file_type_check_s_radio_button.setText(self.tr("Suffix check"))
         self.file_type_check_mg_radio_button.setText(
-            self.tr("魔数检查"))
+            self.tr("Magic number check"))
         self.subfolder_recursion_label.setText(
-            self.tr("子文件夹递归"))
+            self.tr("Subfolder recursion"))
         self.subfolder_recursion_depth_label.setText(
-            self.tr("子文件夹递归深度"))
-        self.subfolder_recursion_depth_check_box.setText(self.tr("不限"))
+            self.tr("Subfolder recursion depth"))
+        self.subfolder_recursion_depth_check_box.setText(self.tr("No limit"))
 
         # ---- triggers ----
-        self.grp_triggers.setTitle(self.tr("触发器"))
-        self.grp_scheduled.setTitle(self.tr("定时更新"))
-        self.update_mode_label.setText(self.tr("模式"))
+        self.grp_triggers.setTitle(self.tr("Triggers"))
+        self.grp_scheduled.setTitle(self.tr("Scheduled update"))
+        self.update_mode_label.setText(self.tr("Mode"))
         self._retranslate_update_mode_combo()
-        self.scheduled_time_label.setText(self.tr("定时时间"))
+        self.scheduled_time_label.setText(self.tr("Scheduled time"))
         self.scheduled_time_edit.setPlaceholderText("HH:MM")
-        self.interval_time_label.setText(self.tr("间隔时间"))
-        self.interval_time_edit.setPlaceholderText(self.tr("例如 30m 或 1h"))
+        self.interval_time_label.setText(self.tr("Interval time"))
+        self.interval_time_edit.setPlaceholderText(self.tr("e.g., 30m or 1h"))
 
         self.grp_device_insertion_trigger.setTitle(
-            self.tr("设备插入触发器"))
-        self.target_label.setText(self.tr("目标"))
+            self.tr("Device insertion trigger"))
+        self.target_label.setText(self.tr("Target"))
         self.auto_mount_label.setText(
-            self.tr("自动挂载（仅 Linux，需要权限）"))
-        self.mount_point_label.setText(self.tr("挂载点"))
+            self.tr("Auto-mount (Linux only, requires permissions)"))
+        self.mount_point_label.setText(self.tr("Mount point"))
         self.mount_point_edit.setPlaceholderText(
             "/media/example/auto_import")
 
     def _retranslate_update_mode_combo(self) -> None:
         """重写「更新模式」两个条目，保留当前选择。"""
-        labels = (self.tr("定时时间"), self.tr("间隔时间"))
+        labels = (self.tr("Scheduled time"), self.tr("Interval time"))
         blocked = self.update_mode_combo.blockSignals(True)
         try:
             current = self.update_mode_combo.currentIndex()
@@ -532,7 +532,7 @@ class IngestSourceDetailWidget(Retranslatable, QFrame):
 
     def _on_browse_source_path(self) -> None:
         path = QFileDialog.getExistingDirectory(
-            self, self.tr("选择源目录"),
+            self, self.tr("Select source directory"),
             self.source_path_line_edit.text() or "",
         )
         if path:

@@ -307,25 +307,25 @@ class TitleBar(Retranslatable, QWidget):
         }.get(name)
 
     def _default_text(self, name: str) -> str:
-        """按钮默认文案。
+        """按钮默认文案（已本地化）。
 
-        源文写中文（默认语言是 zh_CN，不装翻译器也可读）；这里保持字面量
-        写法 —— ``pyside6-lupdate`` 只提取字面量 ``tr("...")``。
+        源文写英文；这里保持字面量写法 —— ``pyside6-lupdate`` 只提取字面量
+        ``tr("...")``。
         """
         if name == "album":
-            return self.tr("相册")
+            return self.tr("Album")
         if name == "search":
-            return self.tr("搜索")
+            return self.tr("Search")
         if name == "extra":
-            return self.tr("更多")
+            return self.tr("More")
         return ""
 
     def _button_text(self, name: str) -> str:
-        """按钮当前应显示的文本：业务显式文本 > 词典译文 > 中文默认文案。"""
+        """按钮当前应显示的文本：业务显式文本 > 默认文案（已翻译）。"""
         explicit = self._explicit_text.get(name)
         if explicit is not None:
             return explicit
-        return self.tr(self._default_text(name))
+        return self._default_text(name)
 
     # ------------------------------------------------------------------ #
     # 文案

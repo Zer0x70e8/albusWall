@@ -6,8 +6,8 @@
 =============
 界面文案的来源有两类，提取方式不同：
 
-1. **控件 / presenter 里的 ``self.tr(...)``** —— 用 Qt 自带的
-   ``pyside6-lupdate`` 从 Python 源码里提取，上下文就是类名；
+1. **控件 / presenter 里的 ``self.tr(...)``** —— 源文统一写英文，用 Qt
+   自带的 ``pyside6-lupdate`` 从 Python 源码里提取，上下文就是类名；
 2. **运行时才确定的文案** —— 设置树的标题 / 标签 / 说明（经
    ``schema_tr``）、model / delegate / 编辑器里的模块级 ``tr()``。它们的
    上下文是固定的字符串常量，lupdate 看不到，只能由本脚本按约定补进
@@ -236,8 +236,8 @@ def _has_cjk(text: str) -> bool:
 def _needs_translation(source: str, language: str) -> bool:
     """该语言下这条源文是否**应该**有译文。
 
-    仓库里的源文是中英混排的：英文源文在 ``en_US`` 下就是成品，中文源文在
-    ``zh_CN`` 下就是成品；反过来才需要译文。
+    源文以英文为主（``self.tr``），少数动态数据仍是中文：英文源文在
+    ``en_US`` 下就是成品，中文源文在 ``zh_CN`` 下就是成品；反过来才需要译文。
     """
     if language.startswith("zh"):
         return not _has_cjk(source)

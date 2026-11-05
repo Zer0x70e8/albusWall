@@ -9,8 +9,7 @@
 
 * **空格** —— ``QAbstractButton``（按钮 / 复选框 / 工具按钮 …）原生只在
   空格上触发点击；
-* **回车 / 小键盘回车** —— ``QAbstractItemView``（列表 / 网格 / 树）与
-  :class:`~albuswall.ui.widgets.virtual_scroll.VirtualScrollWidget` 只在
+* **回车 / 小键盘回车** —— ``QAbstractItemView``（列表 / 网格 / 树）只在
   回车 / 双击上「激活」，而普通窗口里的 ``QPushButton`` 对回车毫无反应。
 
 于是「有的地方用空格确定、有的地方用回车确定」。本模块用一个**应用级事件
@@ -33,10 +32,11 @@
 * 文本框 / 可编辑控件：空格与回车属于输入内容。本过滤器只认
   ``QAbstractButton`` 与 ``QAbstractItemView``，自然不碰它们。
 
-内容视图是**唯一**的例外：空格是「快速预览」、回车是「详情」，两件事分开
-（见 :mod:`albuswall.ui.widgets.virtual_scroll.basic` 的 ``unit_previewed``
-与 :mod:`albuswall.ui.window.detail` 的预览模式）。内容网格不是
-``QAbstractItemView``，所以本过滤器不会把空格改写成「激活」。
+内容视图（``TileView``，也是 ``QAbstractItemView``）是**唯一**的例外：空格是
+「快速预览」、回车是「详情」，两件事分开。它用类属性
+``space_previews = True`` 声明「空格由我自己处理」（见
+:mod:`albuswall.ui.widgets.tile_view`），规则 2 因此跳过它 —— 与本模块装的
+顺序无关，也不依赖窗口里有没有内容层。
 
 用法
 ====
@@ -172,6 +172,9 @@ class ActivationKeyFilter(QObject):
         if event.key() != Qt.Key.Key_Space:
             return False
         if view.state() == QAbstractItemView.State.EditingState:
+            return False
+        # 内容网格自己处理空格（= 快速预览），别把它改写成「激活」。
+        if getattr(view, "space_previews", False):
             return False
         index = view.currentIndex()
         if not index.isValid():

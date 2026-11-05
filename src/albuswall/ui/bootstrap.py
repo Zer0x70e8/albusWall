@@ -13,6 +13,8 @@ main loop → gc → 基础设施 → 服务）；本模块编排**界面**那�
 :func:`setup_ui`           **init** 阶段：phase 1 语言 + ``ui_app`` / ``i18n``
                            → phase 2 主窗口 → phase 3 快捷键注册表（容器登记）
                            → phase 4 presenter（``MainPresenter.bootstrap``）
+                           → phase 5 界面动作登记成快捷键槽 + 载入键位表
+                           + 装上按键过滤器（binder）
 :func:`show_ui`            **loop** 阶段：把容器里的主窗口显示出来
 =========================  ===================================================
 
@@ -30,8 +32,11 @@ main loop → gc → 基础设施 → 服务）；本模块编排**界面**那�
 ``i18n``         界面语言管理器（与模块级 :func:`albuswall.ui.set_language` 同一对象）
 ``main_window``  主窗口（默认 :class:`~albuswall.ui.window.Window`）
 ``presenter``    presenter 树的根（``main_presenter`` 是别名）
-``shortcuts``    快捷键注册表（进程级单例；phase 3 只**登记**，**不**自动
-                 ``load_shortcuts()``——加载时机仍归调用方）
+``shortcuts``    快捷键注册表（进程级单例；phase 5 登记完界面槽之后会
+                 ``load_shortcuts()`` 一次）
+``shortcuts_binder`` 按键过滤器（``QApplication`` 上唯一的那一个；phase 5
+                 装上，作用域 = 主窗口。导航键 / Esc / 文本输入 / 控件
+                 ``keymap_passthrough`` 都会被它主动让渡）
 ===============  ==========================================================
 
 换主窗口 = 换容器里的 ``main_window``
@@ -75,9 +80,10 @@ from albuswall import __title__
 from albuswall.configue import configclass
 
 from .i18n import TranslationManager
+from .keymap import install_shortcut_binder, registry_shortcut_registry
 from .languages import DEFAULT_LANGUAGE
-from .keymap import registry_shortcut_registry
 from .presenter import MainPresenter
+from .presenter.shortcuts import install_ui_shortcuts
 from .utils import install_activation_key_filter
 from .window import Window
 
@@ -89,6 +95,7 @@ if TYPE_CHECKING:
 __all__ = [
     "I18N_KEY",
     "MAIN_WINDOW_KEY",
+    "SHORTCUT_BINDER_KEY",
     "UI_APP_KEY",
     "UIConf",
     "configured_language",
@@ -109,6 +116,8 @@ UI_APP_KEY = "ui_app"
 I18N_KEY = "i18n"
 #: 容器键：主窗口（默认 :class:`~albuswall.ui.window.Window`；可被派生类替换）。
 MAIN_WINDOW_KEY = "main_window"
+#: 容器键：按键过滤器（``QApplication`` 上唯一的那一个）。
+SHORTCUT_BINDER_KEY = "shortcuts_binder"
 
 
 # noinspection bad-assignment
@@ -178,7 +187,7 @@ def ensure_main_window(container: Container) -> Window:
 
 
 def setup_ui(container: Container, app: Application) -> Window:
-    """界面 boot：语言 → 主窗口 → 快捷键注册表 → presenter。
+    """界面 boot：语言 → 主窗口 → 快捷键注册表 → presenter → 快捷键槽。
 
     由 ``albuswall.plugins.builtin_ui`` 在 ``init`` hook 里调用（hook 插在
     ``init`` 列表头部）。这个时机是**必须**的：
@@ -217,6 +226,17 @@ def setup_ui(container: Container, app: Application) -> Window:
 
     # phase 4: presenter 树（在 show 之前套主题，绑定主窗口）
     MainPresenter.bootstrap(container, app=app, window=window)
+
+    # phase 5: 界面动作 → 快捷键槽 → 载入键位表 → 装按键过滤器。
+    # 顺序有讲究：先有槽（handler）再载入（键位），最后才让 binder 接管按键；
+    # binder 装在 activation_key_filter（phase 1）之后，Qt 后装先跑，所以
+    # 真实按键先过 binder，被改写的合成空格（非自发事件）不会再触发一遍。
+    try:
+        shortcuts = install_ui_shortcuts(container)
+        binder = install_shortcut_binder(app, shortcuts, owner=window)
+        container.set(SHORTCUT_BINDER_KEY, binder)
+    except Exception:  # noqa: BLE001 - 键位配置坏了不该拦住界面启动
+        logger.exception("ui.bootstrap: installing UI shortcuts failed")
 
     logger.debug("ui.bootstrap: main window built")
     return window

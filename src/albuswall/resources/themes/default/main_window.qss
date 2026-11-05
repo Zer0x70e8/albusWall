@@ -468,9 +468,11 @@ CollapsibleGroupBox[collapsed="true"]::title {
 /* ---------------------------------------------------------------------------
  *  1.8  ScrollBar · 细窄半透明（垂直 + 水平）
  * ---------------------------------------------------------------------------
- *  覆盖：IngestSource / Setting / Detail / TagBar / LayerTreePopup 全部滚动条
+ *  覆盖：Content（资产网格）/ IngestSource / Setting / Detail / TagBar /
+ *        LayerTreePopup 全部滚动条
  * --------------------------------------------------------------------------- */
 
+#Content QScrollBar:vertical,
 #IngestSourceScrollArea QScrollBar:vertical,
 #SettingSetting QScrollBar:vertical,
 #DetailItemLineViewer QScrollBar:vertical,
@@ -482,6 +484,7 @@ CollapsibleGroupBox[collapsed="true"]::title {
     border: none;
 }
 
+#Content QScrollBar::handle:vertical,
 #IngestSourceScrollArea QScrollBar::handle:vertical,
 #SettingSetting QScrollBar::handle:vertical,
 #DetailItemLineViewer QScrollBar::handle:vertical,
@@ -492,6 +495,7 @@ CollapsibleGroupBox[collapsed="true"]::title {
     border-radius: 4px;
 }
 
+#Content QScrollBar::handle:vertical:hover,
 #IngestSourceScrollArea QScrollBar::handle:vertical:hover,
 #SettingSetting QScrollBar::handle:vertical:hover,
 #DetailItemLineViewer QScrollBar::handle:vertical:hover,
@@ -500,6 +504,7 @@ CollapsibleGroupBox[collapsed="true"]::title {
     background: rgba(255, 255, 255, 0.60);
 }
 
+#Content QScrollBar::handle:vertical:pressed,
 #IngestSourceScrollArea QScrollBar::handle:vertical:pressed,
 #SettingSetting QScrollBar::handle:vertical:pressed,
 #DetailItemLineViewer QScrollBar::handle:vertical:pressed,
@@ -508,9 +513,13 @@ CollapsibleGroupBox[collapsed="true"]::title {
     background: rgba(0, 122, 255, 0.75);
 }
 
+#Content QScrollBar::add-line:vertical,
 #IngestSourceScrollArea QScrollBar::add-line:vertical,
+#Content QScrollBar::sub-line:vertical,
 #IngestSourceScrollArea QScrollBar::sub-line:vertical,
+#Content QScrollBar::add-page:vertical,
 #IngestSourceScrollArea QScrollBar::add-page:vertical,
+#Content QScrollBar::sub-page:vertical,
 #IngestSourceScrollArea QScrollBar::sub-page:vertical,
 #SettingSetting QScrollBar::add-line:vertical,
 #SettingSetting QScrollBar::sub-line:vertical,
@@ -1175,7 +1184,9 @@ QPushButton#DetailCloseButton:focus,
     border-top: 1px solid rgba(160, 160, 160, 0.85);
 }
 
-/* —— 底部：回收站（#AlbumTrashView · QListView，只有虚拟 Trash 相册） —— */
+/* —— 底部：回收站（#AlbumTrashView · QListView，只有虚拟 Trash 相册） ——
+ *  单行列表：左图标（emoji）/ 中间弹簧 / 右边名称，行高由委托决定
+ *  （TrashAlbumDelegate.row_height，默认 40px）。 */
 #AlbumTrashView {
     background-color: transparent;
     border-top: 1px dashed rgba(80, 80, 80, 0.70);
@@ -1184,6 +1195,23 @@ QPushButton#DetailCloseButton:focus,
 
 #AlbumTrashView:hover {
     border-top: 1px dashed rgba(160, 160, 160, 0.85);
+}
+
+/* —— 相册 / 回收站格子：选中态只描边，不铺底色 ——
+ *  相册格子没有文字行（标题画在封面的渐变上），默认的 item 高亮仍会
+ *  铺满整个格子，结果就是「封面下方多出一条半透明蓝边」。
+ *  这里把选中 / hover 的底色和边框全部压掉；选中视觉由委托自绘：
+ *    AlbumCoverDelegate._draw_selection → 贴着封面的圆角蓝色描边
+ *  （描边色见 _DEFAULT_SELECTION_COLOR，可 set_selection_color 覆盖）；
+ *    TrashAlbumDelegate._draw_background → 单行的圆角底色 + 左侧强调条。 */
+#AlbumAlbumView::item,
+#AlbumAlbumView::item:hover,
+#AlbumAlbumView::item:selected,
+#AlbumTrashView::item,
+#AlbumTrashView::item:hover,
+#AlbumTrashView::item:selected {
+    background: transparent;
+    border: none;
 }
 
 /* —— 相册工具按钮（#AlbumAddButton / #AlbumEditButton）  ↳ 由 1.3 提供 —— */
@@ -1851,6 +1879,9 @@ QPushButton#DetailCloseButton:focus,
  *    常态  —— 半透明灰底 + 细白描边
  *    悬停  —— 底色提亮 + 描边加强
  *    按下  —— 底色压暗
+ *  五个按钮都用**文字**：「Favorite」这类长词在 48px 圆里放不下，所以单独
+ *  压小字号（见下方 #DetailFavouriteButton）。主题里的 favorite_icon（心形）
+ *  是网格缩略图的收藏角标，不当按钮图标用。
  *  语义着色（在共用规则之上覆盖）：
  *    Trash      —— 悬停泛红，给出危险暗示
  *    Favourite  —— :checked 实心粉红
@@ -1874,6 +1905,11 @@ QPushButton#DetailCloseButton:focus,
 
     font-size: 1em;
     icon-size: 1.5em;
+}
+
+/* 「Favorite」比另外四个标签长，字号压一点才不会被 48px 圆卡成省略号 */
+#DetailFavouriteButton {
+    font-size: 0.8em;
 }
 
 #DetailMultipleChoiceButton:hover,

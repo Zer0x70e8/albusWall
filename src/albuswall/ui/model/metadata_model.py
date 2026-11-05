@@ -214,7 +214,7 @@ class MetadataModel(QAbstractListModel):
     # ------------------------------------------------------------------ #
     def tr_bool(self, value: Any) -> str:
         """布尔值 → 本地化的「是 / 否」。"""
-        return self.tr("是") if bool(value) else self.tr("否")
+        return self.tr("Yes") if bool(value) else self.tr("No")
 
     def _reset(self, rows: list[tuple[str, str, Any]]) -> None:
         self.beginResetModel()

@@ -9,8 +9,9 @@
    ``start()`` / ``stop()`` 级联到整棵树；
 2. **接线**：子 presenter 彼此不 import、不互相持有，跨 presenter 的流程
    全部在这里用 Qt 信号连起来（见 :meth:`MainPresenter._wire`）：
-   相册切换 → 内容网格 / 搜索作用域；网格激活 → 详情页；标签点击 →
-   搜索过滤；标签结构编辑意图 → 标签编辑器 …… 错误统一转成窗口 toast；
+   相册切换 → 内容网格 / 搜索作用域；网格激活 → 详情页；当前资产
+   （网格光标 / 详情页翻页）→ 标签栏；标签点击 → 搜索过滤；标签结构编辑
+   意图 → 标签编辑器 …… 错误统一转成窗口 toast；
 3. **主题**：读 ``[ui]`` 配置，把内置主题的 QSS 套到窗口上；``set_theme()``
    切换主题并回写配置（配置器会按 ``[main]`` 文件的 autosave 策略落盘）；
 4. **语言**：窗口收到 ``LanguageChange`` 后让每个 presenter 重算自己持有的
@@ -304,6 +305,10 @@ class MainPresenter(Presenter):
         # ---- 标签：chip 点击过滤、结构编辑 ----
         if tagbar is not None and search is not None:
             tagbar.tag_activated.connect(search.apply_filter)
+        # 详情页翻页 / 打开 = 「当前资产」变了：标签栏必须跟着换对象，
+        # 否则详情里左右翻页后标签栏还停在上一个资产上。
+        if viewer is not None and tagbar is not None:
+            viewer.asset_changed.connect(tagbar.set_current_asset)
         if tagbar is not None and tag_editor is not None:
             tagbar.tag_create_requested.connect(tag_editor.create)
             tagbar.tag_rename_requested.connect(tag_editor.rename)
@@ -345,13 +350,12 @@ class MainPresenter(Presenter):
         window_p = self._child_of(WindowPresenter)
         if viewer is None or album is None or album.current_uuid is None:
             return
+        # ``viewer.open`` 自己会广播 ``asset_changed``（打开 / 翻页同一条路），
+        # 标签栏由那里的接线跟随，这里不再单独 set_current_asset。
         viewer.open(ViewerContext(
             album_uuid=album.current_uuid,
             current_asset_uuid=str(asset_uuid),
         ))
-        tagbar = self._child_of(TagBarPresenter)
-        if tagbar is not None:
-            tagbar.set_current_asset(str(asset_uuid))
         if window_p is not None:
             window_p.show_detail()
         if preview:
@@ -454,8 +458,10 @@ class MainPresenter(Presenter):
         """解析并应用主题，返回解析结果。
 
         Args:
-            name: 主题名；``None`` → 按 ``[ui]`` 配置解析
-                （``style_sheet`` 优先，其次 ``theme``）。
+            name: 主题名；``None`` → 按 ``[ui]`` 配置解析：``[ui] style_sheet``
+                展开出的用户主题文件优先，其次随包 ``resources/themes/<name>/``
+                （路径由配置器的 ``${...}`` 组合，见
+                :mod:`albuswall.ui.presenter.theme`）。
 
         不写回配置：启动时套主题是「读」，不是「用户改」。要切换并记住，
         用 :meth:`set_theme`。

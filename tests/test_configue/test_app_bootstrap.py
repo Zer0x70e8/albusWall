@@ -84,6 +84,42 @@ def test_setup_config_declares_path_defaults(tmp_path, container):
     assert tree.files.log == "log_config.ini"
 
 
+def test_setup_config_declares_theme_layout_defaults(tmp_path, container):
+    """主题布局的默认值：``[path] theme/icons`` + ``[files]`` 文件名。
+
+    ``icons`` 用 ``${theme}/${ui:theme}/icons`` 的组合式（与随包 ``conf.ini`` 逐字
+    一致），所以这里读到的已经是展开后的当前主题目录；主题名的默认值来自
+    ``UiSelection``（加载期就登记，见 ``_declare_app_sections``）。
+    """
+    config = _setup(tmp_path, container, content="[files]\ndb = db.db\n")
+    tree = config.tree.main
+
+    theme_root = tmp_path.resolve() / "theme"
+    assert tree.path.theme == theme_root
+    assert tree.path.icons == theme_root / "default" / "icons"
+    assert tree.ui.theme == "default"
+    assert tree.files.main_window_qss == "main_window.qss"
+    assert tree.files.album_button == "album_button.svg"
+    assert tree.files.favorite_icon == "favorite_icon.svg"
+
+
+def test_setup_config_ui_composition_expands(tmp_path, container):
+    """``[ui]`` 的组合式在加载期就能展开（``UiSelection`` 提前给了 ``theme``）。"""
+    write_ini(
+        tmp_path / "config.ini",
+        "[ui]\ntheme = midnight\n"
+        "style_sheet = ${path:theme}/${ui:theme}/${files:main_window_qss}\n"
+        "album_button = ${path:icons}/${files:album_button}\n",
+    )
+    config = setup_config(container, base_dir=tmp_path, portable=True)
+
+    theme_root = tmp_path.resolve() / "theme"
+    assert config.tree.main.ui.style_sheet == str(
+        theme_root / "midnight" / "main_window.qss")
+    assert config.tree.main.ui.album_button == str(
+        theme_root / "midnight" / "icons" / "album_button.svg")
+
+
 def test_setup_config_file_overrides_defaults(tmp_path, container):
     write_ini(tmp_path / "config.ini", "[path]\ndata = /var/data/albuswall\n")
     config = setup_config(container, base_dir=tmp_path, portable=True)
@@ -92,10 +128,10 @@ def test_setup_config_file_overrides_defaults(tmp_path, container):
 
 
 def test_setup_config_interpolation(tmp_path, container):
-    """``${path:config}/theme`` 在新 Resolver 里照常展开。"""
+    """``${path:config}/theme`` 在新 Resolver 里照常展开（``[path]`` 是 Path 类型）。"""
     config = _setup(tmp_path, container)
 
-    assert config.tree.main.path.theme == str(tmp_path.resolve() / "theme")
+    assert config.tree.main.path.theme == tmp_path.resolve() / "theme"
 
 
 def test_setup_config_without_aliases(tmp_path):

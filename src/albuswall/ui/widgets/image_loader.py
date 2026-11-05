@@ -24,7 +24,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QImage, QImageReader, QPixmap
 
-from .virtual_scroll.lru_cache import LRUCache
+from albuswall.infrastructure.lru_cache import LRUCache
 
 
 def _pixmap_bytes(pm: QPixmap) -> int:

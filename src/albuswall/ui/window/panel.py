@@ -118,7 +118,7 @@ class InformationPanel(Retranslatable, QWidget):
     # ------------------------------------------------------------------ #
     def retranslate_ui(self) -> None:
         """重新应用关闭按钮文案；键值标签由模型自己重新翻译。"""
-        self.close_button.setText(self.tr("关闭"))
+        self.close_button.setText(self.tr("Close"))
 
     def changeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
         """语言切换：模型里的标签也一起重建（不是 widget，自己收不到事件）。"""

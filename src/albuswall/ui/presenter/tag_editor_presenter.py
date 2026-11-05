@@ -78,7 +78,7 @@ class TagEditorPresenter(Presenter):
         try:
             self._tag_service.create(name, parent_uuid or None)
         except TagParentNotFound:
-            self.error.emit(self.tr("父标签不存在"))
+            self.error.emit(self.tr("The parent tag does not exist"))
             return
         except TagError as exc:
             self.error.emit(str(exc))
@@ -92,7 +92,7 @@ class TagEditorPresenter(Presenter):
         try:
             tag = self._tag_service.get(tag_uuid)
         except TagNotFound:
-            self.error.emit(self.tr("标签不存在"))
+            self.error.emit(self.tr("The tag does not exist"))
             return
         initial = str(
             getattr(tag, "display_name", "") or getattr(tag, "name", "") or "")
@@ -119,8 +119,8 @@ class TagEditorPresenter(Presenter):
         except TagHasChildren as exc:
             answer = QMessageBox.question(
                 self._window,
-                self.tr("标签含子标签"),
-                self.tr("该标签下有 {count} 个子标签，是否连同子标签一起删除？")
+                self.tr("The tag has child tags"),
+                self.tr("This tag has {count} child tags. Delete them as well?")
                 .format(count=len(exc.children_uuids)),
                 QMessageBox.StandardButton.Yes
                 | QMessageBox.StandardButton.No,
@@ -133,7 +133,7 @@ class TagEditorPresenter(Presenter):
                 self.error.emit(str(nested))
                 return
         except TagNotFound:
-            self.error.emit(self.tr("标签不存在"))
+            self.error.emit(self.tr("The tag does not exist"))
             return
         except TagError as exc:
             self.error.emit(str(exc))
@@ -152,8 +152,8 @@ class TagEditorPresenter(Presenter):
         if result.tag is not None and not result.parent_visible:
             QMessageBox.information(
                 self._window,
-                self.tr("父标签仍在回收站"),
-                self.tr("标签已恢复，但父标签仍在回收站，当前为孤儿状态。"),
+                self.tr("Parent tag is still in the trash"),
+                self.tr("The tag was restored, but its parent is still in the trash; it is currently orphaned."),
             )
         self.changed.emit()
 

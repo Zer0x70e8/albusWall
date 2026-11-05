@@ -1,8 +1,11 @@
 # 快捷键系统（keymap）
 
-> 状态：**只实现了注册层**。代码在 `src/albuswall/ui/keymap/`，默认键位表在
-> `src/albuswall/resources/config/shortcuts.ini`，用户覆盖在
-> `<user config dir>/shortcuts.ini`。**还没接到真实视图上，也没有设置页。**
+> 状态：**已接通真实按键**。代码在 `src/albuswall/ui/keymap/`（解析 / 身份 /
+> 绑定 / 配置 / Qt 事件过滤器），当前界面的 18 条命令由
+> `src/albuswall/ui/presenter/shortcuts.py` 登记成槽，键位表在
+> `src/albuswall/resources/config/shortcuts.ini`（用户覆盖
+> `<user config dir>/shortcuts.ini`）。按 `Ctrl+Q` / `F11` / `G, G` 之类真的
+> 会驱动界面。**仍然没有设置页**（改键位要改文件 + 重启）。
 
 ## 一句话模型
 
@@ -18,20 +21,26 @@
 | 文件 | 职责 |
 | --- | --- |
 | `keymap/__init__.py` | 公开 API（`__all__`）+ 用法 docstring |
-| `keymap/sequence.py` | `KeySequence` / `parse_sequence(s)` / `canonical_sequence` / `format_sequences` / `ShortcutKind` / `MODIFIERS` / `CHORD_SEPARATOR` / `MAX_CHORDS`；本包**唯一** import Qt 的模块（`PySide6.QtGui.QKeySequence`，不碰 `QtWidgets`） |
+| `keymap/sequence.py` | `KeySequence` / `parse_sequence(s)` / `canonical_sequence` / `format_sequences` / `ShortcutKind` / `MODIFIERS` / `CHORD_SEPARATOR` / `MAX_CHORDS`（只碰 `QtGui.QKeySequence`） |
+| `keymap/keys.py` | `KeyAlias`：按键**身份**枚举，一个成员挂着它的全部写法（`Shift+Tab` == `Shift+Backtab` == `Backtab`、`Enter` == `Return`、`Delete` == `Del`）+ `step_identity` / `sequence_identity` / `split_step`；`NAVIGATION_KEYS` / `WIDGET_KEYS` 两张「不归快捷键」的名单 |
 | `keymap/model.py` | `ShortcutBinding`（键位 + 位置参数 + 关键字参数）、`ShortcutSlot`（`id` + `handler` + `help` + 兜底键位/实参）；两个 frozen dataclass，纯数据，不 import Qt |
 | `keymap/registry.py` | `ShortcutRegistry`：槽注册、双向一对多绑定表、`load` / `persist`、与 `albuswall.command` 对接 |
 | `keymap/config.py` | `ShortcutConfig`：默认表 + 用户表读 / 写、记录格式、原子写盘；`default_config_path()` / `user_config_path()` / `DEFAULT_FILE_NAME` / `DEFAULT_SECTION` |
 | `keymap/errors.py` | `KeymapError` / `InvalidKeySequence` / `DuplicateShortcutSlot` / `ShortcutConfigError` |
+| `keymap/qt_binder.py` | `ShortcutBinder`：挂在 `QApplication` 上的事件过滤器，`QKeyEvent` → `KeySequence` → `trigger()`；和弦状态机 + 超时；本包**唯一** import `QtWidgets` 的模块 |
 
-`tests/test_ui_keymap.py` 是可执行规范：行为与边界以它为准。
+`tests/test_ui_keymap.py` 是可执行规范：行为与边界以它为准；按键层由
+`tests/test_ui_keymap_binder.py`（20 个用例：能触发 / 不越界 / 别名 / 安装面），
+界面这一侧的槽登记由 `tests/test_ui_shortcuts.py` 与
+`tests/test_ui_presenter_flow.py` 的「快捷键槽驱动界面」用例守着。
 
 `model.py` **不是** Qt 视图模型，只是两个 dataclass；仓库里没有
 `QAbstractItemModel`、没有设置页需要的行模型。
 
 ## 默认键位（`src/albuswall/resources/config/shortcuts.ini`）
 
-`[shortcuts]` 段，一条命令一行；12 条命令 / 14 个键位。分组是文件里的注释分组。
+`[shortcuts]` 段，一条命令一行；**18 条命令**：12 条有默认键位（14 个键位），
+6 条默认解绑（写成 `= []`，功能在、只是没给键）。分组是文件里的注释分组。
 
 | 分组 | 命令 | 键位 |
 | --- | --- | --- |
@@ -39,17 +48,31 @@
 | application | `app.settings` | `Ctrl+,` |
 | window / view | `window.fullscreen` | `F11`, `Ctrl+Shift+F` |
 | window / view | `window.close` | `Ctrl+W` |
+| window / layer | `window.album` | **默认解绑**（例：`Ctrl+1`） |
+| window / layer | `window.source` | **默认解绑**（例：`Ctrl+2`） |
 | window / view | `view.zoom_in` | `Ctrl++`, `Ctrl+=` |
 | window / view | `view.zoom_out` | `Ctrl+-` |
 | window / view | `view.reset` | `Ctrl+0` |
 | content / view | `content.search` | `Ctrl+F` |
+| content / view | `content.preview` | **默认解绑**（例：`Ctrl+Return`） |
+| content / view | `viewer.next` / `viewer.prev` | **默认解绑**（例：`Alt+Right` / `Alt+Left`） |
 | albums / assets | `album.new` | `Ctrl+N` |
 | albums / assets | `album.rename` | `F2` |
-| albums / assets | `asset.favorite` | `Space` |
+| albums / assets | `asset.favorite` | `Ctrl+D` |
+| albums / assets | `asset.restore` | **默认解绑**（例：`Ctrl+R`） |
 | albums / assets | `asset.delete` | `Delete`（规范化后是 `Del`） |
 
-这些命令只是**数据**：仓库里没有任何代码把 `app.quit` 之类注册成槽，所以当前
-`ShortcutRegistry().load()` 之后 `slots() == ()`，`trigger("Ctrl+Q")` 返回 `()`。
+这些命令都是当前界面**真的实现了**的动作：`ui/presenter/shortcuts.py` 把它们
+逐个登记成槽（见下一节）。全新的 `ShortcutRegistry()` 自己 `load()` 之后仍然
+`slots() == ()` —— 槽只在界面 boot 调过 `install_ui_shortcuts()` 之后才存在。
+
+`asset.favorite` 用 `Ctrl+D` 而不是 `Space`：空格在内容网格里是「快速预览」、
+在按钮上是「点击」，属于控件的键，binder 会主动让渡（见「真实按键」一节）。
+
+**默认解绑（`= []`）** 的 6 条命令是「功能已实现、但默认不给键位」：在
+`<user config dir>/shortcuts.ini` 里把 `[]` 换成键位（如
+`window.album = ["Ctrl+1"]`）就生效，不需要改代码。所以
+`unbound_slots()` 现在报告的就是这 6 条，不是配置漏写。
 
 ## 配置文件格式
 
@@ -146,9 +169,114 @@ registry.persist()                  # 把与默认不同的条目写回用户表
 诊断查询：`commands_for(键)` / `keys_for(命令)` / `binding_for(命令)` /
 `args_for` / `kwargs_for` / `bindings()` / `commands()` /
 `conflicts()`（一键多命令，是能力不是错误）/ `unbound_slots()`（没有任何键位
-指过来的槽，通常是「忘了在默认表里加一行」）。
+指过来的槽：随包表里 `= []` 的那 6 条，或者「新命令忘了在默认表里加一行」）。
+
+## 界面接入：当前 UI 的槽登记
+
+`src/albuswall/ui/presenter/shortcuts.py` 是界面与配置器之间**唯一**的接线点：
+把当前界面的 18 条命令登记成槽（接口），再载入键位表（数据）。它**不**接管
+真实按键，也不认识任何视图控件。
+
+### 落点
+
+| 命令 | 落点（presenter.方法） |
+| --- | --- |
+| `app.quit` | `window.quit`（= 菜单「退出」：`app.quit()` + 关窗口） |
+| `app.settings` | `window.open_settings`（设置页未重建，弹 toast） |
+| `window.fullscreen` | `window.toggle_fullscreen` → `Window.toggle_fullscreen()`（`showFullScreen` / `showNormal`） |
+| `window.close` | `window.close_layer` → `Window.close_layer()`（先收浮层页，没有浮层页才关窗口） |
+| `view.zoom_in` / `view.zoom_out` / `view.reset` | `viewer.zoom_in` / `zoom_out` / `reset_zoom` → `Detail.zoom_*()` → `ImageViewer` |
+| `content.search` | `search.focus_search`（展开搜索栏 + 抢输入框焦点） |
+| `album.new` / `album.rename` | `album.create_album` / `album.rename_current`（弹输入框，与菜单入口同一条路） |
+| `window.album` / `window.source` | `window.toggle_album` / `window.toggle_source`（返回「现在是否在前台」） |
+| `viewer.next` / `viewer.prev` | `viewer.next_asset` / `viewer.previous_asset`（详情页没开时返回 `False`） |
+| `content.preview` | `content.preview_current`（对网格光标那一格并发 `asset_previewed`，与空格同一条出口） |
+| `asset.favorite` | 详情页开着 → `viewer.toggle_favorite`；否则 `content.toggle_favorite`（网格光标那一格） |
+| `asset.restore` | 详情页开着 → `viewer.restore_current`；否则 `content.restore_current` |
+| `asset.delete` | 详情页开着 → `viewer.trash_current`；否则 `content.trash_current` |
+
+### 约束
+
+* **懒解析**：槽的处理函数捕获的是**容器**，触发时才
+  `container.get("presenter")` 并按 `Presenter.name` 找子节点。登记顺序与
+  presenter 构建顺序无关；没有界面（headless / 单测里只有容器）时触发是
+  静默 no-op，返回 `False`（不抛 `KeyError`）；
+* **只指向公开方法**：落点必须是 presenter 的公开接口（`_` 开头一律不许），
+  `tests/test_ui_shortcuts.py` 用结构断言守着，防止改名后静默失效；
+* **`asset.*` 的分流**看 `ViewerPresenter.is_detail_open`（`_ctx` 有值**且**
+  详情页是浮层当前页），不是只看 `_ctx`：浮层被收起后 `_ctx` 还在；
+* **登记时机**：`ui/bootstrap.setup_ui` 的 phase 5（presenter 树建好之后）
+  调 `install_ui_shortcuts(container)` —— 内部 `replace=True` 幂等登记，然后
+  一次 `load_shortcuts(strict=False)`；配置坏了只记日志，不拦界面启动；
+* **缩放只属于详情页**：`view.zoom_*` 没有「网格缩放」语义，详情页没开时
+  返回 `False`。
+
+```python
+from albuswall.ui.keymap import get_default_registry
+
+get_default_registry().trigger("Ctrl+N")            # == album.create_album()
+get_default_registry().trigger("F11")               # == window.toggle_fullscreen()
+get_default_registry().invoke("content.search")     # 按命令触发，同上
+```
+
+## 真实按键：binder
+
+`src/albuswall/ui/keymap/qt_binder.py` 是「按键 → 命令」的最后一段：挂在
+`QApplication` 上的事件过滤器，把 `QKeyEvent` 规范化成 `KeySequence`，在绑定表里
+查（按**身份**匹配，见下）再调 `trigger()`。界面 boot 的 phase 5 装它
+（`container["shortcuts_binder"]`），owner = 主窗口。
+
+不用 `QShortcut`：它只能挂单步按键，和弦要自己攒状态；而且没法表达「这个键
+此刻归控件」。
+
+### 判定顺序（就是 `eventFilter` 的顺序）
+
+| # | 规则 | 为什么 |
+| --- | --- | --- |
+| 1 | 只处理 `KeyPress`；忽略自动重复、纯修饰键、**非自发事件** | 合成事件（`activation_keys` 把回车改写成空格）不能再触发一遍 |
+| 2 | 只在**焦点控件那一遍**处理 | Qt 会把没被消费的按键向父控件冒泡，同一次按键会以「接收者 ≠ 焦点控件」再来一次 |
+| 3 | 作用域 = owner 顶层窗口 | 弹窗 / 菜单里打字不该触发主窗口的快捷键 |
+| 4 | **导航键永不接管**：`Tab` / `Shift+Tab` / 方向键 / `Home` / `End` / `PgUp` / `PgDn` / `Esc` | 焦点链与 Esc 层级归控件和窗口，绑了也不生效 |
+| 5 | 文本输入里的**无修饰键**放行；`keymap_passthrough` 控件上的**空格 / 回车**放行 | 打字、按钮点击、网格快速预览都是控件自己的语义；修饰键组合照常触发 |
+| 6 | **只吞能触发的键**（命中的绑定里至少一个已登记槽） | 占位绑定（命令还没实现 / 插件没加载）不改变现有键盘行为 |
+| 7 | 和弦攒前缀 + 超时（`DEFAULT_CHORD_TIMEOUT_MS` = 1.2s） | `G, G`；前缀既是完整键位又是更长和弦开头时先等超时再退化 |
+| 8 | 同一次按下的重复投递不重复触发 | 见下「重复投递」 |
+
+### 按键身份：`KeyAlias`
+
+Qt 对同一个物理键有多种写法，**配置里写的**与**事件里转出来的**不一致时不能
+靠字符串比较：
+
+| 物理按键 | 配置常见写法 | 事件转出的文本 |
+| --- | --- | --- |
+| `Shift+Tab` | `Shift+Tab` | `Shift+Backtab` |
+| 主回车 | `Enter` | `Return` |
+| 小键盘回车 | `Enter` | `Enter` |
+| `Delete` | `Delete` / `Del` | `Del` |
+
+所以匹配走 `keys.step_identity()`：`(修饰键集合, KeyAlias | 键名)`，一个成员的
+`aliases` 里出现过的任何写法都算同一个键。**不做文本归一**——配置里写
+`Delete`，`keys_for()` 就仍然回显 `Delete`。
+
+### 重复投递
+
+窗口状态刚变化（例如刚 `show()`）时，同一次按下可能被投递两遍（`QTest` 与部分
+平台插件都会这样）。`KeyRelease` 之前同一个键再来一次按下的，视为重复投递，
+直接忽略——真实键盘不可能在没松开的情况下第二次按下同一个键。
+
+### 与其它键盘层的关系
+
+| 层 | 归谁 | 关系 |
+| --- | --- | --- |
+| 焦点链（Tab / 方向键） | Qt | binder 永不接管（规则 4） |
+| Esc 两级（取消焦点 → 收浮层） | `Window.keyPressEvent` | binder 不接管；和弦进行中按 Esc 只放弃前缀 |
+| 空格 / 回车 = 激活 | `utils/activation_keys.py` | binder 让渡（规则 5）；它合成的空格是非自发事件，binder 不理 |
+| 网格光标 / 快速预览 | `widgets/tile_view.py` | `keymap_passthrough` 属性 + 规则 5 |
+| 搜索栏 / 标签树弹窗 | 各自控件 | 弹窗是独立顶层窗口，靠规则 3 排除 |
 
 ## 校验与错误
+
+
 
 | 场景 | 表现 |
 | --- | --- |
@@ -164,7 +292,7 @@ registry.persist()                  # 把与默认不同的条目写回用户表
 `KeymapError` 是整层基类，一条 `except KeymapError` 能兜住；
 `InvalidKeySequence` 同时继承 `ValueError`（键位错本质是值错）。
 
-## 窗口内的「激活 / 确定」键（与 keymap 无关）
+## 窗口内的「激活 / 确定」键（keymap 主动让渡）
 
 窗口里「确定 / 打开 / 激活当前项」不再按控件分键位：**空格与回车等价**。
 实现只有一处——`ui/utils/activation_keys.py` 的应用级事件过滤器，由
@@ -181,11 +309,17 @@ registry.persist()                  # 把与默认不同的条目写回用户表
 * 文本框里的空格 / 回车属于输入内容，过滤器只认 `QAbstractButton` 与
   `QAbstractItemView`，碰不到它们。
 
-**唯一的例外是内容视图**（`Content` 的资产网格，`VirtualScrollWidget`）：
+binder 与这一层不打架：空格 / 回车在 binder 里属于 `KeyAlias.SPACE` /
+`RETURN`（见「真实按键」第 5 条），焦点在文本输入或 `keymap_passthrough`
+控件上时不接管；而本过滤器**改写出来**的空格是非自发事件，binder 直接忽略，
+不会「回车 → 空格 → 又触发一遍快捷键」。
+
+**唯一的例外是内容视图**（`Content` 的资产网格，`TileView`）：
 空格是「快速预览」、回车是「详情」，两个键分开（见 `unit_previewed` /
 `unit_activated`）；预览中再按空格退出预览（回到网格），按回车则升级成
-完整详情页（`Detail.set_preview_mode`）。它**不是** `QAbstractItemView`，
-所以过滤器不会把它的空格改写成「激活」。
+完整详情页（`Detail.set_preview_mode`）。它虽然是 `QAbstractItemView`，
+但类属性 `space_previews = True` 会让激活键过滤器跳过它 —— 空格由视图
+自己的 `keyPressEvent` 处理，不会被改写成「激活」。
 
 ## Esc 的层级
 
@@ -203,7 +337,9 @@ registry.persist()                  # 把与默认不同的条目写回用户表
 * 取消焦点后按键由 Qt 交给窗口本身（没有焦点控件时的回退目标），所以第二次
   `Esc` 仍能到 `Window.keyPressEvent`；
 * 按键先到焦点控件：搜索栏这类自己消费 `Esc` 的控件（先收建议列表、再收
-  搜索栏）优先，没被消费的 `Esc` 才沿控件链冒泡到窗口。
+  搜索栏）优先，没被消费的 `Esc` 才沿控件链冒泡到窗口；
+* binder **从不接管** `Esc`（见「真实按键」第 4 条）：和弦进行中按 `Esc`
+  只放弃前缀，按键照旧交给控件 / 窗口走上面这张表。
 
 ## 焦点链（Tab / 方向键遍历）
 
@@ -232,10 +368,13 @@ Qt 的 Tab 链只看焦点策略，**不看控件是否画了焦点指示器**�
 
 | 缺口 | 现状 |
 | --- | --- |
-| 真实按键 | **未接通**：`keymap/__init__.py` 只做注册，仓库里没有应用级 `eventFilter` 把 `QKeyEvent` 转成 PortableText 再调 `trigger()`；无修饰键的绑定（`F5`）与和弦（`G, G`）都没有入口 |
-| 视图 / presenter 接线 | 界面 boot（`ui/bootstrap.py` phase 3）会 `registry_shortcut_registry(container)` 登记进容器；但**没有任何代码 import `albuswall.ui.keymap` 的类**（只按鸭子类型用容器里那个对象），启动流程里也没有 `load_shortcuts()` |
-| 默认表与代码的对应 | `shortcuts.ini` 里的 12 条命令都没有对应的槽登记，`load()` 之后 `unbound_slots()` 为空只是因为没有槽，`trigger` 对每条命令都跳过 |
-| 设置页 / 键位编辑 UI | 不存在：没有 Qt 行模型、没有录键控件、没有冲突提示、没有「恢复默认」按钮。`conflicts()` / `unbound_slots()` / `binding_for()` 是留给它的查询接口 |
-| 提示未来的组件标记 | `ui/widgets/collapsible_group_box.py` 与 `ui/widgets/virtual_scroll/basic.py` 设的 Qt 属性 `keymap_passthrough` 目前**没有读者**：它曾由导航层（`NavRegistry.should_pass_through()`）用来决定「这组按键让渡给控件」，导航层已移除；keymap 层自己仍然不读它 |
+| 真实按键 | **已接通**：`keymap/qt_binder.py` 的 `ShortcutBinder` 在界面 boot（phase 5）装到 `QApplication` 上，单键 / 修饰键组合 / 和弦（1.2s 超时）都能触发 |
+| 视图 / presenter 接线 | **已接线**：`ui/presenter/shortcuts.py` 登记 18 个槽，`ui/bootstrap.py` 的 phase 5 调 `install_ui_shortcuts()` 并 `load_shortcuts()`；仍是按鸭子类型用容器里的注册表（`keymap` 不反向 import presenter） |
+| 默认表与代码的对应 | **已对上**：18 条命令都有槽；`load()` 之后 `unbound_slots()` 恰好是随包表里 `= []` 的 6 条；`tests/test_ui_shortcuts.py` 断言「`UI_SLOTS` 的命令集合 == `shortcuts.ini` 的命令集合」且「只有那 6 条没有键位」 |
+| 设置页 / 键位编辑 UI | 不存在：没有 Qt 行模型、没有录键控件、没有冲突提示、没有「恢复默认」按钮。`conflicts()` / `unbound_slots()` / `binding_for()` 是留给它的查询接口（槽的 `help` 文案现在是英文短句，设置页出现时再走 i18n） |
+| 提示未来的组件标记 | `ui/widgets/collapsible_group_box.py` 与 `ui/widgets/tile_view.py` 设的 Qt 属性 `keymap_passthrough` 由 `keymap/qt_binder.py` 读取（规则 5：空格 / 回车让渡给控件） |
 | 命令层接口 | `albuswall/command/registry.py` 的 docstring 有 `TODO(ui)`：快捷键绑定归界面层，命令注册表不提供接口 |
 | 设置写回 | 应用处于重构阶段、设置 GUI 未恢复。`albuswall.service.command.handlers.setting`（`setting.schema` / `setting.set` / `setting.save`）只对 `configue` 管的配置（如 `[ui]`）做写回，**不**管 `shortcuts.ini`——快捷键文件由 `ShortcutConfig` 自己读写，不进 `configue` schema |
+| 热重载 | 只在界面 boot 时 `load_shortcuts()` 一次：改了 `shortcuts.ini` 要重启（`QFileSystemWatcher` / 一条 reload 命令都还没做） |
+| 菜单里的键位提示 | `Menu` 的 `QAction` 没有 `setShortcut`：菜单不显示键位，也没有把键位变化同步回菜单（`binding_for()` 是留给它的查询接口） |
+| 输入法 / 非拉丁布局 | 组合输入期间的 `KeyPress` 不额外过滤（依赖「焦点在文本输入」那条放行）；无修饰键的字母在非 QWERTY 布局下拿到的是别的键码，所以默认表只用修饰键组合与功能键 |

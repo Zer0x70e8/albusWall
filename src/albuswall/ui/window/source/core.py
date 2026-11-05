@@ -198,8 +198,8 @@ class IngestSource(Retranslatable, BlurLabel):
     # ------------------------------------------------------------------ #
     def retranslate_ui(self) -> None:
         """重新应用按钮文案。"""
-        self.apply_button.setText(self.tr("应用"))
-        self.add_button.setText(self.tr("添加"))
+        self.apply_button.setText(self.tr("Apply"))
+        self.add_button.setText(self.tr("Add"))
 
     # ------------------------------------------------------------------ #
     # 数据接口

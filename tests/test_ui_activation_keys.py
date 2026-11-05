@@ -4,8 +4,8 @@
 对应实现：
 
 * :mod:`albuswall.ui.utils.activation_keys` —— 应用级事件过滤器；
-* :meth:`albuswall.ui.widgets.virtual_scroll.basic.VirtualScrollWidget.
-  preview_cursor` —— 内容网格的唯一例外（空格 = 预览、回车 = 详情）；
+* :mod:`albuswall.ui.widgets.tile_view` —— 内容网格的唯一例外
+  （空格 = 预览、回车 = 详情，``space_previews`` 标记让过滤器放行）；
 * :meth:`albuswall.ui.window.detail.Detail.eventFilter` —— 预览模式的退出键。
 """
 
@@ -249,13 +249,30 @@ def test_enter_opens_menu_button_menu_like_space(filtered_app):
 # ==================== 内容网格：空格 = 预览，回车 = 详情 ====================
 
 def _grid():
-    from albuswall.ui.widgets.virtual_scroll import VirtualScrollWidget
+    from albuswall.ui.model import AssetGridModel
+    from albuswall.ui.widgets.tile_view import TileView
 
-    grid = VirtualScrollWidget()
-    grid.set_column_count(3)
+    model = AssetGridModel()
+    for row in range(9):
+        model.append_asset(f"a{row}")
+    grid = TileView(column_count=3)
+    grid.setModel(model)  # 视图不持有模型：挂到 grid 上防止被回收
+    grid._test_model = model
     grid.resize(400, 300)
-    grid.update_max_item_index(8)
     grid.set_cursor_index(0)
+    grid.show()
+    return grid
+
+
+def _empty_grid():
+    from albuswall.ui.model import AssetGridModel
+    from albuswall.ui.widgets.tile_view import TileView
+
+    model = AssetGridModel()
+    grid = TileView()
+    grid.setModel(model)
+    grid._test_model = model
+    grid.resize(400, 300)
     grid.show()
     return grid
 
@@ -280,11 +297,8 @@ def test_grid_space_previews_and_enter_activates(filtered_app):
 def test_grid_without_cursor_leaves_space_alone(filtered_app):
     from PySide6.QtCore import Qt
 
-    from albuswall.ui.widgets.virtual_scroll import VirtualScrollWidget
-
-    grid = VirtualScrollWidget()
-    grid.update_max_item_index(-1)  # 空网格：没有光标（-1）
-    grid.show()
+    grid = _empty_grid()  # 空网格：没有光标（-1）
+    assert grid.cursor_index() == -1
     previewed: list[int] = []
     grid.unit_previewed.connect(previewed.append)
     try:

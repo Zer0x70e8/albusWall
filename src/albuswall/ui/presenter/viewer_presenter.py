@@ -82,6 +82,9 @@ class ViewerPresenter(Presenter):
 
     #: 资产被写操作改过（载荷：uuid 字符串序列），内容网格据此刷新。
     assets_changed = Signal(list)
+    #: 详情页当前展示的资产变了（载荷：asset_uuid）。打开 / 翻页都会发，
+    #: 「跟随当前资产」的消费者（标签栏）据此刷新。
+    asset_changed = Signal(str)
     #: 面向用户的错误 / 提示（窗口 toast）。
     error = Signal(str)
     #: 详情页被关闭。
@@ -167,6 +170,21 @@ class ViewerPresenter(Presenter):
         return self._ctx
 
     @property
+    def is_detail_open(self) -> bool:
+        """详情页是否**真的**在浮层上（``_ctx`` 有值且是当前页）。
+
+        只看 ``_ctx`` 不够：浮层被收起（``Ctrl+W`` / 菜单 / Esc）时 presenter
+        并不会收到通知，``_ctx`` 还是上一次打开的那个资产。``asset.*`` 这类
+        「对当前资产」的快捷键据此判断该落到详情页还是内容网格。
+        """
+        if self._ctx is None:
+            return False
+        try:
+            return self._window.overlay.currentWidget() is self._detail
+        except (AttributeError, RuntimeError):  # 视图已销毁 / 没装浮层
+            return True
+
+    @property
     def current_asset_uuid(self) -> str | None:
         return None if self._ctx is None else self._ctx.current_asset_uuid
 
@@ -175,6 +193,8 @@ class ViewerPresenter(Presenter):
         self._ctx = ctx
         include_deleted = self._resolve_include_deleted(ctx)
         asset_uuid = str(ctx.current_asset_uuid)
+        # 打开 / 翻页都走这里：先广播「当前资产」，让标签栏等跟随切换
+        self.asset_changed.emit(asset_uuid)
 
         prev_uuid, next_uuid = self._resolve_neighbours(
             ctx.album_uuid, asset_uuid)
@@ -235,6 +255,64 @@ class ViewerPresenter(Presenter):
         self._detail.clear_image()
         self._detail.clear_navigation()
         self._detail.set_metadata(None)
+
+    # ------------------------------------------------------------------ #
+    # 快捷键入口（asset.* / view.zoom_*）：详情页打开时优先由这里处理
+    # ------------------------------------------------------------------ #
+    def toggle_favorite(self) -> bool:
+        """``asset.favorite``：收藏 / 取消收藏当前资产。
+
+        Returns:
+            详情页没开（或没有当前资产）时返回 ``False``。
+        """
+        if not self.is_detail_open:
+            return False
+        self._on_favorite_toggle(not self._is_favorite)
+        return True
+
+    def trash_current(self) -> bool:
+        """``asset.delete``：把当前资产移入回收站（详情页要打开）。"""
+        if not self.is_detail_open:
+            return False
+        self._on_trash_requested()
+        return True
+
+    def zoom_in(self) -> bool:
+        """``view.zoom_in``：放大详情页大图一档。"""
+        if not self.is_detail_open:
+            return False
+        return self._detail.zoom_in()
+
+    def zoom_out(self) -> bool:
+        """``view.zoom_out``：缩小详情页大图一档。"""
+        if not self.is_detail_open:
+            return False
+        return self._detail.zoom_out()
+
+    def reset_zoom(self) -> bool:
+        """``view.reset``：详情页大图恢复「适应窗口」。"""
+        if not self.is_detail_open:
+            return False
+        return self._detail.reset_zoom()
+
+    def next_asset(self) -> bool:
+        """``viewer.next``：详情页翻到下一张（相册顺序）。"""
+        if not self.is_detail_open:
+            return False
+        return self.navigate_relative(1)
+
+    def previous_asset(self) -> bool:
+        """``viewer.prev``：详情页翻到上一张（相册顺序）。"""
+        if not self.is_detail_open:
+            return False
+        return self.navigate_relative(-1)
+
+    def restore_current(self) -> bool:
+        """``asset.restore``：把当前资产从回收站恢复（详情页要打开）。"""
+        if not self.is_detail_open:
+            return False
+        self._on_recover_requested()
+        return True
 
     # ------------------------------------------------------------------ #
     # 数据面
@@ -490,7 +568,7 @@ class ViewerPresenter(Presenter):
         self.refresh()
 
     def _on_edit_requested(self) -> None:
-        self.error.emit(self.tr("该功能尚未实现"))
+        self.error.emit(self.tr("This feature is not implemented yet"))
 
 
 # --------------------------------------------------------------------------- #

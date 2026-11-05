@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Sequence
 
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 
 from albuswall.dto.tag.query import TagMatch
 from albuswall.dto.utils import normalize_tag_name
@@ -120,6 +120,19 @@ class SearchPresenter(Presenter):
         self._set_text("")
         self._view.hide_suggestions()
 
+    def focus_search(self) -> bool:
+        """``content.search``：展开搜索栏并把焦点交给输入框。
+
+        已经展开时只重新抢焦点（不清空已有输入）；展开动画 / 建议列表仍归
+        视图自己管，presenter 只表达「用户想搜东西」这一个意图。
+        """
+        view = self._view
+        if not view.is_expanded:
+            view.expand()
+        view.line_edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        view.line_edit.selectAll()
+        return True
+
     # ------------------------------------------------------------------ #
     # 槽
     # ------------------------------------------------------------------ #
@@ -148,7 +161,7 @@ class SearchPresenter(Presenter):
         self._view.hide_suggestions()
 
         if payload.get("option") == self._view.MODE_COMMAND:
-            self.error.emit(self.tr("命令模式尚未实现"))
+            self.error.emit(self.tr("Command mode is not implemented yet"))
             return
 
         text = str(payload.get("text") or "").strip()
@@ -159,7 +172,7 @@ class SearchPresenter(Presenter):
         matches = self._search(text)
         if not matches:
             self.error.emit(
-                self.tr("当前相册没有匹配的标签：{text}").format(text=text))
+                self.tr("No matching tags in the current album: {text}").format(text=text))
             return
 
         exact = self._exact_match(text, matches)

@@ -1,7 +1,9 @@
 #
 """i18n 翻译词表（``scripts/build_i18n.py`` 的输入数据）。
 
-这里是**纯数据**：源文 → 译文。仓库里的界面源文是中英混排的，所以：
+这里是**纯数据**：源文 → 译文。控件 / presenter / 委托里的 ``tr("...")``
+源文统一写**英文**；少数 lupdate 提取不到的动态文案（元信息面板的字段
+标签）仍是**中文**数据。所以：
 
 * ``zh_CN`` 只需要把**英文**源文翻成中文；
 * ``en_US`` 只需要把**中文**源文翻成英文；
@@ -40,9 +42,10 @@ LANGUAGES: tuple[str, ...] = tuple(language.code for language in _LANGUAGES)
 #: ``SettingRowEditor`` 见对应模块的 ``_TR_CONTEXT``；``SettingSchema``
 #: 见 ``setting/translation.py``。
 MANUAL_CONTEXTS: dict[str, list[str]] = {
+    # ``self.tr(spec.label)`` 的标签来自模块级 ``FieldSpec`` 数据（lupdate
+    # 提取不到动态参数）；「是 / 否」是字面量，已由 lupdate 从 ``tr_bool``
+    # 提取成英文源文，不再登记。
     "MetadataModel": [
-        "是",
-        "否",
         "标题",
         "描述",
         "宽度",
@@ -58,9 +61,10 @@ MANUAL_CONTEXTS: dict[str, list[str]] = {
         "文件路径",
     ],
     "InfoCellDelegate": [
-        "剩余 {days} 天",
-        "今天删除",
-        "已过期",
+        # 源文已统一为英文（信息条不再依赖中文源文，英文界面不会漏出中文）
+        "%1 days left",
+        "Deleted today",
+        "Expired",
     ],
     "SettingRow": [
         "contains a ${…} placeholder; resolved once the related items are set",
@@ -163,59 +167,107 @@ MANUAL_CONTEXTS: dict[str, list[str]] = {
 # 英文 → 中文
 # ══════════════════════════════════════════════════
 ZH_CN: dict[str, str] = {
-    # ---- 标题栏 / 菜单 ----
-    "album": "相册",
-    "extra": "更多",
-    "search": "搜索",
-    "source": "来源",
-    "setting": "设置",
-    "exit": "退出",
-    "edit": "编辑",
-    "Edit": "编辑",
-    # ---- 详情页 ----
-    "choice": "多选",
-    "favourite": "收藏",
-    "info": "信息",
-    "trash": "删除",
-    "recover": "恢复",
+    # ---- 界面文案（self.tr 源文已统一为英文） ----
+    "%1 days left": "剩余 %1 天",
+    "(no other album yet)": "（还没有其它相册）",
+    "A virtual root ingest source cannot be deleted": "虚拟根导入源不可删除",
+    "Add": "添加",
+    "Add to album": "添加到指定相册",
+    "Add to the current image": "添加到当前图片",
+    "Added": "已添加",
+    "Added to “{album}”": "已添加到「{album}」",
+    "Album": "相册",
+    "Album actions are unavailable in the trash view": "回收站视图不支持相册操作",
+    "Album title:": "相册标题：",
+    "Apply": "应用",
+    "Auto-mount (Linux only, requires permissions)": "自动挂载（仅 Linux，需要权限）",
+    "Browse": "浏览",
     "Close": "关闭",
-    # ---- 通用动作 ----
-    "add": "添加",
-    "apply": "应用",
-    "enable": "启用",
-    "disable": "禁用",
-    "delete": "删除",
-    "ensure deleted": "确认删除",
-    "layers": "层级",
-    "new": "新建",
-    "browser": "浏览",
-    "no limit": "不限",
-    # ---- 源详情表单 ----
-    "meta info": "元信息",
-    "title": "标题",
-    "new ingest source": "新建导入源",
-    "description": "描述",
-    "example": "示例",
-    "tag: ": "标签：",
-    "tag1": "标签1",
-    "Ingest Source": "导入源",
-    "source path (library path)": "源路径（图库路径）",
-    "file type(s)": "文件类型",
+    "Close search bar": "关闭搜索栏",
+    "Command mode": "命令模式",
+    "Command mode (not implemented)": "命令模式（未实现）",
+    "Command mode is not implemented yet": "命令模式尚未实现",
+    "Confirm delete": "确认删除",
+    "Could not add to the album": "未能添加到相册",
+    "Delete": "删除",
+    "Delete tag": "删除标签",
+    "Deleted today": "今天清除",
+    "Description": "描述",
+    "Device insertion trigger": "设备插入触发器",
+    "Disable": "禁用",
+    "Edit": "编辑",
+    "Enable": "启用",
+    "Example": "示例",
+    "Expired": "已过期",
+    "Favorite": "收藏",
     "File type verification method": "文件类型校验方式",
-    "Suffix Check": "后缀检查",
-    "Magic Number Check": "魔数检查",
+    "File type(s)": "文件类型",
+    "Import Source": "导入源",
+    "Info": "信息",
+    "Ingest Source": "导入源",
+    "Interval time": "间隔时间",
+    "Magic number check": "魔数检查",
+    "Meta info": "元信息",
+    "Mode": "模式",
+    "More": "更多",
+    "Mount point": "挂载点",
+    "Move to Trash": "移入回收站",
+    "Move to album": "移动到指定相册",
+    "Moved": "已移动",
+    "Moved to “{album}”": "已移动到「{album}」",
+    "Name": "名称",
+    "New": "新建",
+    "New album": "新建相册",
+    "New album and move into it…": "新建相册并移入…",
+    "New child tag": "新建子标签",
+    "New ingest source": "新建导入源",
+    "New root tag": "新建根标签",
+    "New tag": "新建标签",
+    "No": "否",
+    "No limit": "不限",
+    "No matching tags": "无匹配标签",
+    "No matching tags in the current album: {text}": "当前相册没有匹配的标签：{text}",
+    "Parent tag is still in the trash": "父标签仍在回收站",
+    "Quit": "退出",
+    "Remove from this album": "从本相册移除",
+    "Removed from this album": "已从本相册移除",
+    "Rename album": "重命名相册",
+    "Rename tag": "重命名标签",
+    "Restore": "恢复",
+    "Scheduled time": "定时时间",
+    "Scheduled update": "定时更新",
+    "Search": "搜索",
+    "Select": "多选",
+    "Select source directory": "选择源目录",
+    "Simple mode": "简单模式",
+    "Source path (library path)": "源路径（图库路径）",
+    "Space to exit · K to play / pause": "空格退出 · K 播放 / 暂停",
     "Subfolder recursion": "子文件夹递归",
     "Subfolder recursion depth": "子文件夹递归深度",
-    "Triggers": "触发器",
-    "Scheduled Update": "定时更新",
-    "Scheduled Time": "定时时间",
-    "Interval Time": "间隔时间",
-    "mode": "模式",
-    "e.g., 30m or 1h": "例如 30m 或 1h",
-    "Device Insertion Trigger": "设备插入触发器",
+    "Suffix check": "后缀检查",
+    "Tag 1": "标签1",
+    "Tag name; use / for hierarchy": "标签名，可用 / 分层",
+    "Tag tree": "标签树",
+    "Tags:": "标签：",
     "Target": "目标",
-    "Auto-mount (Linux only, requires permissions)": "自动挂载（仅 Linux，需要权限）",
-    "Mount point": "挂载点",
+    "The album service is unavailable": "相册服务不可用",
+    "The asset is not in the current album": "资产不在当前相册里",
+    "The asset is not in the current album; nothing was moved": "资产不在当前相册里，未移动",
+    "The file service is unavailable": "文件服务不可用",
+    "The ingest source service is unavailable": "导入源服务不可用",
+    "The parent tag does not exist": "父标签不存在",
+    "The settings page is not implemented yet": "设置页尚未实现",
+    "The tag does not exist": "标签不存在",
+    "The tag has child tags": "标签含子标签",
+    "The tag was restored, but its parent is still in the trash; it is currently orphaned.": "标签已恢复，但父标签仍在回收站，当前为孤儿状态。",
+    "This feature is not implemented yet": "该功能尚未实现",
+    "This tag has {count} child tags. Delete them as well?": "该标签下有 {count} 个子标签，是否连同子标签一起删除？",
+    "Triggers": "触发器",
+    "Type a tag name to filter the current album...": "输入标签名筛选当前相册...",
+    "Untitled ingest source": "未命名导入源",
+    "Yes": "是",
+    "e.g., 30m or 1h": "例如 30m 或 1h",
+    "“Trash” is not an album, so assets cannot be moved or removed": "「回收站」不是相册，无法移动或移除资产",
     # ---- 设置页外壳 ----
     "Settings": "设置",
     "Reload the setting tree (setting.schema)": "重新加载设置树（setting.schema）",
@@ -568,40 +620,7 @@ ZH_CN: dict[str, str] = {
 # 中文 → 英文
 # ══════════════════════════════════════════════════
 EN_US: dict[str, str] = {
-    # ---- 搜索栏 ----
-    "简单模式": "Simple mode",
-    "命令模式": "Command mode",
-    "命令模式（未实现）": "Command mode (not implemented)",
-    "输入标签名筛选当前相册...": "Type a tag name to filter this album...",
-    "搜索": "Search",
-    "关闭搜索栏": "Close search bar",
-    "无匹配标签": "No matching tags",
-    "命令模式尚未实现": "Command mode is not implemented yet",
-    "当前相册没有匹配的标签：{text}":
-        "No matching tags in the current album: {text}",
-    # ---- 标签 ----
-    "标签名，可用 / 分层": "Tag name; use / for hierarchy",
-    "添加到当前图片": "Add to the current image",
-    "新建标签": "New tag",
-    "新建子标签": "New child tag",
-    "新建根标签": "New root tag",
-    "重命名标签": "Rename tag",
-    "删除标签": "Delete tag",
-    "名称": "Name",
-    "标签含子节点": "Tag has child tags",
-    "该标签下有 {count} 个子标签，是否连同子标签一起删除？":
-        "This tag has {count} child tags. Delete them as well?",
-    "父标签仍在回收站": "Parent tag is still in the trash",
-    "标签已恢复，但父标签仍在回收站，当前为孤儿状态。":
-        "The tag was restored, but its parent is still in the trash; "
-        "it is currently orphaned.",
-    "标签已存在：{text}": "Tag already exists: {text}",
-    # ---- 导入源 ----
-    "未命名导入源": "Untitled ingest source",
-    "选择源目录": "Select source directory",
-    # ---- 元信息面板 ----
-    "是": "Yes",
-    "否": "No",
+    # ---- 元信息面板（动态标签，源文仍是中文） ----
     "标题": "Title",
     "描述": "Description",
     "宽度": "Width",
@@ -615,50 +634,6 @@ EN_US: dict[str, str] = {
     "已收藏": "Favorite",
     "已删除": "Deleted",
     "文件路径": "File path",
-    # ---- 缩略图信息条 ----
-    "剩余 {days} 天": "{days} days left",
-    "今天删除": "Deleted today",
-    "已过期": "Expired",
-    "剩余 %1 天": "%1 days left",
-    "今天清除": "Deleted today",
-    # ---- 相册 ----
-    "相册服务不可用": "The album service is unavailable",
-    "新建相册": "New album",
-    "重命名相册": "Rename album",
-    "相册标题：": "Album title:",
-    "新建相册并移入…": "New album and move into it…",
-    "移动到指定相册": "Move to album",
-    "添加到指定相册": "Add to album",
-    "从本相册移除": "Remove from this album",
-    "已移动": "Moved",
-    "已移动到「{album}」": "Moved to “{album}”",
-    "已添加": "Added",
-    "已添加到「{album}」": "Added to “{album}”",
-    "已从本相册移除": "Removed from this album",
-    "未能添加到相册": "Could not add to the album",
-    "资产不在当前相册里": "The asset is not in the current album",
-    "资产不在当前相册里，未移动":
-        "The asset is not in the current album; nothing was moved",
-    "「回收站」不是相册，无法移动或移除资产":
-        "“Trash” is not an album, so assets cannot be moved or removed",
-    "回收站视图不支持相册操作": "Album actions are unavailable in the trash view",
-    "（还没有其它相册）": "(no other album yet)",
-    "文件服务不可用": "The file service is unavailable",
-    # ---- 导入源 ----
-    "导入源服务不可用": "The ingest source service is unavailable",
-    "虚拟根导入源不可删除": "A virtual root ingest source cannot be deleted",
-    "启用": "Enable",
-    "禁用": "Disable",
-    "删除": "Delete",
-    "恢复": "Restore",
-    "确认删除": "Confirm delete",
-    # ---- 标签编辑器 ----
-    "父标签不存在": "The parent tag does not exist",
-    "标签不存在": "The tag does not exist",
-    "标签含子标签": "The tag has child tags",
-    # ---- 尚未实现 ----
-    "该功能尚未实现": "This feature is not implemented yet",
-    "设置页尚未实现": "The settings page is not implemented yet",
 }
 
 #: 语言代码 → 词表

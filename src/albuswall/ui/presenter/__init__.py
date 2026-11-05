@@ -8,7 +8,8 @@
                           子 presenter 登记表 + 依赖读取
 ``main``                  :class:`MainPresenter`：根节点，编排子 presenter、
                           跨 presenter 接线、窗口主题
-``theme``                 窗口主题解析（``[ui] theme`` / ``[ui] style_sheet``）
+``theme``                 窗口主题解析：``[ui]`` 的 ``${...}`` 组合（样式表 +
+                          图标路径，见 :mod:`albuswall.ui.presenter.theme`）
 
 窗口各区域的 presenter（登记顺序即启动顺序）::
 
@@ -21,6 +22,7 @@
     source_presenter.py        source      导入源页（卡片 + 表单）
     search_presenter.py        search      浮动搜索栏（按标签过滤）
     source_form.py            ——          表单 ⇄ DTO 的桥（非 presenter）
+    shortcuts.py              ——          界面动作 → 快捷键槽（keymap）登记
 
 视图层（``albuswall.ui.window`` / ``widgets``）只画界面、只发意图信号；
 presenter 才是读配置、调服务、把结果写回视图的地方。新增 presenter 的姿势：
@@ -54,15 +56,19 @@ from .base import (
 from .content_presenter import ContentPresenter
 from .main import MainPresenter
 from .search_presenter import SearchPresenter
+from .shortcuts import UI_SLOTS, install_ui_shortcuts
 from .source_presenter import SourcePresenter
 from .tag_editor_presenter import TagEditorPresenter
 from .tagbar_presenter import TagBarPresenter
 from .theme import (
     DEFAULT_THEME,
+    ICON_KEYS,
     THEME_QSS_NAME,
     Theme,
     ThemeConfig,
+    ThemeLayout,
     available_themes,
+    configured_theme_qss,
     resolve_theme,
 )
 from .viewer_presenter import ViewerContext, ViewerPresenter
@@ -70,6 +76,7 @@ from .window_presenter import WindowPresenter
 
 __all__ = [
     "DEFAULT_THEME",
+    "ICON_KEYS",
     "PRESENTER_FACTORIES",
     "THEME_QSS_NAME",
     "AlbumPresenter",
@@ -78,15 +85,19 @@ __all__ = [
     "Presenter",
     "PresenterFactory",
     "SearchPresenter",
+    "UI_SLOTS",
     "SourcePresenter",
     "TagBarPresenter",
     "TagEditorPresenter",
     "Theme",
     "ThemeConfig",
+    "ThemeLayout",
     "ViewerContext",
     "ViewerPresenter",
     "WindowPresenter",
     "available_themes",
+    "configured_theme_qss",
+    "install_ui_shortcuts",
     "register_presenter",
     "registered_presenters",
     "resolve_theme",

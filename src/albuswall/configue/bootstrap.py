@@ -22,6 +22,13 @@ from pathlib import Path
 from typing import Any
 
 import albuswall
+from albuswall.common.constants.ui import (
+    DEFAULT_THEME,
+    ICON_DIR_NAME,
+    ICON_KEYS,
+    ICON_SUFFIX,
+    THEME_QSS_NAME,
+)
 from albuswall.log import getLogger
 
 from .backends import get_backend
@@ -44,10 +51,12 @@ __all__ = [
     "load_file",
     "setup_config",
     "CONFIG_FILE_NAME",
+    "ICON_KEYS",
     "MAIN_FILE_NAME",
     # 应用级段的类视图（业务代码从这里 import，见各自的 docstring）
     "Files",
     "Paths",
+    "UiSelection",
 ]
 
 #: 用户配置文件（放 ``base_dir`` 下）。
@@ -87,12 +96,23 @@ def load_file(finfo: FileInfo) -> dict[tuple[str, str], Any]:
 # ===========================================================================
 
 class Paths:
-    """``[path]``：应用自己的目录。
+    """``[path]``：应用自己的目录 + 用户主题目录。
 
-    **字段不带默认值**：四个目录依赖 ``portable`` / ``base_dir``，只能在
+    **字段不带默认值**：目录依赖 ``portable`` / ``base_dir``，只能在
     ``setup_config`` 运行期算出来，由它 ``resolver.inject_raw`` 注入（效果与
     ``@configclass`` 默认值等价——``load()`` 注入文件值时用 ``overwrite=True``，
     文件里写了的段照样赢）。
+
+    ``theme`` / ``icons`` 是主题那一对（布局见
+    :mod:`albuswall.common.constants.ui`）：
+
+    * ``theme`` —— 用户主题根目录，``<theme>/<name>/main_window.qss``；
+    * ``icons`` —— **当前主题**的图标目录 ``<theme>/<name>/icons/``，即
+      ``${theme}/${ui:theme}/icons``（含 ``${ui:theme}``，切主题时一起变）。
+
+    它们在 ``[ui]`` 里靠 ``${...}`` 与 ``${ui:theme}`` / ``${files:main_window_qss}``
+    组合成绝对路径（见 :mod:`albuswall.ui.presenter.theme`），因此这里**只**声明
+    目录，不拼文件名。
 
     ``@configclass`` 装饰发生在 :func:`_declare_app_sections`（装配期）而不是
     模块导入期，有两个原因：
@@ -111,12 +131,15 @@ class Paths:
         from albuswall.configue.bootstrap import Paths
 
         db_file = Paths().data / "db.db"
+        theme_dir = Paths().theme / "default"      # ~/.config/albuswall/theme/default
     """
 
     config: Path
     data: Path
     cache: Path
     temp: Path
+    theme: Path
+    icons: Path
 
 
 class Files:
@@ -124,23 +147,56 @@ class Files:
 
     默认值与平台无关，所以直接写在字段上（``load()`` 时由 ``@configclass``
     注入）；装饰时机与用法同 :class:`Paths`。
+
+    主题相关的那几个（``main_window_qss`` 与 :data:`ICON_KEYS`）不是给人手算
+    路径用的：``[ui]`` 用 ``${path:theme}/${ui:theme}/${files:main_window_qss}``
+    与 ``${path:icons}/${files:<icon key>}`` 把它们组合成绝对路径，UI 只读
+    ``[ui]``。改这里 = 换主题里的文件名。
     """
 
     log: str = "log_config.ini"
     db: str = "db.db"
-    qss: str = "qss.qss"
-    icons: str = "*.svg"
+    #: 主题入口样式表文件名（``[ui] style_sheet`` 的最后一段）。
+    main_window_qss: str = THEME_QSS_NAME
+    #: 图标文件名（``[ui] <同名 key>`` 的最后一段）。
+    app_icon: str = f"albuswall{ICON_SUFFIX}"
+    album_button: str = f"album_button{ICON_SUFFIX}"
+    search_button: str = f"search_button{ICON_SUFFIX}"
+    more_button: str = f"more_button{ICON_SUFFIX}"
+    favorite_icon: str = f"favorite_icon{ICON_SUFFIX}"
+    #: 内置主题补齐时用的图标 glob（预留：把随包主题复制到用户目录）。
+    icon_glob: str = f"*{ICON_SUFFIX}"
+
+
+class UiSelection:
+    """``[ui]`` 段里**加载期就必须存在**的那一个 key。
+
+    只声明 ``theme``，不声明 UI 的其它键——它们属于
+    :class:`albuswall.ui.presenter.theme.ThemeConfig`（同一个 section 的另一份
+    声明，二者共享 Resolver 节点；``theme`` 在两处必须写成同一类型与默认值）。
+
+    为什么要在 ``load()`` 之前（也就是在 UI import 之前）就把 ``theme`` 声明出来：
+    ``[path]`` / ``[files]`` / ``[ui]`` 里的组合式都含 ``${ui:theme}``，而
+    ``load()`` 的 ``check_all()`` 会展开**文件里所有**字符串节点。若那时
+    ``[ui] theme`` 还不存在（用户配置文件里没写、UI 包也还没 import），
+    展开会抛 ``KeyError``，整个启动会 ``ConfigError``——一个「默认值写得太晚」
+    把用户挡住。早点给它默认值，组合式在加载期就能自洽展开。
+    """
+
+    theme: str = DEFAULT_THEME
 
 
 def _declare_app_sections(name: str) -> None:
-    """把 :class:`Paths` / :class:`Files` 登记到 ``file=name`` 名下。
+    """把 :class:`Paths` / :class:`Files` / :class:`UiSelection` 登记到
+    ``file=name`` 名下。
 
     幂等：``configclass`` 对同一 ``(file, class_path)`` 是覆盖注册，测试清空
-    全局表之后仍能重建。两个类是**模块级对象**，所以业务代码 import 到的
+    全局表之后仍能重建。三个类都是**模块级对象**，所以业务代码 import 到的
     就是被登记的那个类（装饰是原地修改，不产生新类）。
     """
     configclass("path", name)(Paths)
     configclass("files", name)(Files)
+    configclass("ui", name)(UiSelection)
 
 
 def _inject_path_defaults(
@@ -150,11 +206,16 @@ def _inject_path_defaults(
         path_cache: Path,
         path_temp: Path,
 ) -> None:
-    """注入 ``[path]`` 四段的默认值（替代 ``@configclass`` 字段默认值）。
+    """注入 ``[path]`` 各段的默认值（替代 ``@configclass`` 字段默认值）。
 
     必须在 ``load()`` **之前**调用：``load()`` 注入文件值的 ``overwrite=True``，
     文件里写了的段会盖掉这里，语义与「默认值只在缺值时补位」一致；同时默认值
     在 ``check_all`` / 加载钩子之前就已就位（与改前逐字段默认值的时机相同）。
+
+    ``theme`` / ``icons`` 也在这里补：它们的值由 ``path_config`` 决定，
+    单独写在 ``Paths`` 的字段默认值里会让「``portable`` 布局」看不出来。
+    ``icons`` 是**组合式**（``${theme}/${ui:theme}/icons``），与随包
+    ``conf.ini`` 写成同一份，用户没写这一行时行为也一样。
 
     ``inject_raw`` 不带 origin，所以这些值不会被当成「用户改过的」而回写——
     与 ``@configclass`` 默认值完全一致。
@@ -165,6 +226,11 @@ def _inject_path_defaults(
             ("data", path_data),
             ("cache", path_cache),
             ("temp", path_temp),
+            ("theme", path_config / "theme"),
+            # 主题图标目录跟着 ``[ui] theme`` 走（与随包 conf.ini 的组合式逐字
+            # 等价）：默认值写成**插值字符串**而不是拼好的 Path，切主题时才能
+            # 跟着 ``${ui:theme}`` 一起失效、重新展开。
+            ("icons", "${theme}/${ui:theme}/" + ICON_DIR_NAME),
     ):
         resolver.inject_raw("path", key, value)
 
@@ -187,8 +253,8 @@ def setup_config(
 
     - **不再处理 include**（旧包的 ``[configue] include`` 多文件合并尚未移植）；
     - **不再有全局 persistence 策略**，改为 ``reg(..., autosave=...)`` 的文件级策略；
-    - ``[path]`` / ``[files]`` 是**声明默认值**（``@configclass``），不再靠
-      ``ConfigDeclaration.add_builtin``；
+    - ``[path]`` / ``[files]`` / ``[ui] theme`` 是**声明默认值**
+      （``@configclass``），不再靠 ``ConfigDeclaration.add_builtin``；
     - 配置文件不存在时 ``load()`` **直接抛** ``ConfigFileNotFound``
       （旧的 ``load_ini_`` 容错为空——本阶段明确改为要求文件存在）。
 
@@ -205,16 +271,18 @@ def setup_config(
             不存在」不算错误：``load()`` 以 ``base_dir/file_name`` 占位把文件
             标成已加载，默认值照常可读，首次 ``save()`` 时创建文件。
             ``False``（默认）缺文件直接抛 ``ConfigError``。**歧义仍然报错**。
-        portable: 决定 ``[path]`` 四段的默认值从哪来（详见下方「portable」）。
+        portable: 决定 ``[path]`` 各目录默认值从哪来（详见下方「portable」）。
 
     portable:
-        ``False``（默认）：``[path]`` 四段全部走 ``get_user_config_dir`` /
-        ``get_user_data_dir`` / ``get_cache_dir`` / ``get_temp_dir``，与
-        ``base_dir`` 无关。
-        ``True``：``[path]`` 四段全部落在 ``base_dir`` 下（``config = base_dir``，
-        ``data`` / ``cache`` / ``temp`` 为 ``base_dir/data`` 等子目录），用于测试
-        隔离或便携部署。
-        **只改 ``[path]`` 四段，不改 ``config.ini`` 的落点**（仍为
+        ``False``（默认）：``[path]`` 的 ``config`` / ``data`` / ``cache`` /
+        ``temp`` 走 ``get_user_config_dir`` / ``get_user_data_dir`` /
+        ``get_cache_dir`` / ``get_temp_dir``，与 ``base_dir`` 无关；
+        ``theme`` / ``icons`` 是 ``<config>/theme`` 与
+        ``${theme}/${ui:theme}/icons``（当前主题的图标目录）。
+        ``True``：``[path]`` 全部落在 ``base_dir`` 下（``config = base_dir``，
+        ``data`` / ``cache`` / ``temp`` 为 ``base_dir/data`` 等子目录，
+        ``theme`` 为 ``base_dir/theme``），用于测试隔离或便携部署。
+        **只改 ``[path]``，不改 ``config.ini`` 的落点**（仍为
         ``base_dir / file_name``）。另外 ``portable=True`` 时**不预先创建**
         ``data`` / ``cache`` / ``temp`` 目录，首次写入时按需创建；``False`` 时
         ``get_temp_dir()`` 会顺带 ``mkdir`` 出 temp 目录（现有行为）。
@@ -237,7 +305,7 @@ def setup_config(
     )
 
     if portable:
-        # 便携 / 测试隔离：四段全部收在 base_dir 下，不碰用户目录。
+        # 便携 / 测试隔离：各目录全部收在 base_dir 下，不碰用户目录。
         # 注意不预先 mkdir（data/cache/temp 在首次写入时按需创建）。
         path_config = target_dir
         path_data = target_dir / "data"

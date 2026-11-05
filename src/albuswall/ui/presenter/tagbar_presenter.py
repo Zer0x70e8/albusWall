@@ -4,8 +4,8 @@
 职责
 ====
 
-* 把「当前资产」（由主 presenter 跟随光标 / 详情页切换设置）的标签灌进
-  chip 模型；
+* 把「当前资产」的标签灌进 chip 模型；「当前资产」由主 presenter 跟随
+  **网格光标**与**详情页当前展示项**（打开 / 翻页）两条来源设置；
 * 处理打标（``父/子`` 路径写法 → ``TagService.ensure_path``）、移除、树内点击；
 * 标签**结构**编辑（新建 / 重命名 / 删除）不在这里做对话框，只把意图转发给
   :class:`~albuswall.ui.presenter.tag_editor_presenter.TagEditorPresenter`。
@@ -101,12 +101,14 @@ class TagBarPresenter(Presenter):
         return self._current_asset_uuid
 
     def set_current_asset(self, asset_uuid: str | None) -> None:
-        """切换标签作用对象（空串 / ``None`` = 没有选中资产）。"""
+        """切换标签作用对象（空串 / ``None`` = 没有选中资产）。
+
+        每次都重读一遍 chip 列表 —— 即使 uuid 没变：网格 reload / 同一个资产
+        被重新打开时，标签本身可能已经在别处被改过，跳过刷新会让标签栏显示
+        过期数据。读一次单行标签是廉价的本地查询。
+        """
         target = str(asset_uuid).strip() if asset_uuid else None
-        target = target or None
-        if target == self._current_asset_uuid:
-            return
-        self._current_asset_uuid = target
+        self._current_asset_uuid = target or None
         self.refresh()
 
     # ------------------------------------------------------------------ #

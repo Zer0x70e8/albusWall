@@ -30,6 +30,9 @@ class AlbumEntry:
 
     字段名与 :data:`AlbumRole` 一一对应；``uuid`` 用 ``str`` 存，但任何
     可 ``str()`` 的标识都行（模型回放时原样返回）。
+
+    ``icon`` 是给单行样式（回收站列表）用的行首图标，当前放 emoji 文本；
+    网格委托（:class:`~albuswall.ui.delegate.AlbumCoverDelegate`）不读它。
     """
 
     uuid: str
@@ -37,16 +40,22 @@ class AlbumEntry:
     description: str = ""
     pixmap: QPixmap | None = None
     asset_count: int = 0
+    icon: str = ""
 
     # ---- 构造 ----
     @classmethod
-    def from_object(cls, album: Any) -> "AlbumEntry":
-        """从任意「带同名属性的相册对象」构造（DTO / Row / dict 均可）。"""
+    def from_object(cls, album: Any, *, icon: str | None = None) -> "AlbumEntry":
+        """从任意「带同名属性的相册对象」构造（DTO / Row / dict 均可）。
+
+        :param icon: 行首图标；``None`` 时取对象自身的 ``icon`` 字段。
+        """
         return cls(
             uuid=_as_text(attr_of(album, "uuid")),
             title=_as_text(attr_of(album, "title") or attr_of(album, "name")),
             description=_as_text(attr_of(album, "description")),
             asset_count=int(attr_of(album, "asset_count") or 0),
+            icon=_as_text(
+                attr_of(album, "icon") if icon is None else icon),
         )
 
 
@@ -66,6 +75,7 @@ class AlbumModel(EntryListModel[AlbumEntry]):
         AlbumRole.Description       → 描述
         AlbumRole.Pixmap            → 封面
         AlbumRole.AssetCount        → 资产数量
+        AlbumRole.Icon              → 行首图标（emoji 文本，单行列表用）
     """
 
     ROLE_FIELDS = {
@@ -74,6 +84,7 @@ class AlbumModel(EntryListModel[AlbumEntry]):
         AlbumRole.Description: "description",
         AlbumRole.Pixmap: "pixmap",
         AlbumRole.AssetCount: "asset_count",
+        AlbumRole.Icon: "icon",
     }
     DISPLAY_FIELD = "title"
     TOOLTIP_FIELD = "description"
@@ -82,19 +93,43 @@ class AlbumModel(EntryListModel[AlbumEntry]):
     # ------------------------------------------------------------------ #
     # 装载
     # ------------------------------------------------------------------ #
-    def set_albums(self, albums: Iterable[Any]) -> None:
-        """用任意相册对象序列重建列表（DTO / ``AlbumEntry`` 都行）。"""
-        self.set_entries(self.to_entries(albums))
+    def set_albums(
+            self,
+            albums: Iterable[Any],
+            *,
+            icon: str | None = None,
+    ) -> None:
+        """用任意相册对象序列重建列表（DTO / ``AlbumEntry`` 都行）。
+
+        :param icon: 统一覆盖行首图标（``None`` 时保留每条自己的 ``icon``）。
+            回收站列表就是这么给虚拟 Trash 相册挂上 🗑️ 的。
+        """
+        self.set_entries(self.to_entries(albums, icon=icon))
 
     @staticmethod
-    def to_entries(albums: Iterable[Any]) -> list[AlbumEntry]:
+    def to_entries(
+            albums: Iterable[Any],
+            *,
+            icon: str | None = None,
+    ) -> list[AlbumEntry]:
         """把混合序列规整成 ``AlbumEntry``；已经是条目的原样保留。"""
         entries: list[AlbumEntry] = []
         for album in albums:
             if isinstance(album, AlbumEntry):
-                entries.append(album)
+                if icon is not None and album.icon != icon:
+                    # dataclass 是 mutable 的，别原地改调用方的条目
+                    entries.append(AlbumEntry(
+                        uuid=album.uuid,
+                        title=album.title,
+                        description=album.description,
+                        pixmap=album.pixmap,
+                        asset_count=album.asset_count,
+                        icon=icon,
+                    ))
+                else:
+                    entries.append(album)
             else:
-                entries.append(AlbumEntry.from_object(album))
+                entries.append(AlbumEntry.from_object(album, icon=icon))
         return entries
 
     # ------------------------------------------------------------------ #
@@ -107,6 +142,7 @@ class AlbumModel(EntryListModel[AlbumEntry]):
             description: str = "",
             pixmap: QPixmap | None = None,
             asset_count: int = 0,
+            icon: str = "",
     ) -> int:
         """追加一行相册，返回其行号。"""
         return self.append(AlbumEntry(
@@ -115,7 +151,20 @@ class AlbumModel(EntryListModel[AlbumEntry]):
             description=description,
             pixmap=pixmap,
             asset_count=int(asset_count),
+            icon=_as_text(icon),
         ))
+
+    def set_icon(self, row: int, icon: str) -> None:
+        """单独回填行首图标（单行列表用，避免整表 reset）。"""
+        entry = self.entry_at(row)
+        if entry is None or entry.icon == icon:
+            return
+        entry.icon = icon
+        self.touch_row(row, (AlbumRole.Icon, Qt.ItemDataRole.DecorationRole))
+
+    def icon_at(self, row: int) -> str:
+        entry = self.entry_at(row)
+        return entry.icon if entry is not None else ""
 
     def set_pixmap(self, row: int, pixmap: QPixmap | None) -> None:
         """单独回填封面（解码完成后再更新，避免整表 reset）。"""
