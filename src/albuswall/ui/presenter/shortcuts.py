@@ -303,6 +303,7 @@ def install_ui_shortcuts(
         registry: ShortcutRegistry | None = None,
         load: bool = True,
         strict: bool = False,
+        config: Any | None = None,
 ) -> Any:
     """把当前界面的动作登记成快捷键槽，并按需载入键位表。
 
@@ -317,11 +318,22 @@ def install_ui_shortcuts(
             单测可以直接给 ``False``，自己挑配置来源。
         strict: 传给 ``load_shortcuts``：``False`` 时配置里的坏条目只记
             warning 不抛（界面启动路径用这个）。
+        config: 已装配的 ``Configue``；给了就 ``bind_config`` —— 键位从
+            ``[shortcuts]`` 段读，并且**值一变就重建绑定**（设置页 / 命令 /
+            外部重载都立即生效）。``None`` 时回退旧的独立文件路径。
 
     Returns:
         实际登记用的注册表。
     """
     target = registry if registry is not None else shortcut_registry_of(container)
+
+    if config is not None:
+        try:
+            target.bind_config(config)
+        except Exception:  # noqa: BLE001 - 订阅失败不该拦住界面启动
+            logger.exception(
+                "shortcuts: binding the configue instance failed; "
+                "falling back to the standalone shortcut files")
 
     for spec in UI_SLOTS:
         target.register_slot(

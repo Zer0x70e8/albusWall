@@ -20,6 +20,21 @@
 2. 随包默认表（``resources/config/shortcuts.ini``）
 3. 槽装饰器里的 ``keys=`` / ``args=`` / ``kwargs=``（插件自带的
    「开箱即用」键位与固定实参）
+
+两种数据来源
+============
+
+* **配置器（推荐）**：``bind_config(config)`` 之后，键位从
+  ``albuswall.configue`` 的 ``[shortcuts]`` 段读（随包默认表与用户覆盖表由
+  ``setup_config`` 登记成两个文件，逐 key 合并），并**订阅**变更——
+  ``config.set`` / ``reset`` / 改文件后 ``load()`` 都会触发
+  :meth:`ShortcutRegistry.rebuild`，界面立即生效，不需要重启；
+* **独立配置文件（旧路径 / 无配置环境）**：不绑配置时 :meth:`load` 仍读
+  :class:`~albuswall.ui.keymap.config.ShortcutConfig`（自己读两份 ini），
+  与改造前完全一致——单测、headless 诊断、以及配置器未装配的场景都走它。
+
+写回同理：绑了配置用 :meth:`save_shortcut`（走树视图 + ``flush``，落用户表）；
+没绑配置用 :meth:`persist`（最小差异写用户文件）。
 """
 
 from __future__ import annotations
@@ -30,9 +45,12 @@ from pathlib import Path
 from typing import Any
 
 from albuswall.command import Command, CommandRegistry, Handler
+from albuswall.common.keymap import SECTION as SHORTCUT_SECTION
+from albuswall.common.keymap import ShortcutRecord
+from albuswall.configue.bootstrap import SHORTCUT_USER_FILE
 
 from .config import ShortcutConfig
-from .errors import DuplicateShortcutSlot
+from .errors import DuplicateShortcutSlot, InvalidKeySequence
 from .model import ShortcutBinding, ShortcutSlot
 from .sequence import KeySequence, parse_sequences
 
@@ -74,6 +92,33 @@ def _validate_command(command: str) -> str:
     return command
 
 
+def _record_of(binding: Any) -> ShortcutRecord:
+    """``ShortcutBinding``（Qt 键位）→ :class:`ShortcutRecord`（文本键位）。
+
+    旧路径（``ShortcutConfig``）读出来的是已经解析好的 ``KeySequence``，
+    新的统一装表路径只认识文本记录，所以在这里做一次「反解析」。
+    """
+    keys = getattr(binding, "keys", ()) or ()
+    return ShortcutRecord(
+        keys=tuple(str(key) for key in keys),
+        args=tuple(getattr(binding, "args", ()) or ()),
+        kwargs=dict(getattr(binding, "kwargs", {}) or {}),
+    )
+
+
+def _qt_application():
+    """当前 ``QCoreApplication``；没有 Qt / 没有应用时返回 ``None``。
+
+    延迟 import：本模块的其余部分只依赖 ``QtGui``（键位解析），「有没有事件
+    循环」只在热更新的调度里才关心。
+    """
+    try:
+        from PySide6.QtCore import QCoreApplication
+    except ImportError:  # pragma: no cover - 没装 Qt 的环境
+        return None
+    return QCoreApplication.instance()
+
+
 class ShortcutRegistry:
     """快捷键槽 + 键位绑定表的注册中心。
 
@@ -92,6 +137,7 @@ class ShortcutRegistry:
             self,
             *,
             command_registry: CommandRegistry | None = None,
+            config: Any | None = None,
     ) -> None:
         self._slots: dict[str, ShortcutSlot] = {}
         self._table: dict[KeySequence, list[str]] = {}
@@ -100,7 +146,18 @@ class ShortcutRegistry:
         #: 「从没加载过」和「加载后被显式解绑」，见 :meth:`persist`）。
         self._loaded: set[str] = set()
         self._command_registry = command_registry
+        #: 旧路径用的独立配置文件读取器（``ShortcutConfig``）。
         self._config: ShortcutConfig | None = None
+        #: 绑定的 ``Configue`` 实例（``bind_config`` 设置）。
+        self._configue: Any | None = None
+        #: 配置变更的取消函数（``bind_config`` 保存，``close`` 调用）。
+        self._unsubscribe: Callable[[], None] | None = None
+        #: 同一事件循环内的多次变更合并成一次重建。
+        self._rebind_pending = False
+        #: 累计重建次数（诊断 / 测试用；也方便设置页显示「已热更新 N 次」）。
+        self.rebind_count = 0
+        if config is not None:
+            self.bind_config(config)
 
     # ==================================================================
     # 快捷键槽
@@ -509,35 +566,264 @@ class ShortcutRegistry:
             *,
             strict: bool = True,
     ) -> ShortcutRegistry:
-        """从配置文件整表重载绑定（会先清空当前绑定与实参）。
+        """整表重载绑定（会先清空当前绑定与实参）。
 
-        每次调用都重新读盘（不做缓存），因此热改键位只要再调一次即可。
+        两条来源，自动选择：
+
+        * 显式给了 ``config``（``ShortcutConfig``）→ 读那两份 ini；
+        * 没给但 :meth:`bind_config` 绑过配置器 → 读 ``[shortcuts]`` 段
+          （与 ``save_shortcut`` 同源，热改后不会出现「内存态/文件态不一致」）；
+        * 都没有 → 用默认路径新建 ``ShortcutConfig``（与改造前一致）。
+
         槽声明的兜底绑定（``default_keys`` / ``default_args`` /
         ``default_kwargs``）只给「配置里没出现的命令」补位。
         """
+        if config is None and self._configue is not None:
+            records = self._records_from_configue()
+            self._loaded = set(records)
+            self._apply_records(records)
+            logger.debug(
+                "shortcuts loaded from configue: %d bindings, %d slots",
+                len(self._table), len(self._slots),
+            )
+            return self
+
         shortcut_config = config if config is not None else ShortcutConfig()
         table = shortcut_config.load(strict=strict)
 
-        self.clear_bindings()
-        for slot in self._slots.values():
-            if slot.id not in table:
-                table[slot.id] = slot.default_binding
-        for command, binding in table.items():
-            self.bind_command(
-                command,
-                binding.keys,
-                args=binding.args,
-                kwargs=binding.kwargs,
-                replace=False,
-            )
-
-        self._loaded = set(table)
+        records = {
+            command: _record_of(binding) for command, binding in table.items()
+        }
+        self._loaded = set(records)
+        self._apply_records(records, strict=strict)
         self._config = shortcut_config
         logger.debug(
             "shortcuts loaded: %d bindings, %d slots",
             len(self._table), len(self._slots),
         )
         return self
+
+    # ==================================================================
+    # 与配置器（``albuswall.configue``）的接线
+    # ==================================================================
+
+    def bind_config(self, config: Any | None) -> None:
+        """绑定 / 解绑 ``Configue``：之后键位从 ``[shortcuts]`` 段读，并热更新。
+
+        订阅的是**全部**节点、在回调里筛段名：``[shortcuts]`` 的 key 集合本身
+        会变（插件新增命令），按 key 订阅会漏掉「新出现的 key」。
+
+        Args:
+            config: ``Configue`` 实例；``None`` 表示解绑（回到独立文件路径）。
+        """
+        self._release_config()
+        self._configue = config
+        if config is None:
+            return
+        subscribe = getattr(config, "subscribe", None)
+        if not callable(subscribe):
+            logger.warning(
+                "shortcuts: config object %r has no subscribe(); "
+                "hot reload disabled", type(config).__name__,
+            )
+            return
+        self._unsubscribe = subscribe(self._on_config_change)
+
+    def _release_config(self) -> None:
+        """取消配置订阅（幂等）。"""
+        unsubscribe, self._unsubscribe = self._unsubscribe, None
+        if unsubscribe is not None:
+            try:
+                unsubscribe()
+            except Exception:  # noqa: BLE001 - 取消订阅失败不该影响调用方
+                logger.exception("shortcuts: failed to unsubscribe config")
+
+    def _on_config_change(self, node, value, source) -> None:
+        """配置变更回调（在配置层的锁外、任意线程调用）。
+
+        只关心 ``[shortcuts]`` 段；其余段（``[ui]`` / ``[thumbnail]`` ……）
+        与键位无关，直接忽略。真正的重建走 :meth:`_schedule_rebind`。
+        """
+        if not node or node[0] != SHORTCUT_SECTION:
+            return
+        logger.debug(
+            "shortcuts: [%s]%s changed (%s); scheduling rebind",
+            node[0], node[1], source,
+        )
+        self._schedule_rebind()
+
+    def _schedule_rebind(self) -> None:
+        """把重建推迟到「当前事件循环的空闲点」，同一 tick 的多次变更只重建一次。
+
+        批量场景（profile 导入、设置页「全部恢复默认」）一次会改十几个 key，
+        每个 key 都重建一次绑定表是纯浪费。
+
+        没有 ``QCoreApplication``（headless / 单测）时**同步**重建：没有事件
+        循环就没有「下一个 tick」，推迟等于永远不执行。
+        """
+        if self._rebind_pending:
+            return
+        app = _qt_application()
+        if app is None:
+            self.rebuild()
+            return
+        self._rebind_pending = True
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(0, self._run_pending_rebind)
+
+    def _run_pending_rebind(self) -> None:
+        self._rebind_pending = False
+        self.rebuild()
+
+    def rebuild(self) -> ShortcutRegistry:
+        """按当前 ``[shortcuts]`` 段重建整张绑定表（热更新入口）。
+
+        与 :meth:`load` 走同一条装表路径（:meth:`_apply_records`），所以
+        「第一次装」和「后续热更」不会漂移出两套逻辑。
+
+        绑定的配置不是 ``Configue``（没有 :meth:`bind_config`）时，退回
+        「重新读那两份 ini」，语义与旧行为一致。
+        """
+        self.rebind_count += 1
+        if self._configue is None:
+            shortcut_config = self._config or ShortcutConfig()
+            try:
+                table = shortcut_config.load(strict=False)
+            except Exception:  # noqa: BLE001 - 热重载失败保留旧绑定
+                logger.exception("shortcuts: reload failed; keeping bindings")
+                return self
+            self._config = shortcut_config
+            records = {
+                command: _record_of(binding) for command, binding in table.items()
+            }
+            self._loaded = set(records)
+            self._apply_records(records)
+            return self
+
+        records = self._records_from_configue()
+        self._loaded = set(records)
+        self._apply_records(records)
+        logger.debug(
+            "shortcuts rebuilt: %d bindings (from configue)", len(self._table),
+        )
+        return self
+
+    def _records_from_configue(self) -> dict[str, ShortcutRecord]:
+        """读 ``[shortcuts]`` 段的全部记录（坏值跳过并记日志）。"""
+        config = self._configue
+        resolver = config.resolver
+        records: dict[str, ShortcutRecord] = {}
+        for command in resolver.keys_of(SHORTCUT_SECTION):
+            try:
+                value = resolver.get_typed(SHORTCUT_SECTION, command)
+            except Exception:  # noqa: BLE001 - 一个坏条目不该拖垮整张表
+                logger.warning(
+                    "shortcuts: cannot read [%s]%s; skipped",
+                    SHORTCUT_SECTION, command, exc_info=True,
+                )
+                continue
+            if isinstance(value, ShortcutRecord):
+                records[command] = value
+                continue
+            try:
+                records[command] = ShortcutRecord.from_ini(value)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "shortcuts: [%s]%s is not a shortcut record (%r); skipped",
+                    SHORTCUT_SECTION, command, value,
+                )
+        return records
+
+    def _apply_records(
+            self,
+            records: Mapping[str, ShortcutRecord],
+            *,
+            strict: bool = True,
+    ) -> None:
+        """把 ``{command: 记录}`` 装成绑定表（**唯一**装表路径）。
+
+        - 先清空绑定与实参（配置文件才是键位的唯一事实来源）；
+        - 配置里没有的命令用槽的兜底绑定补位；
+        - 单个命令的键位非法：``strict`` 时抛 :class:`InvalidKeySequence`，
+          否则跳过该命令（保留槽的兜底键位），与旧 ``load(strict=False)``
+          的语义一致。
+        """
+        table = dict(records)
+        for slot in self._slots.values():
+            if slot.id not in table:
+                table[slot.id] = ShortcutRecord(
+                    keys=tuple(str(key) for key in slot.default_keys),
+                    args=tuple(slot.default_args),
+                    kwargs=dict(slot.default_kwargs),
+                )
+
+        self.clear_bindings()
+        for command, record in table.items():
+            try:
+                self.bind_command(
+                    command,
+                    list(record.keys),
+                    args=record.args,
+                    kwargs=dict(record.kwargs),
+                    replace=False,
+                )
+            except InvalidKeySequence:
+                if strict:
+                    raise
+                logger.warning(
+                    "shortcuts: invalid keys for %r (%r); skipped",
+                    command, record.keys,
+                )
+                continue
+
+    def save_shortcut(
+            self,
+            command: str,
+            record: ShortcutRecord,
+            *,
+            flush: bool = True,
+    ) -> bool:
+        """把一条绑定写进用户覆盖表并（默认）立即落盘。
+
+        走**树视图**而不是 ``resolver.set``：树视图会顺手
+        ``set_origin(..., 用户表路径)``，于是这个 key 的写回目标从此是用户表
+        ——运行期新增的 key（``[shortcuts]`` 里原来没有这一行）也能写对文件。
+
+        .. warning::
+           ``tree.<file>`` 是**文件视图**，``.<section>`` 才是段视图：正确的
+           写法是 ``tree.shortcuts.shortcuts[command] = record``（用户表的
+           注册名与段名都是 ``shortcuts``，看起来重复了一次）。写成
+           ``tree.shortcuts.app.quit = ...`` 会被 ``__getattr__("app")``
+           当成「段名 app」，写到 ``[app]`` 段里去。
+
+        Args:
+            command: 命令路径（= 段里的 key）。
+            record: 新绑定记录；``keys=()`` 表示显式解绑（写 ``[]``）。
+            flush: 是否立刻 ``flush(file=用户表)``。批量写请传 ``False``，
+                最后自己 flush 一次。
+
+        Returns:
+            ``True`` = 已写入（内存 + 磁盘）。
+
+        Raises:
+            RuntimeError: 没有绑定配置器（这条 API 只对配置器路径有意义）。
+        """
+        config = self._configue
+        if config is None:
+            raise RuntimeError(
+                "save_shortcut requires a bound Configue "
+                "(call bind_config(config) first)"
+            )
+        name = str(command or "").strip()
+        if not name:
+            raise ValueError("save_shortcut: command must be non-empty")
+
+        # 树视图：写成 section[key]（不是 attr），见上面的 warning。
+        config.tree[SHORTCUT_USER_FILE][SHORTCUT_SECTION][name] = record
+        if flush:
+            config.flush(file=SHORTCUT_USER_FILE)
+        return True
 
     def persist(self, config: ShortcutConfig | None = None) -> Path | None:
         """把「与默认不同的条目」写回用户表。
@@ -648,12 +934,28 @@ class ShortcutRegistry:
 
     def clear(self) -> None:
         """清空槽、绑定、实参、命令注册表引用与配置引用（测试辅助）。"""
+        self._release_config()
+        self._configue = None
         self._slots.clear()
         self._table.clear()
         self._params.clear()
         self._loaded.clear()
         self._command_registry = None
         self._config = None
+
+    def close(self) -> None:
+        """取消配置订阅（不销毁槽 / 绑定：进程级注册表要能继续用）。
+
+        幂等。订阅者是一个 ``QTimer`` 之外的回调，进程不退的话它会一直持有
+        本对象；显式 ``close()`` 之后 ``bind_config(None)`` 也能重新解绑。
+        """
+        self._release_config()
+
+    def __del__(self) -> None:  # pragma: no cover - 解释器退出路径
+        try:
+            self._release_config()
+        except Exception:  # noqa: BLE001 - 析构里不允许抛
+            pass
 
     def __len__(self) -> int:
         return len(self._table)

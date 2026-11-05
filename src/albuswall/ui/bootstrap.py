@@ -232,7 +232,10 @@ def setup_ui(container: Container, app: Application) -> Window:
     # binder 装在 activation_key_filter（phase 1）之后，Qt 后装先跑，所以
     # 真实按键先过 binder，被改写的合成空格（非自发事件）不会再触发一遍。
     try:
-        shortcuts = install_ui_shortcuts(container)
+        # 键位表的真身是配置器的 ``[shortcuts]`` 段（``setup_config`` 把随包
+        # 默认表与用户覆盖表登记成两个文件）。把注册表订阅进去，之后改值
+        # （设置页 / 命令 / 外部重载）都会立即重建绑定。
+        shortcuts = install_ui_shortcuts(container, config=container.get("config"))
         binder = install_shortcut_binder(app, shortcuts, owner=window)
         container.set(SHORTCUT_BINDER_KEY, binder)
     except Exception:  # noqa: BLE001 - 键位配置坏了不该拦住界面启动
