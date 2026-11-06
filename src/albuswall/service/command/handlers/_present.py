@@ -155,9 +155,20 @@ def register_present_override(
     只登记**给了值**的字段（``None`` 表示「不关心，用推导值」），所以同一
     叶子可以分多次登记不同字段。
 
+    与 ``configue`` 的 ``setting_item`` 的区别：那边只能改**声明层**（文案 /
+    顺序 / 默认值 / 归属文件），这边改的是**怎么看**——两边职责不重叠。
+
     Args:
         section: 配置 section（dump 的 ``section`` 字段）。
         key: 配置键（dump 的 ``config_key`` 字段）。
+        widget: 值类别，覆盖 :func:`infer_widget` 的推导结果。
+        minimum: 数值下界（进 ``constraints``）。
+        maximum: 数值上界（进 ``constraints``）。
+        step: 数值步进（进 ``constraints``）。
+        choice_labels: 选项值 → 显示文案（如 ``{"dark": "深色"}``）。
+        advanced: 是否算「高级」（``--view=basic`` 时滤掉）。
+        label: 覆盖展示名（纯字符串；i18n callable 的求值仍归配置层）。
+        description: 覆盖说明文案（同上）。
     """
     entry = PRESENT_OVERRIDES.setdefault((str(section), str(key)), {})
     overrides = {

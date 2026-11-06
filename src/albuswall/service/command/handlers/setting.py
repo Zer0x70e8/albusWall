@@ -192,14 +192,14 @@ def setup(registry: CommandRegistry, container: Container) -> None:
     def setting_schema(view: str = "text") -> Any:
         """导出配置结构。
 
-        ``view`` 语义见 :func:`albuswall.configue.schema.dump_schema`：
-        ``text`` 返回可直接打印的字符串，其余返回 dict / list（CLI 会
-        JSON 美化）。声明未 ``load()``、值读失败、无归属文件都只是降级
+        ``view`` 语义：``text`` 返回可直接打印的字符串，``flat`` 是叶子列表，
+        ``by_file`` 按归属文件分组，``tree`` / ``basic`` 是嵌套 dict（``basic``
+        只留非高级项）。声明未 ``load()``、值读失败、无归属文件都只是降级
         输出，**不会**抛错。
 
-        展示策略（``widget`` / 控件约束 / 选项文案 / ``advanced`` 分级）由
-        本模块的 ``_present.apply_present`` 补上：``configue`` 只给「声明
-        事实 + 值 + 状态」，视图装配与排版都在命令行侧。
+        数据来自 ``configue.dump_schema_dict``（只给声明事实 + 值 + 状态），
+        展示策略（``widget`` / 控件约束 / 选项文案 / ``advanced`` 分级）与
+        视图装配、排版都在本侧：``_present.apply_present`` + ``render_view``。
         """
         from albuswall.configue.schema import dump_schema_dict
 
