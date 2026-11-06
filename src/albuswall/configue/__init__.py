@@ -20,8 +20,9 @@
 ==================  ============================================================
 
 其中 ``schema`` 是**唯一**给上层（CLI / 设置页 / 文档生成器）用的内省面：
-它把 ``@configclass`` 声明自动枚举成「分组 → 叶子」的树（``dump_schema`` /
-``format_schema_dump``），并提供**两遍算法**的写回（``save_values`` /
+它把 ``@configclass`` 声明自动枚举成「分组 → 叶子」的树（``dump_schema``），
+只给**声明事实 + 值 + 状态**（控件类型 / 排版 / ``advanced`` 分级这类展示策略
+在消费者侧），并提供**两遍算法**的写回（``save_values`` /
 ``save_group``：先全量校验、后统一落盘，支持 ``dry_run``）。上层不应该
 自己去遍历 ``registry`` 的私有表，也不应该自己拼 ``flush``。
 
@@ -128,7 +129,6 @@ from .schema import (
     dump_schema,
     dump_schema_by_file,
     dump_schema_dict,
-    format_schema_dump,
     get_schema,
     invalidate_schema,
     save_group,
@@ -152,7 +152,6 @@ __all__ = [
     "build_schema", "get_schema", "invalidate_schema",
     "setting_group", "setting_item",
     "dump_schema", "dump_schema_dict", "dump_schema_by_file",
-    "format_schema_dump",
     "save_values", "save_group",
     # 加载钩子（运行期才知道 key 的段用）
     "register_load_hook", "unregister_load_hook",

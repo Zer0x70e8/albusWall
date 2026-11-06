@@ -18,8 +18,10 @@
 
 1. **自动建树**：:func:`build_schema` 遍历 :func:`registry.declarations`，
    每个 ``section`` 一个分组、每个字段一个叶子；
-2. **查询**：:func:`dump_schema` 的四种结构化视图 + 一种树形文本视图，
-   字段名与旧实现逐字对齐（设置 GUI 直接吃它）；
+2. **查询**：:func:`dump_schema` 的四种结构化视图（tree / basic / by_file /
+   flat），只输出**声明事实 + 值 + 状态**——展示策略（控件类型、控件约束、
+   选项文案、``advanced`` 分级、树形文本排版）由消费者自己决定
+   （CLI 在 ``service/command/handlers/_present.py``）；
 3. **写回**：:func:`save_values` / :func:`save_group` 两遍算法——
    第一遍只读校验（任何一个值非法就整体失败，内存与磁盘都不动），
    第二遍才 ``resolver.set`` + ``cfg.flush(only=...)``。
@@ -86,7 +88,6 @@ __all__ = [
     "dump_schema",
     "dump_schema_dict",
     "dump_schema_by_file",
-    "format_schema_dump",
     "infer_widget",
     "jsonable",
     "type_name",
@@ -119,10 +120,14 @@ UNSET = _Unset()
 
 
 class SettingWidget(str, Enum):
-    """设置页给 UI 层用的控件提示。
+    """值类别（**不是**控件）：``SettingItem.widget`` 的取值域。
 
-    它只是**提示**，不是 UI 依赖：前端可以忽略，或映射成自己的控件。
-    ``AUTO`` 表示「按值类型 / 选项推导」（见 :func:`infer_widget`）。
+    它只是**提示**，不是 UI 依赖。``AUTO`` 表示「按值类型 / 选项推导」（见
+    :func:`infer_widget`）。
+
+    注意：``dump_schema_dict`` **不再输出**这个推导结果（展示策略已迁到
+    CLI 侧，见 ``service/command/handlers/_present.py`` 的 ``infer_widget``）；
+    保留本枚举是因为 :attr:`SettingItem.widget` 的类型注解还在用它。
     """
 
     AUTO = "auto"
@@ -220,10 +225,13 @@ def infer_widget(
         value_type: Any = None,
         choices: Sequence[Any] = (),
 ) -> SettingWidget:
-    """按类型 / 枚举选项推导控件。
+    """按类型 / 枚举选项推导控件提示。
 
     ``Literal[...]`` / ``Enum`` 子类 / 显式给了 ``choices`` → ``CHOICE``；
     其余按内层类型（``Optional[X]`` 先剥出 ``X``）映射，认不出来就 ``AUTO``。
+
+    注意：本函数**不再参与 dump**（展示策略在 CLI 侧，输入是 ``type`` /
+    ``choices`` 字符串）。这里保留给「拿到的是真类型对象」的调用方。
     """
     if choices or _choices_for(value_type):
         return SettingWidget.CHOICE
@@ -239,29 +247,6 @@ def infer_widget(
     if inner is str:
         return SettingWidget.TEXT
     return SettingWidget.AUTO
-
-
-def _normalize_widget(
-        widget: SettingWidget | str | None,
-        value_type: Any = None,
-        choices: Sequence[Any] = (),
-) -> SettingWidget:
-    """把 ``widget`` 收口成 ``SettingWidget``；``AUTO`` 走类型推导。"""
-    if widget is None:
-        return infer_widget(value_type, choices)
-    if isinstance(widget, SettingWidget):
-        return infer_widget(value_type, choices) \
-            if widget is SettingWidget.AUTO else widget
-    text = str(widget).strip().lower()
-    try:
-        parsed = SettingWidget(text)
-    except ValueError as exc:
-        raise ValueError(
-            f"unknown setting widget {widget!r}; "
-            f"expected one of {[item.value for item in SettingWidget]}"
-        ) from exc
-    return infer_widget(value_type, choices) \
-        if parsed is SettingWidget.AUTO else parsed
 
 
 # ══════════════════════════════════════════════════════════════
@@ -292,7 +277,7 @@ def jsonable(value: Any) -> Any:
 
 
 def _value_repr(value: Any, limit: int = 48) -> str:
-    """一行可读的值摘要（文本视图用）。"""
+    """一行可读的值摘要（dump 的 ``value_repr`` 字段）。"""
     if value is UNSET:
         text = "<unset>"
     elif isinstance(value, (str, Path)):
@@ -338,9 +323,16 @@ def _resolve_text(value: Any) -> str:
 class SettingItem:
     """一个可编辑叶子，绑定一个配置节点 ``(section, key)``。
 
-    ``label`` / ``description`` / ``widget`` / ``choices`` 都是**展示提示**；
-    ``editable`` / ``file`` / ``advanced`` 影响行为（是否可改、写回哪个文件、
-    是否算「高级」）。
+    ``label`` / ``description`` / ``choices`` 属于**声明层**（前两个可以是
+    i18n callable，dump 时求值；``choices`` 由 ``Literal`` / ``Enum`` 反射
+    而来）。``editable`` / ``file`` / ``default`` 影响行为（是否可改、写回
+    哪个文件、默认值）。
+
+    展示策略字段（``widget`` / ``minimum`` / ``maximum`` / ``step`` /
+    ``choice_labels`` / ``advanced``）：**deprecated**。``dump_schema_dict``
+    不再输出它们（展示策略已迁到 CLI 侧的纯函数：
+    ``service/command/handlers/_present.register_present_override``）。字段
+    暂时保留只为兼容既有的 ``setting_item(...)`` 调用写法。
 
     ``default`` 为 :data:`UNSET` 表示「继承声明里的默认值」——自动建树时
     已经填好，手写覆盖时才需要它。
@@ -354,17 +346,21 @@ class SettingItem:
     label: str | Callable[[], str] = ""
     #: 说明文案，同上。
     description: str | Callable[[], str] = ""
-    widget: SettingWidget | str | None = SettingWidget.AUTO
+    #: 类型反射出的事实：``Literal`` 参数 / ``Enum`` 成员值（dump 的
+    #: ``choices`` 字段**只**来自这里与 ``value_type``，不再读手写覆盖）。
     choices: tuple[Any, ...] = ()
-    choice_labels: Mapping[str, str] = field(default_factory=dict)
-    minimum: float | None = None
-    maximum: float | None = None
-    step: float | None = None
     editable: bool = True
     order: int = 0
     default: Any = UNSET
     value_type: Any = None
     file: Path | None = None
+    # ── deprecated：dump 不再输出；展示覆盖请用
+    #    ``handlers._present.register_present_override`` ────────────
+    widget: SettingWidget | str | None = SettingWidget.AUTO
+    choice_labels: Mapping[str, str] = field(default_factory=dict)
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = None
     advanced: bool = False
 
     def __post_init__(self) -> None:
@@ -1296,16 +1292,7 @@ def _resolve_item(
     if value_type is None and value is not None:
         value_type = type(value)
 
-    choices = tuple(item.choices) or _choices_for(value_type)
-    widget = _normalize_widget(item.widget, value_type, choices)
-
-    constraints: dict[str, Any] = {}
-    if item.minimum is not None:
-        constraints["minimum"] = item.minimum
-    if item.maximum is not None:
-        constraints["maximum"] = item.maximum
-    if item.step is not None:
-        constraints["step"] = item.step
+    choices = _choices_for(value_type)
 
     readonly = False
     if origin is not None and cfg is not None:
@@ -1324,14 +1311,11 @@ def _resolve_item(
         # dump 时才求值：``label`` / ``description`` 可以是 i18n callable
         "label": _resolve_text(item.label) or item.name,
         "description": _resolve_text(item.description),
-        "widget": widget.value,
         "value": jsonable(value),
         "value_repr": _value_repr(value),
         "default": jsonable(default),
         "type": type_name(value_type),
         "choices": [jsonable(choice) for choice in choices],
-        "choice_labels": dict(item.choice_labels or {}),
-        "constraints": constraints or None,
         "order": item.order,
         "editable": bool(item.editable and group.editable),
         "present": present,
@@ -1368,7 +1352,6 @@ def _dump_group(
         "description": group.description,
         "order": group.order,
         "editable": group.editable,
-        "advanced": group.advanced,
         "file": str(group_file) if group_file is not None else None,
         "items": items,
         "groups": children,
@@ -1465,8 +1448,12 @@ def dump_schema_by_file(
 def _strip_advanced_group(
         node: dict[str, Any],
 ) -> Optional[dict[str, Any]]:
-    """丢掉 ``advanced`` 子树（按 ``advanced`` 标记或约定 id）。"""
-    if node["advanced"] or _is_advanced_id(node["id"]):
+    """丢掉 ``advanced`` 子树（只按约定 id 判：``advanced`` / ``advanced.*``）。
+
+    分组 dict 里**没有** ``advanced`` 字段（那是展示分级，已迁到 CLI 侧），
+    所以这里只看 id 约定——与旧实现里「自动分组按约定 id 打标记」的判定同源。
+    """
+    if _is_advanced_id(node["id"]):
         return None
     children = [
         kept for kept in (
@@ -1522,25 +1509,27 @@ def dump_schema(
 ) -> dict[str, Any] | list[dict[str, Any]] | str:
     """导出设置结构（唯一对外查询入口）。
 
+    只输出**声明事实 + 值 + 状态**：分组 / 叶子 / 归属文件 / 当前值 / 脏标记。
+    展示策略（控件类型、控件约束、选项文案、``advanced`` 分级、树形文本）由
+    消费者自己算——CLI 在 ``service/command/handlers/_present.py``。
+
     ``view`` 语义：
 
     * ``"tree"``：完整嵌套 dict（``groups`` / ``items`` / ``by_file`` /
       ``unbound`` / ``summary``）；
-    * ``"basic"``：丢掉 ``advanced`` 子树，派生字段按过滤后的叶子重算；
+    * ``"basic"``：丢掉 ``advanced`` 子树（按约定 id 判），派生字段按过滤后
+      的叶子重算；
     * ``"by_file"``：只按归属文件分组（``{"files": [...], "unbound": [...]}``）；
-    * ``"flat"``：扁平的叶子列表（``tree["items"]``）；
-    * ``"text"``：树形文本（:func:`format_schema_dump` 的返回值）。
+    * ``"flat"``：扁平的叶子列表（``tree["items"]``）。
 
     默认 ``"tree"``；命令行请显式传 ``view``（``setting schema`` 命令默认
-    ``text``，见 ``handlers/setting.py``）。
+    ``text``，由 CLI 侧 ``format_text`` 渲染，见 ``handlers/_present.py``）。
     """
-    if view == "text":
-        return format_schema_dump(config, registry=registry)
     if view == "by_file":
         return dump_schema_by_file(config, registry=registry)
     if view not in ("tree", "basic", "flat"):
         raise ValueError(
-            f"unknown view {view!r}; expected tree / basic / by_file / flat / text"
+            f"unknown view {view!r}; expected tree / basic / by_file / flat"
         )
 
     dump = dump_schema_dict(config, registry=registry)
@@ -1549,130 +1538,6 @@ def dump_schema(
     if view == "basic":
         return _basic_dump(dump)
     return dump
-
-
-# ══════════════════════════════════════════════════════════════
-# dump：树形文本
-# ══════════════════════════════════════════════════════════════
-
-def _item_flags(item: dict[str, Any]) -> str:
-    """叶子行的标记集合（``[dirty]`` / ``[readonly]`` …）。"""
-    flags: list[str] = []
-    if not item["editable"]:
-        flags.append("fixed")
-    if item["readonly"]:
-        flags.append("readonly")
-    if item["dirty"]:
-        flags.append("dirty")
-    if not item["present"]:
-        flags.append("missing")
-    if item["read_error"]:
-        flags.append("read-error")
-    return " ".join(f"[{flag}]" for flag in flags)
-
-
-def _render_item_lines(
-        item: dict[str, Any],
-        prefix: str,
-        is_last: bool,
-) -> list[str]:
-    """一个叶子：一行标题 + 四行缩进元信息（widget / default / file / origin）。"""
-    branch = "└─ " if is_last else "├─ "
-    detail_prefix = prefix + ("   " if is_last else "│  ")
-    head = (
-        f"{prefix}{branch}{item['label']} = {item['value_repr']}  "
-        f"({item['path']}, {item['type']})"
-    )
-    flags = _item_flags(item)
-    if flags:
-        head += f"  {flags}"
-
-    details = [
-        f"widget={item['widget']}",
-        f"default={item['default']!r}",
-        f"file={item['target_file'] or '<unbound>'}",
-        f"origin={item['origin_file'] or '-'}",
-    ]
-    if item["read_error"]:
-        details.append(f"error={item['read_error']}")
-
-    return [head] + [f"{detail_prefix}   {line}" for line in details]
-
-
-def _render_group_lines(
-        node: dict[str, Any],
-        prefix: str,
-        is_last: bool,
-) -> list[str]:
-    """一个分组：标题 + 递归渲染子分组与叶子（按 order 混排）。"""
-    branch = "└─ " if is_last else "├─ "
-    title = node["title"] or node["key"]
-    head = f"{prefix}{branch}{title} [{node['key']}] ({node['item_count']} items)"
-    if node["description"]:
-        head += f" — {node['description']}"
-    if node["file"]:
-        head += f"  file={node['file']}"
-
-    child_prefix = prefix + ("   " if is_last else "│  ")
-    entries: list[tuple[str, dict[str, Any]]] = [
-        ("group", child) for child in node["groups"]
-    ] + [("item", item) for item in node["items"]]
-
-    lines = [head]
-    for index, (kind, entry) in enumerate(entries):
-        entry_last = index == len(entries) - 1
-        if kind == "group":
-            lines.extend(_render_group_lines(entry, child_prefix, entry_last))
-        else:
-            lines.extend(_render_item_lines(entry, child_prefix, entry_last))
-    return lines
-
-
-def format_schema_dump(
-        config: Any = None,
-        *,
-        registry: Optional[SettingSchemaRegistry] = None,
-        show_files: bool = True,
-) -> str:
-    """把设置结构 dump 成「人敲一下就能看」的树形文本。
-
-    末尾的 ``Files:`` 段按归属文件列出叶子 key，推不出归属文件的进
-    ``<unbound>``。
-    """
-    dump = dump_schema_dict(config, registry=registry)
-    summary = dump["summary"]
-    lines = [
-        (
-            f"Settings schema: {summary['group_count']} groups, "
-            f"{summary['item_count']} items, "
-            f"{summary['file_count']} files"
-        )
-    ]
-
-    if not dump["groups"]:
-        lines.append("(no setting groups registered)")
-    else:
-        lines.append("")
-        for index, group in enumerate(dump["groups"]):
-            lines.extend(
-                _render_group_lines(
-                    group, "", index == len(dump["groups"]) - 1,
-                )
-            )
-
-    if show_files:
-        lines.append("")
-        lines.append("Files:")
-        if not dump["by_file"]:
-            lines.append("  (none)")
-        for path, keys in dump["by_file"].items():
-            lines.append(f"  {path}")
-            lines.extend(f"    {key}" for key in keys)
-        if dump["unbound"]:
-            lines.append("  <unbound>")
-            lines.extend(f"    {key}" for key in dump["unbound"])
-
-    return "\n".join(lines)
 
 
 # ══════════════════════════════════════════════════════════════

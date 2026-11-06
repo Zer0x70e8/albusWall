@@ -1,9 +1,13 @@
 #
-"""``configue.schema``：自动建树 / 控件推导 / 五种 dump 视图。
+"""``configue.schema``：自动建树 / 类型推导 / 四种 dump 视图。
 
 ``tests/test_configue/conftest.py`` 的 ``isolated_configue`` 自动隔离全局
 登记表；本文件只负责「声明 → 设置树」这一层，写回在
 ``test_setting_write.py``。
+
+本层只输出**声明事实 + 值 + 状态**：``widget`` / ``constraints`` /
+``choice_labels`` / ``advanced`` 这类展示策略已迁到 CLI 侧的纯函数
+（``tests/test_handlers_present.py`` 覆盖）。
 """
 
 from __future__ import annotations
@@ -23,7 +27,6 @@ from albuswall.configue.schema import (
     dump_schema,
     dump_schema_by_file,
     dump_schema_dict,
-    format_schema_dump,
     get_schema,
     infer_widget,
     invalidate_schema,
@@ -101,7 +104,7 @@ def test_auto_build_from_declarations(demo):
     assert batch["description"] == "一次处理多少"
     assert batch["section"] == "demo"
     assert batch["config_key"] == "batch_size"
-    assert batch["widget"] == "int"
+    assert "widget" not in batch        # 控件推导在 CLI 侧，见下
     assert batch["default"] == 32
     assert batch["value"] == 32          # 文件里写了 32，覆盖默认值
     assert batch["present"] is True
@@ -133,17 +136,29 @@ def test_widget_inference_matrix():
     assert infer_widget(int, ("a", "b")) is SettingWidget.CHOICE
 
 
-def test_widget_inference_through_dump(demo):
+def test_dump_has_no_presentation_fields(demo):
+    """事实字段照旧，展示字段一律不出现（含 ``choices`` 仍按声明推导）。"""
     items = {item["name"]: item for item in dump_schema(view="flat")}
+
+    for item in items.values():
+        assert not {"widget", "constraints", "choice_labels"} & set(item)
+    assert items["retries"]["type"] == "int | None"
+    assert items["theme"]["choices"] == ["dark", "light"]
+    assert items["enabled"]["type"] == "bool"
+
+
+def test_cli_presenter_derives_widget_from_dump(demo):
+    """CLI 侧纯函数吃 dump 就能还原出旧的控件矩阵（迁移契约）。"""
+    from albuswall.service.command.handlers._present import apply_present
+
+    items = {item["name"]: item for item in apply_present(dump_schema_dict(demo))["items"]}
 
     assert items["enabled"]["widget"] == "bool"
     assert items["ratio"]["widget"] == "float"
     assert items["cache_dir"]["widget"] == "path"
     assert items["name"]["widget"] == "text"
     assert items["retries"]["widget"] == "int"
-    assert items["retries"]["type"] == "int | None"
     assert items["theme"]["widget"] == "choice"
-    assert items["theme"]["choices"] == ["dark", "light"]
 
 
 # ══════════════════════════════════════════════════════════════
@@ -157,14 +172,14 @@ def test_view_tree_shape(demo):
     item = dump["items"][0]
     assert set(item) == {
         "key", "name", "group", "path", "section", "config_key", "label",
-        "description", "widget", "value", "value_repr", "default", "type",
-        "choices", "choice_labels", "constraints", "order", "editable",
+        "description", "value", "value_repr", "default", "type",
+        "choices", "order", "editable",
         "present", "dirty", "readonly", "origin_file", "target_file",
         "explicit_file", "read_error",
     }
     group = dump["groups"][0]
     assert set(group) == {
-        "id", "key", "title", "description", "order", "editable", "advanced",
+        "id", "key", "title", "description", "order", "editable",
         "file", "items", "groups", "item_count",
     }
 
@@ -212,18 +227,22 @@ def test_view_basic_drops_advanced(tmp_path: Path):
     assert basic["summary"]["item_count"] == 1
 
 
-def test_view_text(demo):
-    text = dump_schema(view="text")
-    assert isinstance(text, str)
+def test_view_text_moved_to_cli(demo):
+    """树形文本是展示策略，已迁到 ``handlers._present.format_text``。"""
+    with pytest.raises(ValueError) as excinfo:
+        dump_schema(view="text")
+    assert "text" in str(excinfo.value)
+
+    from albuswall.service.command.handlers._present import (
+        apply_present, format_text,
+    )
+
+    text = format_text(apply_present(dump_schema_dict(demo)))
     assert "Settings schema:" in text
     assert "Files:" in text
     assert "[demo]batch_size" in text
-    assert "├─ " in text or "└─ " in text
-    # 四行元信息都得在
     for marker in ("widget=int", "default=32", "file=", "origin="):
         assert marker in text
-
-    assert format_schema_dump(config=demo) == text
 
 
 def test_dump_dict_matches_tree(demo):
@@ -316,8 +335,9 @@ def test_manual_item_with_path_overrides_by_node(demo):
 
     items = {item["name"]: item for item in dump_schema(view="flat")}
     assert items["并发"]["label"] == "并发数"
-    assert items["并发"]["constraints"] == {"minimum": 1}
     assert items["并发"]["path"] == "[demo]batch_size"
+    # 控件约束属于展示策略：dump 不输出，登记在 CLI 的覆盖表里
+    assert "constraints" not in items["并发"]
 
 
 def test_manual_group_adds_new_leaf(demo):
