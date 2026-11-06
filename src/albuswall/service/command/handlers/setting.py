@@ -196,15 +196,25 @@ def setup(registry: CommandRegistry, container: Container) -> None:
         ``text`` 返回可直接打印的字符串，其余返回 dict / list（CLI 会
         JSON 美化）。声明未 ``load()``、值读失败、无归属文件都只是降级
         输出，**不会**抛错。
+
+        展示策略（``widget`` / 控件约束 / 选项文案 / ``advanced`` 分级）由
+        本模块的 ``_present.apply_present`` 补上：``configue`` 只给「声明
+        事实 + 值 + 状态」，视图装配与排版都在命令行侧。
         """
-        from albuswall.configue.schema import dump_schema
+        from albuswall.configue.schema import dump_schema_dict
+
+        from ._present import apply_present, render_view
 
         text = str(view or "text").strip().lower()
         if text not in _VIEWS:
             raise BadRequest(
                 f"unknown view {text!r}; expected text/tree/basic/by_file/flat"
             )
-        return dump_schema(view=text, config=container.get("config"))
+        dump = apply_present(
+            dump_schema_dict(config=container.get("config")),
+            show_advanced=(text != "basic"),
+        )
+        return render_view(dump, text)
 
     @registry.command(
         "setting.set",
