@@ -22,13 +22,11 @@ from albuswall.configue import ConfigFile, Configue, configclass, field, reg
 from albuswall.configue.schema import (
     _MANUAL_SCHEMA,
     SettingSchemaRegistry,
-    SettingWidget,
     build_schema,
     dump_schema,
     dump_schema_by_file,
     dump_schema_dict,
     get_schema,
-    infer_widget,
     invalidate_schema,
     register_setting_group,
     register_setting_item,
@@ -120,20 +118,6 @@ def test_auto_build_from_declarations(demo):
         str(demo.base_dir / "a.ini"): [item["key"] for item in dump["items"]],
     }
     assert dump["unbound"] == []
-
-
-def test_widget_inference_matrix():
-    assert infer_widget(bool) is SettingWidget.BOOL
-    assert infer_widget(int) is SettingWidget.INT
-    assert infer_widget(float) is SettingWidget.FLOAT
-    assert infer_widget(Path) is SettingWidget.PATH
-    assert infer_widget(str) is SettingWidget.TEXT
-    assert infer_widget(Literal["x", "y"]) is SettingWidget.CHOICE
-    assert infer_widget(Optional[int]) is SettingWidget.INT
-    assert infer_widget(Theme) is SettingWidget.CHOICE
-    assert infer_widget(object) is SettingWidget.AUTO
-    # 显式选项优先于类型
-    assert infer_widget(int, ("a", "b")) is SettingWidget.CHOICE
 
 
 def test_dump_has_no_presentation_fields(demo):
@@ -330,7 +314,7 @@ def test_manual_item_overrides_auto_leaf(demo):
 def test_manual_item_with_path_overrides_by_node(demo):
     register_setting_item(
         "demo",
-        setting_item("并发", "demo", "batch_size", label="并发数", minimum=1),
+        setting_item("并发", "demo", "batch_size", label="并发数"),
     )
 
     items = {item["name"]: item for item in dump_schema(view="flat")}

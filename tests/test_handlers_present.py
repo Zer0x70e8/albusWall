@@ -16,11 +16,15 @@ import pytest
 
 from albuswall.service.command.handlers import _present
 from albuswall.service.command.handlers._present import (
+    PRESENT_GROUP_OVERRIDES,
     PRESENT_OVERRIDES,
+    WIDGETS,
+    SettingWidget,
     apply_present,
     by_file_view,
     format_text,
     infer_widget,
+    register_present_group,
     register_present_override,
     render_view,
 )
@@ -30,10 +34,12 @@ from albuswall.service.command.handlers._present import (
 def _isolated_overrides():
     """覆盖表是模块级的，用例之间必须清干净（数据不留状态）。"""
     PRESENT_OVERRIDES.clear()
+    PRESENT_GROUP_OVERRIDES.clear()
     try:
         yield
     finally:
         PRESENT_OVERRIDES.clear()
+        PRESENT_GROUP_OVERRIDES.clear()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -173,6 +179,16 @@ def test_infer_widget_matrix(type_name, expected):
     assert infer_widget(type_name, ()) == expected
 
 
+def test_widget_enum_covers_every_derived_value():
+    """枚举是推导结果的唯一取值域（从 configue 搬来的所有权）。"""
+    assert set(WIDGETS) == {
+        "auto", "text", "int", "float", "bool", "choice", "path",
+        "list", "dict",
+    }
+    assert {member.value for member in SettingWidget} == set(WIDGETS)
+    assert infer_widget("int", ()) == SettingWidget.INT.value
+
+
 def test_infer_widget_choices_win():
     # Literal / Enum：选项是事实，不必再看内层类型
     assert infer_widget("int", ("a", "b")) == "choice"
@@ -256,6 +272,29 @@ def test_apply_present_override_is_copied(dump):
     labels["dark"] = "改标题不生效"
     items = {item["key"]: item for item in apply_present(dump)["items"]}
     assert items["demo.theme"]["choice_labels"] == {"dark": "深色"}
+
+
+def test_register_present_group_marks_group_advanced():
+    dump = make_dump([
+        make_group("demo", [dump_item("a")]),
+        make_group("secrets", [dump_item("b", group="secrets")]),
+    ])
+    register_present_group("secrets", advanced=True)
+
+    basic = apply_present(dump, show_advanced=False)
+    assert [group["id"] for group in basic["groups"]] == ["demo"]
+    assert [item["key"] for item in basic["items"]] == ["demo.a"]
+
+    # 分组覆盖也能「取消」约定 id 的升级（advanced.* 默认算高级）
+    PRESENT_GROUP_OVERRIDES.clear()
+    dump = make_dump([make_group("advanced.x", [
+        dump_item("c", group="advanced.x"),
+    ])])
+    register_present_group("advanced.x", advanced=False)
+    assert [group["id"] for group in apply_present(dump)["groups"]] == ["advanced.x"]
+    assert apply_present(make_dump([make_group("advanced.x", [
+        dump_item("c", group="advanced.x"),
+    ])]), show_advanced=False)["items"]
 
 
 def test_show_advanced_false_drops_advanced_subtree(dump):

@@ -26,14 +26,32 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from enum import Enum
 from typing import Any, Iterator
 
 __all__: list[str] = []
 
-#: 值类别（**不是** Qt 控件名）：CLI 拿它决定怎么排版提示，设置页自己再映射。
-WIDGETS: tuple[str, ...] = (
-    "bool", "int", "float", "text", "path", "choice", "list", "dict", "auto",
-)
+
+class SettingWidget(str, Enum):
+    """值类别（**不是**控件）：展示策略层的取值域。
+
+    从 ``configue.schema`` 搬过来的——它描述的是「值该怎么显示」，不是配置
+    事实。前端可以忽略它，也可以映射成自己的控件。
+    """
+
+    AUTO = "auto"
+    TEXT = "text"
+    INT = "int"
+    FLOAT = "float"
+    BOOL = "bool"
+    CHOICE = "choice"
+    PATH = "path"
+    LIST = "list"
+    DICT = "dict"
+
+
+#: :func:`infer_widget` 的全部返回值（顺序即文档顺序）。
+WIDGETS: tuple[str, ...] = tuple(member.value for member in SettingWidget)
 
 #: ``advanced`` 分组的约定 id（``advanced`` / ``advanced.xxx``）。
 _ADVANCED_ID = "advanced"
@@ -81,11 +99,11 @@ def infer_widget(type_name: str, choices: Sequence = ()) -> str:
         choices: 声明推导出的选项（``Literal`` 参数 / ``Enum`` 成员值）。
 
     Returns:
-        ``"bool"`` / ``"int"`` / ``"float"`` / ``"text"`` / ``"path"`` /
-        ``"choice"`` / ``"list"`` / ``"dict"`` / ``"auto"`` 之一。
+        :class:`SettingWidget` 的取值（``str`` 子类，JSON 里就是
+        ``"int"`` / ``"choice"`` 这样的字符串）。
     """
     if choices:
-        return "choice"
+        return SettingWidget.CHOICE.value
 
     base = _split_optional(str(type_name or "").strip())
     scalar = _SCALAR_WIDGETS.get(base)
@@ -94,10 +112,10 @@ def infer_widget(type_name: str, choices: Sequence = ()) -> str:
     if base in ("list", "tuple", "set") or base.startswith(
             ("list[", "tuple[", "set[")
     ):
-        return "list"
+        return SettingWidget.LIST.value
     if base == "dict" or base.startswith("dict["):
-        return "dict"
-    return "auto"
+        return SettingWidget.DICT.value
+    return SettingWidget.AUTO.value
 
 
 # ══════════════════════════════════════════════════════════════
@@ -106,6 +124,9 @@ def infer_widget(type_name: str, choices: Sequence = ()) -> str:
 
 #: ``(section, key)`` → 展示覆盖字段。只在 :func:`apply_present` 里被读。
 PRESENT_OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {}
+
+#: 分组 id（``qualname``）→ 是否算「高级」。同上，只是数据。
+PRESENT_GROUP_OVERRIDES: dict[str, bool] = {}
 
 #: 覆盖表里认的键（顺序即 ``apply_present`` 的合并顺序）。
 _OVERRIDE_KEYS: tuple[str, ...] = (
@@ -157,6 +178,33 @@ def register_present_override(
         entry[name] = dict(value) if name == "choice_labels" else value
 
 
+def register_present_group(
+        group_id: str, *, advanced: bool = True,
+) -> None:
+    """登记分组的展示覆盖（目前只有「是否算高级」一项）。
+
+    分组是否算高级本来是 ``configue`` 里的声明字段，那是把展示分级塞进了
+    声明层；现在只剩 id 约定（``advanced`` / ``advanced.*``）打底，特例
+    走这张表。与 :func:`register_present_override` 一样：只写表，不算。
+
+    Args:
+        group_id: 分组 id，也可给点分 ``qualname``（如 ``advanced.http``）。
+        advanced: 是否算「高级」（``--view=basic`` 会整棵子树滤掉）。
+    """
+    PRESENT_GROUP_OVERRIDES[str(group_id)] = bool(advanced)
+
+
+def _group_advanced(node: Mapping[str, Any]) -> bool:
+    """分组是否算高级：覆盖表优先，其次 ``advanced`` 约定 id。"""
+    for name in (node.get("key"), node.get("id")):
+        text = str(name or "")
+        if text and text in PRESENT_GROUP_OVERRIDES:
+            return PRESENT_GROUP_OVERRIDES[text]
+    return _is_advanced_id(str(node.get("key") or "")) or _is_advanced_id(
+        str(node.get("id") or ""),
+    )
+
+
 def _override_for(item: Mapping[str, Any]) -> Mapping[str, Any]:
     """取这个叶子的覆盖字段（没有就是空表）。"""
     return PRESENT_OVERRIDES.get(
@@ -181,8 +229,12 @@ def _item_advanced(item: Mapping[str, Any]) -> bool:
     )
 
 
-def _apply_item(item: dict[str, Any]) -> None:
-    """给一个叶子补 ``widget`` / ``constraints`` / ``choice_labels`` / 高级标记。"""
+def _apply_item(item: dict[str, Any], group_advanced: bool) -> None:
+    """给一个叶子补 ``widget`` / ``constraints`` / ``choice_labels`` / 高级标记。
+
+    ``group_advanced`` 是所在分组算出来的高级标记（调用方给），叶子自己的
+    覆盖优先——这样「整组降级」和「单个叶子升级」都能表达。
+    """
     override = _override_for(item)
 
     widget = override.get("widget")
@@ -200,7 +252,7 @@ def _apply_item(item: dict[str, Any]) -> None:
     item["choice_labels"] = dict(override.get("choice_labels") or {})
     item["advanced"] = (
         bool(override["advanced"]) if "advanced" in override
-        else _item_advanced(item)
+        else group_advanced
     )
 
     for text_key in ("label", "description"):
@@ -208,15 +260,14 @@ def _apply_item(item: dict[str, Any]) -> None:
             item[text_key] = str(override[text_key])
 
 
-def _apply_group(node: dict[str, Any]) -> None:
-    """递归给分组补高级标记、给叶子补展示字段。"""
-    node["advanced"] = _is_advanced_id(
-        str(node.get("key") or node.get("id") or ""),
-    ) or _is_advanced_id(str(node.get("id") or ""))
+def _apply_group(node: dict[str, Any], seen: set[int]) -> None:
+    """递归给分组补高级标记、给叶子补展示字段（``seen`` 防重复处理）。"""
+    node["advanced"] = _group_advanced(node)
     for item in node.get("items") or ():
-        _apply_item(item)
+        seen.add(id(item))
+        _apply_item(item, node["advanced"])
     for child in node.get("groups") or ():
-        _apply_group(child)
+        _apply_group(child, seen)
 
 
 def _flatten(node: dict[str, Any]) -> Iterator[dict[str, Any]]:
@@ -310,10 +361,13 @@ def apply_present(
     Returns:
         同一个 ``dump`` 对象（便于链式调用 / 就地生效）。
     """
+    seen: set[int] = set()
     for group in dump.get("groups") or ():
-        _apply_group(group)
+        _apply_group(group, seen)
+    # 没有分组上下文的 dump（只喂 items）也要能补字段
     for item in dump.get("items") or ():
-        _apply_item(item)
+        if id(item) not in seen:
+            _apply_item(item, _item_advanced(item))
 
     if not show_advanced:
         _drop_advanced(dump)

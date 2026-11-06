@@ -123,7 +123,6 @@ from .schema import (
     SettingGroup,
     SettingItem,
     SettingSchemaRegistry,
-    SettingWidget,
     SettingWriteResult,
     build_schema,
     dump_schema,
@@ -147,7 +146,7 @@ __all__ = [
     # 变更广播（``c.subscribe(cb, nodes=...)`` 返回取消函数）
     "EventHub",
     # 设置结构层（枚举 / 校验 / 写回）
-    "SettingWidget", "SettingItem", "SettingGroup",
+    "SettingItem", "SettingGroup",
     "SettingSchemaRegistry", "SettingWriteResult", "UNSET",
     "build_schema", "get_schema", "invalidate_schema",
     "setting_group", "setting_item",

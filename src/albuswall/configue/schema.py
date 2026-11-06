@@ -70,7 +70,6 @@ logger = logging.getLogger(__name__)
 __all__ = [
     # 数据结构
     "UNSET",
-    "SettingWidget",
     "SettingItem",
     "SettingGroup",
     "SettingSchemaRegistry",
@@ -88,7 +87,6 @@ __all__ = [
     "dump_schema",
     "dump_schema_dict",
     "dump_schema_by_file",
-    "infer_widget",
     "jsonable",
     "type_name",
     # 写回
@@ -119,32 +117,8 @@ class _Unset:
 UNSET = _Unset()
 
 
-class SettingWidget(str, Enum):
-    """值类别（**不是**控件）：``SettingItem.widget`` 的取值域。
-
-    它只是**提示**，不是 UI 依赖。``AUTO`` 表示「按值类型 / 选项推导」（见
-    :func:`infer_widget`）。
-
-    注意：``dump_schema_dict`` **不再输出**这个推导结果（展示策略已迁到
-    CLI 侧，见 ``service/command/handlers/_present.py`` 的 ``infer_widget``）；
-    保留本枚举是因为 :attr:`SettingItem.widget` 的类型注解还在用它。
-    """
-
-    AUTO = "auto"
-    TEXT = "text"
-    MULTILINE = "multiline"
-    INT = "int"
-    FLOAT = "float"
-    BOOL = "bool"
-    CHOICE = "choice"
-    PATH = "path"
-    FILE = "file"
-    DIR = "dir"
-    SECRET = "secret"
-
-
 # ══════════════════════════════════════════════════════════════
-# 类型 / 控件推导
+# 类型推导（只推「选项」这类事实；值类别是展示策略，在 CLI 侧）
 # ══════════════════════════════════════════════════════════════
 
 def _unwrap_optional(value_type: Any) -> Any:
@@ -219,34 +193,6 @@ def type_name(value_type: Any) -> str:
             return f"dict[{type_name(args[0])}, {type_name(args[1])}]"
         return "dict"
     return str(value_type).replace("typing.", "")
-
-
-def infer_widget(
-        value_type: Any = None,
-        choices: Sequence[Any] = (),
-) -> SettingWidget:
-    """按类型 / 枚举选项推导控件提示。
-
-    ``Literal[...]`` / ``Enum`` 子类 / 显式给了 ``choices`` → ``CHOICE``；
-    其余按内层类型（``Optional[X]`` 先剥出 ``X``）映射，认不出来就 ``AUTO``。
-
-    注意：本函数**不再参与 dump**（展示策略在 CLI 侧，输入是 ``type`` /
-    ``choices`` 字符串）。这里保留给「拿到的是真类型对象」的调用方。
-    """
-    if choices or _choices_for(value_type):
-        return SettingWidget.CHOICE
-    inner = _unwrap_optional(value_type)
-    if inner is bool:
-        return SettingWidget.BOOL
-    if inner is int:
-        return SettingWidget.INT
-    if inner is float:
-        return SettingWidget.FLOAT
-    if inner is Path:
-        return SettingWidget.PATH
-    if inner is str:
-        return SettingWidget.TEXT
-    return SettingWidget.AUTO
 
 
 # ══════════════════════════════════════════════════════════════
@@ -328,11 +274,9 @@ class SettingItem:
     而来）。``editable`` / ``file`` / ``default`` 影响行为（是否可改、写回
     哪个文件、默认值）。
 
-    展示策略字段（``widget`` / ``minimum`` / ``maximum`` / ``step`` /
-    ``choice_labels`` / ``advanced``）：**deprecated**。``dump_schema_dict``
-    不再输出它们（展示策略已迁到 CLI 侧的纯函数：
-    ``service/command/handlers/_present.register_present_override``）。字段
-    暂时保留只为兼容既有的 ``setting_item(...)`` 调用写法。
+    **展示策略不在这里**：控件类别、控件约束（min/max/step）、选项文案、
+    高级分级都不属于声明事实。需要覆盖就登记到 CLI 侧的纯数据表——
+    ``service/command/handlers/_present.register_present_override``。
 
     ``default`` 为 :data:`UNSET` 表示「继承声明里的默认值」——自动建树时
     已经填好，手写覆盖时才需要它。
@@ -354,14 +298,6 @@ class SettingItem:
     default: Any = UNSET
     value_type: Any = None
     file: Path | None = None
-    # ── deprecated：dump 不再输出；展示覆盖请用
-    #    ``handlers._present.register_present_override`` ────────────
-    widget: SettingWidget | str | None = SettingWidget.AUTO
-    choice_labels: Mapping[str, str] = field(default_factory=dict)
-    minimum: float | None = None
-    maximum: float | None = None
-    step: float | None = None
-    advanced: bool = False
 
     def __post_init__(self) -> None:
         if not self.key:
@@ -379,25 +315,6 @@ class SettingItem:
         else:
             choices = tuple(choices)
         self.choices = choices
-
-        labels = self.choice_labels or {}
-        if not isinstance(labels, Mapping):
-            raise TypeError(
-                f"setting item {self.name!r}: choice_labels must be a mapping, "
-                f"got {type(labels).__name__}"
-            )
-        self.choice_labels = {str(k): str(v) for k, v in labels.items()}
-
-        if not isinstance(self.widget, SettingWidget) and self.widget is not None:
-            text = str(self.widget).strip().lower()
-            try:
-                self.widget = SettingWidget(text)
-            except ValueError as exc:
-                raise ValueError(
-                    f"setting item {self.name!r}: unknown widget "
-                    f"{self.widget!r}; expected one of "
-                    f"{[item.value for item in SettingWidget]}"
-                ) from exc
 
         if self.file is not None:
             self.file = Path(self.file)
@@ -486,7 +403,6 @@ class SettingGroup:
             description: str = "",
             order: int = 0,
             editable: bool = True,
-            advanced: bool = False,
             file: Path | None = None,
     ) -> None:
         text = str(id or "").strip()
@@ -497,7 +413,6 @@ class SettingGroup:
         self.description = description
         self.order = order
         self.editable = editable
-        self.advanced = advanced
         self.file = Path(file) if file is not None else None
         self._children: list[SettingGroup | SettingItem] = []
         self._parent: Optional[SettingGroup] = None
@@ -666,7 +581,6 @@ def _clone_group(group: SettingGroup) -> SettingGroup:
         description=group.description,
         order=group.order,
         editable=group.editable,
-        advanced=group.advanced,
         file=group.file,
     )
     for child in group.children:
@@ -906,13 +820,15 @@ def setting_group(
         description: str = "",
         order: int = 0,
         editable: bool = True,
-        advanced: bool = False,
         file: Path | None = None,
 ) -> SettingGroup:
     """构造一个手写分组（函数式入口，第二期设置 GUI 用）。
 
     与自动建树的分组同 id 时按 id 合并（标题 / 说明 / 顺序 / 归属文件按
     「非空即覆盖」处理），不会替换掉自动叶子。
+
+    这里**只有声明层**：分组是否算「高级」是展示分级，由 CLI 侧按分组 id
+    约定（``advanced`` / ``advanced.*``）判定。
     """
     return SettingGroup(
         group_id,
@@ -920,7 +836,6 @@ def setting_group(
         description=description,
         order=order,
         editable=editable,
-        advanced=advanced,
         file=file,
     )
 
@@ -1023,7 +938,6 @@ def _auto_groups(cfg: Any) -> list[SettingGroup]:
                     section,
                     section,
                     order=info.order,
-                    advanced=_is_advanced_id(section),
                 )
                 buckets[section] = group
                 orders[section] = info.order
@@ -1105,8 +1019,6 @@ def _merge_group(target: SettingGroup, source: SettingGroup) -> None:
         target.order = source.order
     if not source.editable:
         target.editable = False
-    if source.advanced:
-        target.advanced = True
     if source.file is not None:
         target.file = source.file
 
@@ -1141,8 +1053,9 @@ def _find_auto_item(
 def _merge_item(group: SettingGroup, manual: SettingItem) -> None:
     """把手写叶子的「非默认字段」覆盖到自动叶子上。
 
-    覆盖规则是**非空即覆盖**：``label`` / ``description`` 空串、``widget``
-    为 ``AUTO``、``default`` 为 ``UNSET`` 都表示「不关心，用自动值」。
+    覆盖规则是**非空即覆盖**：``label`` / ``description`` 空串、``default``
+    为 ``UNSET`` 都表示「不关心，用自动值」。这里只合**声明层**字段；控件
+    类别 / 约束 / 选项文案 / 高级分级属于展示策略，归 CLI 侧的覆盖表。
     找不到对应自动叶子时把手写叶子直接挂进分组（新增一个叶子）。
     """
     target = _find_auto_item(group, manual)
@@ -1156,18 +1069,8 @@ def _merge_item(group: SettingGroup, manual: SettingItem) -> None:
         target.label = manual.label
     if manual.description:
         target.description = manual.description
-    if manual.widget not in (None, SettingWidget.AUTO):
-        target.widget = manual.widget
     if manual.choices:
         target.choices = tuple(manual.choices)
-    if manual.choice_labels:
-        target.choice_labels = dict(manual.choice_labels)
-    if manual.minimum is not None:
-        target.minimum = manual.minimum
-    if manual.maximum is not None:
-        target.maximum = manual.maximum
-    if manual.step is not None:
-        target.step = manual.step
     if not manual.editable:
         target.editable = False
     if manual.order:
@@ -1178,8 +1081,6 @@ def _merge_item(group: SettingGroup, manual: SettingItem) -> None:
         target.value_type = manual.value_type
     if manual.file is not None:
         target.file = manual.file
-    if manual.advanced:
-        target.advanced = True
     if manual.name and manual.name != target.name:
         target.name = manual.name
 
