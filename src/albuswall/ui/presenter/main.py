@@ -12,8 +12,12 @@
    相册切换 → 内容网格 / 搜索作用域；网格激活 → 详情页；当前资产
    （网格光标 / 详情页翻页）→ 标签栏；标签点击 → 搜索过滤；标签结构编辑
    意图 → 标签编辑器 …… 错误统一转成窗口 toast；
-3. **主题**：读 ``[ui]`` 配置，把内置主题的 QSS 套到窗口上；``set_theme()``
-   切换主题并回写配置（配置器会按 ``[main]`` 文件的 autosave 策略落盘）；
+3. **配置**：唯一写配置的入口是 :meth:`MainPresenter.update_settings`
+   —— 站 :func:`albuswall.ui.window.settings.update_settings` 上（校验后统一
+   落盘），并把「主题 / 语言」这类需要**立刻生效**的键分发给对应 presenter；
+   退出时 :meth:`persist_ui_state` 汇总各子 presenter 的 ``ui_state()``
+   一次提交（窗口几何 / 上次相册 / 网格列数 → ``[window]`` 段）。
+   读配置的入口是 :mod:`albuswall.ui.window.settings`（``window_state``）；
 4. **语言**：窗口收到 ``LanguageChange`` 后让每个 presenter 重算自己持有的
    文案 / 数据（控件由 Qt 自己刷新，presenter 收不到那条事件）。
 
@@ -29,6 +33,7 @@
 ``tag_editor``（TagEditorPresenter） 标签新建 / 重命名 / 删除
 ``source``（SourcePresenter） 导入源页（卡片 + 表单）
 ``search``（SearchPresenter） 浮动搜索栏（按标签过滤）
+``settings``（SettingsPresenter） 设置页（配置 dump ⇄ 被动视图 ⇄ 写回）
 ===========================  =====================================
 
 构造 / 启动顺序 = 各 presenter 模块的 **import 顺序**（每个模块在 import 期
@@ -70,11 +75,13 @@ from PySide6.QtCore import QEvent, QObject, Signal
 from PySide6.QtWidgets import QApplication, QWidget
 
 from albuswall.configue.errors import ConfigError
+from albuswall.ui.window import settings as ui_settings
 
 from .album_presenter import AlbumPresenter
 from .base import Presenter, registered_presenters
 from .content_presenter import ContentPresenter
 from .search_presenter import SearchPresenter
+from .settings_presenter import SettingsPresenter
 from .source_presenter import SourcePresenter
 from .tag_editor_presenter import TagEditorPresenter
 from .tagbar_presenter import TagBarPresenter
@@ -202,6 +209,10 @@ class MainPresenter(Presenter):
         if app is None or self._shutdown_hooked:
             return
         try:
+            # 先存界面状态、再收树：``aboutToQuit`` 按连接顺序回调，
+            # ``persist_ui_state`` 要赶在各子 presenter 的 ``on_stop`` 之前
+            # （那里会断开信号、丢引用；控件本身还在，但早点读更稳）。
+            app.aboutToQuit.connect(self.persist_ui_state)
             app.aboutToQuit.connect(self.stop)
         except (AttributeError, RuntimeError) as exc:
             logger.debug("presenter: cannot hook aboutToQuit (%s)", exc)
@@ -225,7 +236,13 @@ class MainPresenter(Presenter):
         self._install_language_filter()
 
     def on_stop(self) -> None:
-        """退出路径：摘掉语言监听；样式表保持不动（应用即将销毁）。"""
+        """退出路径：存界面状态 → 摘掉语言监听；样式表保持不动。
+
+        ``persist_ui_state`` 在这里再调一次是**幂等**兜底：没有 ``QApplication``
+        （headless / 单测）时 ``aboutToQuit`` 不会触发，但状态仍然该落盘。
+        值没变时配置器不会重复写文件（``save_values`` 跳过相同的值）。
+        """
+        self.persist_ui_state()
         self._remove_language_filter()
 
     def _install_children(self) -> None:
@@ -267,6 +284,7 @@ class MainPresenter(Presenter):
         tag_editor = self._child_of(TagEditorPresenter)
         source = self._child_of(SourcePresenter)
         search = self._child_of(SearchPresenter)
+        settings = self._child_of(SettingsPresenter)
         window_p = self._child_of(WindowPresenter)
 
         # ---- 错误 / 提示 → 窗口 toast ----
@@ -321,6 +339,10 @@ class MainPresenter(Presenter):
         # ---- 主题变化 → 窗口 presenter 重新装图标 ----
         if window_p is not None:
             self.theme_changed.connect(window_p.apply_theme)
+
+        # ---- 窗口菜单 / 快捷键「设置」→ 设置页 presenter ----
+        if window_p is not None and settings is not None:
+            window_p.settings_requested.connect(settings.open)
 
         # ---- 详情页关闭 → 收起浮层 + 标签作用对象回到网格光标 ----
         if viewer is not None and window_p is not None:
@@ -512,13 +534,155 @@ class MainPresenter(Presenter):
             "presenter: no QApplication/window bound; theme not applied")
 
     def _persist_theme(self, name: str) -> None:
-        """把主题名写进 ``[ui] theme``（配置器的 autosave 负责落盘）。"""
+        """把主题名写进 ``[ui] theme``（走唯一的配置更新入口）。
+
+        不再直接 ``ThemeConfig().theme = name``：那条路绕过了「先全量校验、
+        后统一落盘」，也绕过了 ``MainPresenter.update_settings`` 的运行期
+        分发。``apply=False`` 是因为调用方（:meth:`set_theme`）已经套过主题，
+        再套一次只会重复发 ``theme_changed``。
+        """
         try:
-            ThemeConfig().theme = name
+            self.update_settings({"ui.theme": name}, apply=False)
         except (ConfigError, AttributeError, ValueError) as exc:
             logger.warning(
                 "presenter: cannot persist theme %r (%s: %s)",
                 name, type(exc).__name__, exc)
             return
         logger.debug("presenter: theme %r persisted to [ui] theme", name)
+
+    # ------------------------------------------------------------------ #
+    # 配置：最终更新入口 + 界面状态
+    # ------------------------------------------------------------------ #
+    def update_settings(
+            self,
+            values: Any,
+            *,
+            dry_run: bool = False,
+            strict: bool = False,
+            collect_errors: bool = False,
+            flush: bool = True,
+            apply: bool = True,
+    ) -> dict[str, Any]:
+        """**界面侧唯一的配置更新入口**：校验 → 写盘 → 运行期生效。
+
+        Args:
+            values: ``{"<section>.<key>": 值}``（也接受 ``("section", "key")``
+                元组 / ``"[section]key"`` 文本，规则见 :func:`save_values`）。
+            dry_run: 只校验 + 预览，不写内存也不写盘。
+            strict: 写盘失败立即抛 ``ConfigError``。
+            collect_errors: 收集**全部**校验错误（不抛第一个）；设置页保存用。
+            flush: ``False`` 时只写内存、不落盘（草稿模式）。
+            apply: 是否让改动**立刻生效**（见 :meth:`_apply_setting_changes`）。
+                退出前批量落盘这类场景传 ``False``。
+
+        Returns:
+            报告字典（``applied`` / ``written`` / ``pending`` / ``ok`` / …），
+            与 ``setting.set`` 的返回值同形。设置页的「保存 / 草稿 / 预览」
+            直接 ``return self.update_settings(changes, ...)`` 即可。
+
+        Raises:
+            ConfigError: 进程没有配置单例 / ``strict=True`` 且写盘失败。
+            ValueError: 键未声明 / 值转不过去 / 叶子没有归属文件。
+        """
+        report = ui_settings.update_settings(
+            values, dry_run=dry_run, strict=strict,
+            collect_errors=collect_errors, flush=flush,
+        )
+        if apply and not report.get("dry_run") and not report.get(
+                "validation_errors"):
+            self._apply_setting_changes(report.get("applied") or ())
+        return report
+
+    def _apply_setting_changes(self, applied: Any) -> None:
+        """把「已写入的配置键」分发给真正拥有运行期状态的 presenter。
+
+        只处理**现在就能安全热切换**的两类：
+
+        * ``ui.theme`` —— 重新解析并套样式表（图标由 ``theme_changed`` 带动）；
+        * ``ui.language`` —— 交给容器里的 ``i18n``（缺这个依赖就跳过）。
+
+        ``[window]`` 段不在这里处理：它是**下次启动**才生效的状态，热改一个
+        几何没有意义。别的新键（``[thumbnail]`` 之类）属于服务层，由各自的
+        服务自己重读配置。
+        """
+        keys = {str(key) for key in applied}
+        if "ui.theme" in keys:
+            theme = self._configured_theme_name()
+            if theme and theme != self.theme_name:
+                self.apply_theme(theme)
+        if "ui.language" in keys:
+            self._apply_language()
+
+    @staticmethod
+    def _configured_theme_name() -> str:
+        """``[ui] theme`` 的当前值（读不到 → 空串）。"""
+        try:
+            return str(ThemeConfig().theme or "").strip()
+        except (ConfigError, AttributeError, KeyError) as exc:
+            logger.debug("presenter: cannot read [ui] theme (%s)", exc)
+            return ""
+
+    def _apply_language(self) -> None:
+        """让 i18n 切到 ``[ui] language``（没有 i18n 依赖时静默跳过）。
+
+        ``configured_language`` 住在 :mod:`albuswall.ui.bootstrap`，而那个模块
+        在 import 期就 import 了本类 —— 所以只能**函数内** import（此时它早已
+        加载完毕，不会再触发循环）。
+        """
+        i18n = self.service("i18n")
+        set_language = getattr(i18n, "set_language", None)
+        if not callable(set_language):
+            return
+        try:
+            from albuswall.ui.bootstrap import configured_language
+
+            language = configured_language()
+        except Exception:  # noqa: BLE001 - 读配置失败就不切
+            logger.exception("presenter: cannot resolve [ui] language")
+            return
+        if not language:
+            return
+        try:
+            set_language(language)
+        except Exception:  # noqa: BLE001 - 语言切换失败不该影响其它键
+            logger.exception("presenter: cannot apply language %r", language)
+
+    def persist_ui_state(self) -> dict[str, Any]:
+        """汇总各子 presenter 的 :meth:`Presenter.ui_state` 并一次提交。
+
+        退出路径与「设置页立刻记住」共用这一个入口：
+
+        * 每个子 presenter 只负责自己那几条（窗口几何在 ``window``、
+          上次相册在 ``album``、网格列数在 ``content``）；
+        * 汇总后**一次**提交 —— 一次校验、一次落盘，不会每个 presenter
+          各写一遍文件；
+        * 单个 presenter 抛异常只记日志：退出路径不允许崩。
+        """
+        merged: dict[str, Any] = {}
+        for child in self._children.values():
+            getter = getattr(child, "ui_state", None)
+            if not callable(getter):
+                continue
+            try:
+                state = getter() or {}
+            except Exception:  # noqa: BLE001 - 一个 presenter 坏了不影响其它
+                logger.exception(
+                    "presenter: %r.ui_state() failed", child.name)
+                continue
+            for key, value in dict(state).items():
+                merged[str(key)] = value
+
+        if not merged:
+            return {}
+        try:
+            report = self.update_settings(merged, apply=False)
+        except (ConfigError, AttributeError, KeyError, TypeError, ValueError) as exc:
+            logger.warning(
+                "presenter: cannot persist UI state (%s: %s)",
+                type(exc).__name__, exc)
+            return {}
+        logger.debug(
+            "presenter: UI state persisted (%d fields, applied=%s)",
+            len(merged), report.get("applied"))
+        return report
 

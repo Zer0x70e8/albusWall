@@ -6,6 +6,7 @@ DTO / repo / service / UI 一律从这里取枚举，不在各层声明平行枚
 
 from .import_ import FileTypeCheckMode
 from .ipc import IpcErrorCode
+from .setting import SettingWidget
 from .source import CandidateStatus
 from .task import BackpressureReason, ExecutorType
 from .thumbnail import ThumbSpec
@@ -17,6 +18,7 @@ __all__ = [
     "ExecutorType",
     "FileTypeCheckMode",
     "IpcErrorCode",
+    "SettingWidget",
     "ThumbSpec",
     "UpdateMode",
 ]

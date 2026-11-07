@@ -21,6 +21,7 @@ import pytest
 from albuswall.configue import ConfigFile, Configue, configclass, field, reg
 from albuswall.configue.schema import (
     _MANUAL_SCHEMA,
+    SCHEMA_DUMP_VERSION,
     SettingSchemaRegistry,
     build_schema,
     dump_schema,
@@ -113,6 +114,7 @@ def test_auto_build_from_declarations(demo):
         "group_count": 1,
         "item_count": 7,
         "file_count": 1,
+        "uncovered_count": 0,
     }
     assert dump["by_file"] == {
         str(demo.base_dir / "a.ini"): [item["key"] for item in dump["items"]],
@@ -122,7 +124,7 @@ def test_auto_build_from_declarations(demo):
 
 def test_dump_has_no_presentation_fields(demo):
     """事实字段照旧，展示字段一律不出现（含 ``choices`` 仍按声明推导）。"""
-    items = {item["name"]: item for item in dump_schema(view="flat")}
+    items = {item["name"]: item for item in dump_schema(view="flat")["items"]}
 
     for item in items.values():
         assert not {"widget", "constraints", "choice_labels"} & set(item)
@@ -151,15 +153,18 @@ def test_cli_presenter_derives_widget_from_dump(demo):
 
 def test_view_tree_shape(demo):
     dump = dump_schema(view="tree")
-    assert set(dump) == {"groups", "items", "by_file", "unbound", "summary"}
+    assert set(dump) == {
+        "schema_version", "groups", "items", "by_file", "unbound", "summary",
+        "source", "uncovered",
+    }
 
     item = dump["items"][0]
     assert set(item) == {
         "key", "name", "group", "path", "section", "config_key", "label",
-        "description", "value", "value_repr", "default", "type",
-        "choices", "order", "editable",
+        "description", "value", "raw", "interpolated", "value_repr", "default",
+        "type", "choices", "order", "editable", "source",
         "present", "dirty", "readonly", "origin_file", "target_file",
-        "explicit_file", "read_error",
+        "target_source", "explicit_file", "read_error",
     }
     group = dump["groups"][0]
     assert set(group) == {
@@ -168,11 +173,19 @@ def test_view_tree_shape(demo):
     }
 
 
-def test_view_flat_is_item_list(demo):
+def test_view_flat_is_versioned_item_list(demo):
+    """``flat`` 返回 ``{"schema_version": N, "items": [...]}``（破坏性变更）。"""
     flat = dump_schema(view="flat")
-    assert isinstance(flat, list)
-    assert len(flat) == dump_schema(view="tree")["summary"]["item_count"]
-    assert all(isinstance(item, dict) for item in flat)
+    assert isinstance(flat, dict)
+    assert flat["schema_version"] == SCHEMA_DUMP_VERSION
+    assert len(flat["items"]) == dump_schema(view="tree")["summary"]["item_count"]
+    assert all(isinstance(item, dict) for item in flat["items"])
+
+
+def test_every_view_carries_schema_version(demo):
+    for view in ("tree", "basic", "by_file", "flat"):
+        dump = dump_schema(view=view)
+        assert dump["schema_version"] == SCHEMA_DUMP_VERSION, view
 
 
 def test_view_by_file(demo):
@@ -271,7 +284,7 @@ def test_readonly_origin_marks_item(demo):
     path = demo.base_dir / "a.ini"
     demo.resolver.mark_readonly_file(path)
 
-    items = {item["name"]: item for item in dump_schema(view="flat")}
+    items = {item["name"]: item for item in dump_schema(view="flat")["items"]}
     assert items["batch_size"]["readonly"] is True
     # 只读来源的文件仍可作为「来源」，但写回目标要另投别处（这里没有备选，
     # 于是退回声明文件本身——它同时也是只读的，由 flush 拒绝写入）
@@ -290,7 +303,7 @@ def test_read_error_is_degraded(tmp_path: Path):
     # partial=True：坏值只让 load 的报告带错误，文件仍然算加载成功
     Configue(base_dir=tmp_path).load(partial=True)
 
-    item = dump_schema(view="flat")[0]
+    item = dump_schema(view="flat")["items"][0]
     assert item["read_error"] is not None
     assert item["value"] == 1          # 退回默认值，dump 不抛
 
@@ -312,16 +325,26 @@ def test_manual_item_overrides_auto_leaf(demo):
 
 
 def test_manual_item_with_path_overrides_by_node(demo):
+    """按 ``(section, key)`` 覆盖：改的是展示文案，**不是**叶子名。
+
+    叶子名是写回键 ``<group>.<name>`` 的一部分，改名会让键与配置节点
+    ``(section, key)`` 错位（一个叶子两套身份）。展示名走 ``label``。
+    """
     register_setting_item(
         "demo",
         setting_item("并发", "demo", "batch_size", label="并发数"),
     )
 
-    items = {item["name"]: item for item in dump_schema(view="flat")}
-    assert items["并发"]["label"] == "并发数"
-    assert items["并发"]["path"] == "[demo]batch_size"
+    items = {item["name"]: item for item in dump_schema(view="flat")["items"]}
+    assert items["batch_size"]["label"] == "并发数"
+    assert items["batch_size"]["name"] == "batch_size"
+    assert items["batch_size"]["key"] == "demo.batch_size"
+    assert items["batch_size"]["path"] == "[demo]batch_size"
+    assert items["batch_size"]["source"] == "declared+override"
     # 控件约束属于展示策略：dump 不输出，登记在 CLI 的覆盖表里
-    assert "constraints" not in items["并发"]
+    assert "constraints" not in items["batch_size"]
+    # 改名不再发生，所以不会多出一个「并发」叶子
+    assert "并发" not in items
 
 
 def test_manual_group_adds_new_leaf(demo):

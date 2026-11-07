@@ -73,8 +73,10 @@ from albuswall.dto.album.command import AlbumCreate
 from albuswall.service.view.service import SCOPE_DELETED
 from albuswall.ui.delegate import InfoCellDelegate, InfoMode
 from albuswall.ui.model import AssetEntry, AssetGridModel
+from albuswall.ui.window.settings import window_state
 
 from ..widgets.image_loader import get_loader
+from ..widgets.tile_view import DEFAULT_COLUMN_COUNT
 from .base import Presenter, register_presenter
 from .thumbnails import square_pixmap
 
@@ -188,6 +190,10 @@ class ContentPresenter(Presenter):
         grid.unit_right_clicked.connect(self._on_unit_right_clicked)
         grid.cursor_changed.connect(self._on_cursor_changed)
 
+        # 恢复上次退出时的网格缩放（列数）：必须在 ``setModel`` 之后 ——
+        # 换列数会强制重新布局并重算格子尺寸。
+        self.restore_state()
+
         self._wire_theme()
 
         # 首次装载发生在 ``setModel`` 之前（相册已经在父节点启动时选好），
@@ -224,6 +230,47 @@ class ContentPresenter(Presenter):
     def retranslate(self) -> None:
         """语言切换：网格里没有文案（标题来自文件名），只需重绘。"""
         self._window.content.update()
+
+    # ------------------------------------------------------------------ #
+    # 界面状态（``[window] tile_columns``）
+    # ------------------------------------------------------------------ #
+    def restore_state(self) -> None:
+        """按 ``[window] tile_columns`` 恢复网格列数（``0`` = 由视图换算）。
+
+        越界值（小于最小列数 / 大于最大列数）由
+        :meth:`~albuswall.ui.widgets.tile_view.TileView.set_column_count`
+        自己 clamp，这里不做二次判断。
+        """
+        columns = int(window_state().tile_columns or 0)
+        if columns <= 0:
+            return
+        grid = self._window.content
+        setter = getattr(grid, "set_column_count", None)
+        if not callable(setter):
+            return
+        try:
+            setter(columns)
+        except (RuntimeError, TypeError, ValueError):
+            logger.exception(
+                "content presenter: cannot restore tile_columns=%s", columns)
+            return
+        logger.debug("content presenter: tile_columns=%s restored", columns)
+
+    def ui_state(self) -> dict[str, object]:
+        """要跨会话记住的网格缩放（列数）。
+
+        **列数等于视图默认值时不记**（写 ``0`` = 「没指定」）：用户没缩放过
+        网格却把 ``tile_columns = 5`` 写进配置文件，等于把「默认值」冻结成
+        「用户的选择」—— 将来改默认列数，老用户不会跟着变。
+        """
+        columns = getattr(self._window.content, "column_count", 0)
+        try:
+            value = int(columns)
+        except (TypeError, ValueError):
+            return {"window.tile_columns": 0}
+        if value <= 0 or value == DEFAULT_COLUMN_COUNT:
+            return {"window.tile_columns": 0}
+        return {"window.tile_columns": value}
 
     # ------------------------------------------------------------------ #
     # 主题：收藏角标图标

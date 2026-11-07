@@ -234,6 +234,22 @@ class Presenter(QObject):
         控件，收不到那条事件，因此由主 presenter 显式调用本方法。
         """
 
+    def ui_state(self) -> dict[str, object]:
+        """子类扩展点：本 presenter 想跨会话记住的界面状态。
+
+        返回 ``{"<section>.<key>": 值}`` 形式的字典，由
+        :meth:`~albuswall.ui.presenter.main.MainPresenter.persist_ui_state`
+        在退出时**一次性**提交给配置器（``[window]`` 段，见
+        :mod:`albuswall.ui.window.settings`）。
+
+        * 默认返回空字典：多数 presenter 没有要记住的状态；
+        * 只应返回**能安全丢弃**的值（窗口几何、上次相册、网格列数这类），
+          不要往这里塞业务数据 —— 状态文件坏了不该影响正确性；
+        * 值必须可 JSON / INI 化（``str`` / ``bool`` / ``int``），配置器会按
+          声明类型做严格校验，写不进去只记日志、不影响退出。
+        """
+        return {}
+
     def _stop_children(self) -> None:
         for child in reversed(tuple(self._children.values())):
             try:

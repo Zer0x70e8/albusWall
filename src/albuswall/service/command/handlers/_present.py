@@ -25,97 +25,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from enum import Enum
-from typing import Any, Iterator
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Any
+
+from albuswall.common.enums import SettingWidget
+from albuswall.common.setting_widget import infer_widget
 
 __all__: list[str] = []
 
-
-class SettingWidget(str, Enum):
-    """值类别（**不是**控件）：展示策略层的取值域。
-
-    从 ``configue.schema`` 搬过来的——它描述的是「值该怎么显示」，不是配置
-    事实。前端可以忽略它，也可以映射成自己的控件。
-    """
-
-    AUTO = "auto"
-    TEXT = "text"
-    INT = "int"
-    FLOAT = "float"
-    BOOL = "bool"
-    CHOICE = "choice"
-    PATH = "path"
-    LIST = "list"
-    DICT = "dict"
-
-
-#: :func:`infer_widget` 的全部返回值（顺序即文档顺序）。
-WIDGETS: tuple[str, ...] = tuple(member.value for member in SettingWidget)
-
 #: ``advanced`` 分组的约定 id（``advanced`` / ``advanced.xxx``）。
 _ADVANCED_ID = "advanced"
-
-
-# ══════════════════════════════════════════════════════════════
-# 值类别推导（纯函数）
-# ══════════════════════════════════════════════════════════════
-
-#: ``configue.schema.type_name`` 的标量输出 → 值类别。键是**完整**的类型名。
-_SCALAR_WIDGETS: dict[str, str] = {
-    "bool": "bool",
-    "int": "int",
-    "float": "float",
-    "str": "text",
-    "Path": "path",
-}
-
-
-def _split_optional(type_text: str) -> str:
-    """剥掉 ``" | None"``；多分支联合（``"int | str"``）原样返回。
-
-    ``dump_schema_dict`` 的 ``type`` 字段是 :func:`configue.schema.type_name`
-    的输出格式：``"int"`` / ``"int | None"`` / ``"list[str]"`` / ``"Path"``。
-    """
-    if "|" not in type_text:
-        return type_text
-    parts = [
-        part.strip() for part in type_text.split("|")
-        if part.strip() and part.strip() != "None"
-    ]
-    return parts[0] if len(parts) == 1 else type_text
-
-
-def infer_widget(type_name: str, choices: Sequence = ()) -> str:
-    """类型字符串 + 选项 → 值类别提示（见 :data:`WIDGETS`）。
-
-    输入来自 ``dump_schema_dict`` 的 ``"type"`` / ``"choices"`` 字段，
-    不读任何配置状态。纯函数。``choices`` 非空优先于类型（``Literal`` /
-    ``Enum`` 的选项就是事实，不必再看内层类型）。
-
-    Args:
-        type_name: 形如 ``"int"`` / ``"bool"`` / ``"Path"`` /
-            ``"int | None"`` / ``"list[str]"`` 的类型名。
-        choices: 声明推导出的选项（``Literal`` 参数 / ``Enum`` 成员值）。
-
-    Returns:
-        :class:`SettingWidget` 的取值（``str`` 子类，JSON 里就是
-        ``"int"`` / ``"choice"`` 这样的字符串）。
-    """
-    if choices:
-        return SettingWidget.CHOICE.value
-
-    base = _split_optional(str(type_name or "").strip())
-    scalar = _SCALAR_WIDGETS.get(base)
-    if scalar is not None:
-        return scalar
-    if base in ("list", "tuple", "set") or base.startswith(
-            ("list[", "tuple[", "set[")
-    ):
-        return SettingWidget.LIST.value
-    if base == "dict" or base.startswith("dict["):
-        return SettingWidget.DICT.value
-    return SettingWidget.AUTO.value
 
 
 # ══════════════════════════════════════════════════════════════
@@ -404,6 +323,9 @@ def by_file_view(dump: dict[str, Any]) -> dict[str, Any]:
             {"file": path, "items": items} for path, items in files.items()
         ],
         "unbound": unbound,
+        # 未声明节点（``[shortcuts]`` / 文件里手写的 key）：不属于任何设置树
+        # 叶子，但仍是文件里真实存在的内容，原样透出。
+        "uncovered": dump.get("uncovered") or [],
     }
 
 
@@ -523,6 +445,47 @@ def format_text(dump: dict[str, Any], *, show_files: bool = True) -> str:
             lines.append("  <unbound>")
             lines.extend(f"    {key}" for key in dump["unbound"])
 
+    uncovered = dump.get("uncovered") or []
+    if uncovered:
+        # 「改不了」的东西至少要「看得见」：设置树只由 @configclass 声明建出来，
+        # 运行时才知道的段（[shortcuts]）与文件里手写的 key 不在树里。
+        lines.append("")
+        lines.append(f"Undeclared (in files, not in the schema): {len(uncovered)}")
+        for entry in uncovered:
+            detail = "typed" if entry.get("typed") else "untyped"
+            lines.append(
+                f"  {entry.get('path')}  ({detail}, "
+                f"value={entry.get('value_repr')}, "
+                f"file={entry.get('target_file') or '<unowned>'})"
+            )
+
+    return "\n".join(lines)
+
+
+def uncovered_view(dump: dict[str, Any], view: str = "text") -> Any:
+    """``setting schema --undeclared``：只输出未声明节点。
+
+    未声明节点是「文件里有、设置树枚举不到」的那些（``[shortcuts]`` 这类由
+    load hook 补类型的段、文件里手写且没人声明的 key）。它们不属于任何分组，
+    所以这里不套用树形排版：``text`` 给一行一条的可读文本，其它视图直接给
+    ``dump["uncovered"]`` 的 list（JSON 友好）。
+    """
+    entries = dump.get("uncovered") or []
+    if view != "text":
+        return [dict(entry) for entry in entries]
+    if not entries:
+        return "No undeclared nodes (every key in the files is declared)."
+    lines = [
+        f"Undeclared nodes: {len(entries)} "
+        f"(in files, not in the schema — read-only here)"
+    ]
+    for entry in entries:
+        lines.append(
+            f"  {entry.get('path')} = {entry.get('value_repr')}  "
+            f"({'typed' if entry.get('typed') else 'untyped'}, "
+            f"origin={entry.get('origin_file') or '-'}, "
+            f"file={entry.get('target_file') or '<unowned>'})"
+        )
     return "\n".join(lines)
 
 

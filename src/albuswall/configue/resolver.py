@@ -36,6 +36,7 @@ from typing import (
     Callable,
     Iterable,
     Iterator,
+    Literal,
     Optional,
     Union,
     get_args,
@@ -54,6 +55,33 @@ _MISSING: Any = object()
 
 _UNION_ORIGINS = (Union, getattr(types, "UnionType", Union))
 _CONTAINER_ORIGINS = (list, tuple, set, frozenset)
+
+
+def _literal_members_text(members: tuple[Any, ...]) -> str:
+    """``Literal`` 合法成员的报错文本（``'a', 'b'``）。"""
+    return ", ".join(repr(member) for member in members)
+
+
+def _check_literal(
+        raw: Any,
+        converter: Any,
+        members: tuple[Any, ...],
+) -> Any:
+    """非字符串值在 ``Literal[...]`` 里的成员判定（``_convert`` 管字符串）。
+
+    字符串走 ``_convert``（那里要处理 ``int`` / ``Enum`` 这类成员的文本形态）；
+    这里只处理「已经是 JSON 原生值」的情况：值必须是成员之一，否则抛
+    ``ValueError``——不能 fail-open 放过非法赋值。
+    """
+    try:
+        if raw in members:
+            return raw
+    except Exception:  # noqa: BLE001  不可哈希 / 比较异常 → 按不匹配处理
+        pass
+    raise ValueError(
+        f"{raw!r} is not a valid value for {_describe_type(converter)}; "
+        f"expected one of: {_literal_members_text(members)}"
+    )
 
 
 def _coerce_native(
@@ -82,6 +110,9 @@ def _coerce_native(
         return raw
 
     args = get_args(converter)
+
+    if origin is Literal:
+        return _check_literal(raw, converter, args)
 
     if origin in _UNION_ORIGINS:
         return None if raw is None else raw
@@ -112,6 +143,9 @@ def _coerce_scalar(item: Any, type_: Any, custom_converters: Optional[dict]) -> 
         return item
     if isinstance(item, str):
         return _convert(item, type_, custom_converters)
+    if get_origin(type_) is Literal:
+        # ``list[Literal[...]]`` 的元素也必须是合法成员
+        return _check_literal(item, type_, get_args(type_))
     if get_origin(type_) is not None:
         return _coerce_native(item, type_, custom_converters)
     try:
@@ -486,6 +520,20 @@ class Resolver:
         """返回该节点生效值所在文件；未追踪到来源时返回 None。"""
         with self._lock:
             return self._origins.get((section, key))
+
+    def raw_of(self, section: str, key: str) -> Any:
+        """返回该节点的**原始值**（``${...}`` 未展开），节点不存在返回哨兵。
+
+        与 :meth:`get_str` / :meth:`get_typed` 的区别只有一个：**不展开插值**。
+        用途是设置页回显——``theme = ${path:theme}/default`` 这种值必须原样
+        给出去，编辑展开后的绝对路径会破坏插值结构。
+
+        节点不存在时返回模块级哨兵 ``_MISSING``（与 ``self._raw.get`` 一致），
+        调用方用 ``is _MISSING`` 判定；传回 ``None`` 会把「没有值」和「值是
+        None」混为一谈。
+        """
+        with self._lock:
+            return self._raw.get((section, key), _MISSING)
 
     def set_origin(self, section: str, key: str, origin: Path) -> None:
         """登记节点生效值的来源文件（运行期 ``set(..., target=...)`` 使用）。"""

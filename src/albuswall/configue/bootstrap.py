@@ -25,6 +25,7 @@ import 的改动）。
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -341,6 +342,58 @@ def _mark_shortcut_defaults_readonly(config: Any) -> None:
         config.resolver.mark_readonly_file(finfo.resolved_path)
 
 
+#: 随包默认配置（``resources/config/`` 下的文件 → 目标文件名）。
+#:
+#: 只用 ``conf.ini`` 作为主配置模板：``[log] config`` 指向 ``[files] log``
+#: （``log_config.ini``），所以日志配置也一起复制，``setup_log()`` 才不会退化
+#: 成 stderr。用户快捷键覆盖表（``shortcuts.ini``）**不复制**：随包默认表本来
+#: 就是只读兜底，用户表由第一次保存时创建。
+_SEED_FILES: tuple[tuple[str, str | None], ...] = (
+    ("default_config", None),                # → file_name（生产即 config.ini）
+    ("default_log_config", "log_config.ini"),  # → [files] log 的默认文件名
+)
+
+
+def seed_default_config(
+        target_dir: Path | str, file_name: str = "config.ini",
+) -> list[Path]:
+    """配置目录里缺哪个默认文件就复制哪个（幂等，已存在不覆盖）。
+
+    「首次启动 / 用户误删配置」时让程序有一份可读可写的完整默认配置，而不是
+    靠 ``ignore_missing=True`` 在内存里装作有；用户改过的文件永远不会被覆盖。
+
+    Args:
+        target_dir: 用户配置目录（``setup_config`` 的 ``base_dir``）。
+        file_name: 主配置文件名（默认 ``config.ini``）；随包模板是 ``conf.ini``。
+
+    Returns:
+        实际写入的文件路径（可能为空列表）。
+    """
+    target = Path(target_dir)
+    written: list[Path] = []
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.warning("cannot create config dir %s", target, exc_info=True)
+        return written
+
+    for alias, default_name in _SEED_FILES:
+        destination = target / (default_name or file_name)
+        if destination.exists():
+            continue
+        source = resources.get(alias)
+        try:
+            shutil.copyfile(source, destination)
+        except OSError:
+            logger.warning(
+                "cannot seed %s from %s", destination, source, exc_info=True,
+            )
+            continue
+        written.append(destination)
+        logger.info("Seeded default config: %s", destination)
+    return written
+
+
 def setup_config(
         container,
         *,
@@ -353,6 +406,7 @@ def setup_config(
         ignore_missing: bool = False,
         portable: bool = False,
         shortcut_file_name: str = SHORTCUT_FILE_NAME,
+        seed_defaults: bool = False,
 ):
     """装配 albuswall 的配置并注册进依赖容器，返回 ``Configue`` 单例。
 
@@ -383,6 +437,10 @@ def setup_config(
             ``shortcuts.ini``，落在 ``base_dir`` 下（生产环境即
             ``~/.config/albuswall/shortcuts.ini``）。随包默认表由
             ``resources/config/shortcuts.ini`` 提供，**不受本参数影响**。
+        seed_defaults: 配置文件（及同目录的 ``log_config.ini``）不存在时，
+            先把随包默认配置复制过去再加载——首次启动即可得到一份可读可写的
+            完整配置。**已存在的文件绝不覆盖**；默认关闭，应用入口显式打开
+            （测试里通常自己写最小配置，不希望被默认值填满）。
 
     portable:
         ``False``（默认）：``[path]`` 的 ``config`` / ``data`` / ``cache`` /
@@ -433,6 +491,9 @@ def setup_config(
         path_temp = get_temp_dir(albuswall.__name__).resolve()
 
     _declare_app_sections(name)
+
+    if seed_defaults:
+        seed_default_config(target_dir, file_name)
 
     reg(
         ConfigFile.INI, file_name, name=name, autosave=autosave, order=order,

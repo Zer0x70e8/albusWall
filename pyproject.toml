@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "albuswall"
-version = "1.1.0"
+version = "1.1.1"
 description = "A modular, plugin-driven image gallery for Hyprland ricing screenshots."
 readme = "README.md"
 requires-python = ">=3.11"

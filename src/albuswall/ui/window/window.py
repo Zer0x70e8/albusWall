@@ -5,7 +5,7 @@
 
 1. **搭图层**：背景模糊层 → 内容层 → overlay 浮层 → 标题栏；
 2. **同步几何**：窗口 resize 时把各层铺满 / 对齐到标题栏下沿；
-3. **组装子控件**：标题栏、内容区、相册页、导入源页、详情页、菜单。
+3. **组装子控件**：标题栏、内容区、相册页、导入源页、详情页、设置页、菜单。
 
 它**不**查询数据、不调度服务、不安装快捷键、不读配置、不认识任何
 model / delegate / DTO。所有业务动作都由外部（插件 / presenter）通过
@@ -15,16 +15,16 @@ model / delegate / DTO。所有业务动作都由外部（插件 / presenter）�
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget, QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
 from ..utils import auto_set_object_names
 from ..widgets.blur_overlay_label import BlurLabel
 from ..widgets.passthrough_stack_widget import PassthroughStack
-
 from .album import Album
 from .content import Content
 from .detail import Detail
 from .menu import Menu
+from .settings_page import SettingsPage
 from .source import IngestSource
 from .titlebar import TitleBar
 from .utils import FocusIsolator
@@ -53,7 +53,8 @@ class Window(QWidget):
         └─ overlay                浮层，从标题栏下沿铺到窗口底部
             ├─ album              相册页
             ├─ source             导入源页
-            └─ detail             详情页
+            ├─ detail             详情页
+            └─ settings_page      设置页
     """
 
     main_layout: QVBoxLayout
@@ -67,6 +68,7 @@ class Window(QWidget):
     album: Album
     source: IngestSource
     detail: Detail
+    settings_page: SettingsPage
     menu: Menu
 
     def __init__(self, parent: QWidget | None = None):
@@ -180,6 +182,9 @@ class Window(QWidget):
         self.detail.target_widget = self
         self.overlay.addWidget(self.detail)
 
+        self.settings_page = SettingsPage(target=self, parent=self.overlay)
+        self.overlay.addWidget(self.settings_page)
+
         # ---- 标题栏右侧「更多」菜单 ----
         self.menu = Menu(self)
         self.title_bar.extra_button.setMenu(self.menu)
@@ -192,6 +197,7 @@ class Window(QWidget):
         self.album.close_button.clicked.connect(self.close_overlay)
         self.source.close_requested.connect(self.close_overlay)
         self.detail.close_requested.connect(self.close_overlay)
+        self.settings_page.close_requested.connect(self.close_overlay)
 
         # ---- 层级与装配 ----
         self.overlay.raise_()
@@ -219,6 +225,14 @@ class Window(QWidget):
     def show_source(self) -> None:
         """显式打开导入源页（不切换）。"""
         self.overlay.setCurrentWidget(self.source)
+
+    def show_settings(self) -> None:
+        """显式打开设置页（不切换）。"""
+        self.overlay.setCurrentWidget(self.settings_page)
+
+    def toggle_settings(self) -> None:
+        """打开 / 收起设置页。"""
+        self._toggle_page(self.settings_page)
 
     def close_overlay(self) -> None:
         """收起当前浮层页，回到空白层（内容层重新可交互）。"""

@@ -18,29 +18,29 @@ from albuswall.core import Container
 def setup(registry: CommandRegistry, container: Container) -> None:
     task_service = container.require("task_service")
 
-    @registry.command(
-        "task",
-        help_="The task service cmd.",
-        # 位置参数的可选值必须显式给 default：绑定层（``Dispatcher._bind``）
-        # 缺参时填的是 ``Param.default``，不会用 handler 签名里的 ``= ""``。
-        # 漏写会得到 ``None``，而 ``subcmd.strip()`` 立刻 AttributeError。
-        params=(
-            Param(name="subcmd", type=str, default=""),
-        ),
-    )
-    def namespace(subcmd: str = ""):
-        subcmd = subcmd.strip()
-        if not subcmd:
-            return "使用 `albuswall help task` 查看子命令。"
-        match subcmd:
-            case "stats":
-                return task_stats()
-        return f"Unknown subcommand: {subcmd}"
+    # @registry.command(
+    #     "task",
+    #     help_="The task service cmd.",
+    #     # 位置参数的可选值必须显式给 default：绑定层（``Dispatcher._bind``）
+    #     # 缺参时填的是 ``Param.default``，不会用 handler 签名里的 ``= ""``。
+    #     # 漏写会得到 ``None``，而 ``subcmd.strip()`` 立刻 AttributeError。
+    #     params=(
+    #         Param(name="subcmd", type=str, default=""),
+    #     ),
+    # )
+    # def namespace(subcmd: str = ""):
+    #     subcmd = subcmd.strip()
+    #     if not subcmd:
+    #         return "使用 `albuswall help task` 查看子命令。"
+    #     match subcmd:
+    #         case "stats":
+    #             return task_stats()
+    #     return f"Unknown subcommand: {subcmd}"
 
     @registry.command(
         "task.stats",
         help_="任务服务统计：队列、并发水位与背压计数",
-        hidden=True,
+        # hidden=True,
         params=(),
     )
     def task_stats() -> dict[str, Any]:

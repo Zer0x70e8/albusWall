@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Stage](https://img.shields.io/badge/stage-1.0-brightgreen.svg)]()
-[![Version](https://img.shields.io/badge/version-1.1.0-lightgrey.svg)]()
+[![Version](https://img.shields.io/badge/version-1.1.1-lightgrey.svg)]()
 
 > ⚠️ **Early Development Notice**  
 > AlbusWall is still in **active development**.  

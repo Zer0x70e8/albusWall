@@ -5,7 +5,8 @@
 
 - **异常**：``ConfigError`` / ``ConfigFileNotFound`` / ``AmbiguousConfigFile`` /
   ``ConfigMissingError`` / ``ConfigClassNotRegistered`` /
-  ``ConfigDeclarationConflict``——调用方需要 ``except`` 的那些。
+  ``ConfigDeclarationConflict`` / ``ConfigValidationError``——调用方需要
+  ``except`` 的那些。
 - **值对象**：``LoadError`` / ``LoadReport``——``check()`` / ``load()`` 的返回值，
   「一部分文件成功、一部分失败」是正常结果，不该用异常表达。
 
@@ -17,7 +18,7 @@ re-export（它们既属于声明层，也属于访问层，放这里避免两�
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 __all__ = [
     "ConfigError",
@@ -26,6 +27,7 @@ __all__ = [
     "ConfigClassNotRegistered",
     "ConfigDeclarationConflict",
     "ConfigMissingError",
+    "ConfigValidationError",
     "LoadError",
     "LoadReport",
 ]
@@ -41,6 +43,40 @@ class ConfigFileNotFound(ConfigError):
 
 class AmbiguousConfigFile(ConfigError):
     """load() 时多个候选文件同时存在（无法自动选择）。"""
+
+
+class ConfigValidationError(ConfigError):
+    """字段级校验失败（``field(validators=[...])`` 的校验器抛出的错误）。
+
+    与 ``ValueError`` **刻意分开**：
+
+    * ``ValueError`` = **类型转换**失败（coerce 转不过去，写进文件也读不回来）；
+    * ``ConfigValidationError`` = 类型对了，但**语义**不合法
+      （``port = 99999``、路径不存在……）。
+
+    上层（设置 GUI / CLI）据此给不同提示：前者是「输入格式错」，后者是
+    「值不合法」。消息文案可以是 ``str``，也可以是 ``Callable[[], str]``
+    （翻译延迟到抛出时求值，与 ``label`` / ``description`` 的约定一致）。
+    """
+
+    def __init__(
+            self,
+            message: str | Callable[[], str],
+            *,
+            path: str | None = None,
+    ) -> None:
+        self.path = path
+        super().__init__(_message_text(message))
+
+
+def _message_text(message: str | Callable[[], str]) -> str:
+    """把 ``str`` / i18n callable 统一成字符串（callable 失败不炸）。"""
+    if callable(message):
+        try:
+            return str(message())
+        except Exception:  # noqa: BLE001  翻译失败不能盖掉真正的校验错误
+            return "validation failed"
+    return str(message)
 
 
 class ConfigMissingError(AttributeError, ConfigError):

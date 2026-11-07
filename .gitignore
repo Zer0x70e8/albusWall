@@ -30,6 +30,13 @@ eggs/
 tmp_probe.py
 .tmpdict/
 
+# local audit artifacts: 复跑用的审计脚本 / 运行日志 / PR 前的手工 issue 草稿。
+# 只存在于开发机上（见 .audit/），不进发布内容。
+.audit/
+
+# uv
+.uvcache/
+
 # archive
 test/archive/
 

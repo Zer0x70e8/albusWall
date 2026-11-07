@@ -35,6 +35,7 @@ from PySide6.QtWidgets import QDialog, QInputDialog
 
 from albuswall.dto.album.command import AlbumCreate
 from albuswall.ui.model import AlbumModel, AlbumRole
+from albuswall.ui.window.settings import window_state
 
 from ..widgets.image_loader import get_loader
 from .base import Presenter, register_presenter
@@ -111,6 +112,8 @@ class AlbumPresenter(Presenter):
             self._loader.thumb_loaded.connect(self._on_cover_loaded)
 
         self.refresh()
+        # 恢复上次退出时的相册（``refresh`` 已经选好默认相册，这里再覆盖）。
+        self.restore_state()
 
     def on_stop(self) -> None:
         if self._loader is not None:
@@ -177,6 +180,28 @@ class AlbumPresenter(Presenter):
         except Exception:  # noqa: BLE001 - 读相册失败按"不存在"处理
             logger.exception("album presenter: get_album failed: %s", album_uuid)
             return None
+
+    # ------------------------------------------------------------------ #
+    # 界面状态（``[window] album_uuid``）
+    # ------------------------------------------------------------------ #
+    def restore_state(self) -> None:
+        """按 ``[window] album_uuid`` 恢复上次的相册（找不到就保持默认相册）。
+
+        「找不到」包括：从没存过、uuid 非法、相册已被删除 ——
+        :meth:`set_album_uuid` 对不存在相册只记日志并忽略，正好是想要的语义。
+        """
+        saved = str(window_state().album_uuid or "").strip()
+        if not saved:
+            return
+        if self.current_uuid is not None and str(self.current_uuid) == saved:
+            return
+        self.set_album_uuid(saved)
+        logger.debug("album presenter: album %s restored from config", saved)
+
+    def ui_state(self) -> dict[str, object]:
+        """要跨会话记住的相册（空串 = 没有当前相册）。"""
+        current = self.current_uuid
+        return {"window.album_uuid": "" if current is None else str(current)}
 
     # ------------------------------------------------------------------ #
     # 列表

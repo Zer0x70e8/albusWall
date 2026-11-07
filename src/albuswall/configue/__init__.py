@@ -101,6 +101,7 @@ from .errors import (
     ConfigError,
     ConfigFileNotFound,
     ConfigMissingError,
+    ConfigValidationError,
     LoadError,
     LoadReport,
 )
@@ -110,6 +111,7 @@ from .registry import (
     AutosavePolicy,
     ConfigFile,
     FileInfo,
+    Validator,
     classes_in,
     configclass,
     declarations,
@@ -119,6 +121,7 @@ from .registry import (
     registered_files,
 )
 from .schema import (
+    SCHEMA_DUMP_VERSION,
     UNSET,
     SettingGroup,
     SettingItem,
@@ -148,6 +151,7 @@ __all__ = [
     # 设置结构层（枚举 / 校验 / 写回）
     "SettingItem", "SettingGroup",
     "SettingSchemaRegistry", "SettingWriteResult", "UNSET",
+    "SCHEMA_DUMP_VERSION",
     "build_schema", "get_schema", "invalidate_schema",
     "setting_group", "setting_item",
     "dump_schema", "dump_schema_dict", "dump_schema_by_file",
@@ -160,11 +164,11 @@ __all__ = [
     "Backend", "register_backend", "get_backend", "registered_backends",
     # 错误 / 报告
     "ConfigError", "ConfigMissingError", "ConfigClassNotRegistered",
-    "ConfigDeclarationConflict",
+    "ConfigDeclarationConflict", "ConfigValidationError",
     "ConfigFileNotFound", "AmbiguousConfigFile",
     "LoadReport", "LoadError",
     # 元数据（调试 / 工具脚本用，业务侧不建议直接依赖）
-    "FileInfo",
+    "FileInfo", "Validator",
 ]
 
 #: ``Configue`` 构造**之前**登记的转换器，等 ``load()`` 时统一应用。

@@ -1529,12 +1529,6 @@ QPushButton#DetailCloseButton:focus,
     color: rgba(180, 180, 180, 0.85);
 }
 
-#SettingSetting #SettingGroupError {
-    font-weight: normal;
-    font-size: 0.88em;
-    color: rgba(255, 140, 140, 0.95);
-}
-
 #SettingSetting #SettingRowResetButton {
     min-width: 22px;
     max-width: 22px;
@@ -2101,4 +2095,183 @@ LayerTreePopup {
 #LayerTreePopupTreeView::item:selected {
     background-color: rgba(0, 122, 255, 0.55);
     color
+}
+
+
+/* ==========================================================================
+ * 设置页（#SettingSetting）——补充规则
+ * --------------------------------------------------------------------------
+ * 这些规则原先写在 ``ui/setting/view.py`` 的 ``_EXTRA_QSS`` 里（页面自己
+ * setStyleSheet）。现在统一收口到主题文件：设置页与其它页面一样，只依赖
+ * 应用级 QSS，``#Setting*`` 的样式只有一个来源。
+ * ========================================================================== */
+
+#SettingSetting QLabel#SettingRowDirtyBadge {
+    color: rgba(0, 170, 255, 0.95);
+    font-size: 0.8em;
+}
+#SettingSetting QLabel#SettingRowAdvancedBadge,
+#SettingSetting QLabel#SettingRowDefaultBadge {
+    font-weight: normal;
+    font-size: 0.72em;
+    color: rgba(210, 210, 210, 0.75);
+    border: 1px solid rgba(140, 140, 140, 0.55);
+    border-radius: 7px;
+    padding: 0 6px;
+}
+#SettingSetting QLabel#SettingRowDefaultBadge {
+    color: rgba(160, 160, 160, 0.75);
+    border-style: dashed;
+}
+#SettingSetting QLabel#SettingRowLockIcon {
+    color: rgba(190, 190, 190, 0.55);
+    font-size: 0.8em;
+}
+#SettingSetting QLabel#SettingRowErrorIcon {
+    color: rgba(255, 120, 120, 0.95);
+    font-weight: bold;
+}
+#SettingSetting QLabel#SettingRowLabel[usingDefault="true"] {
+    color: rgba(185, 185, 185, 0.72);
+}
+#SettingSetting QWidget#SettingRow[hasError="true"] {
+    background-color: rgba(255, 80, 80, 0.07);
+    border-radius: 8px;
+}
+#SettingSetting QPushButton[groupAnchor="true"] {
+    font-weight: bold;
+}
+#SettingSetting QPushButton[leafAnchor="true"] {
+    font-weight: normal;
+    color: rgba(215, 215, 215, 0.82);
+}
+#SettingSetting QWidget#SettingFooter {
+    background: transparent;
+}
+#SettingSetting QLabel#SettingFooterStatus[level="error"] {
+    color: rgba(255, 140, 140, 0.95);
+}
+#SettingSetting QLabel#SettingFooterStatus[level="warning"] {
+    color: rgba(255, 205, 120, 0.95);
+}
+#SettingSetting QLabel#SettingFooterStatus[level="success"] {
+    color: rgba(120, 220, 160, 0.95);
+}
+#SettingSetting QLabel#SettingFooterStatus[level="info"] {
+    color: rgba(160, 200, 255, 0.95);
+}
+#SettingSetting QLabel#SettingHeaderStatus[level="error"] {
+    color: rgba(255, 140, 140, 0.95);
+}
+#SettingSetting QLabel#SettingHeaderStatus[level="warning"] {
+    color: rgba(255, 205, 120, 0.95);
+}
+#SettingSetting QPushButton#SettingPreviewButton,
+#SettingSetting QPushButton#SettingSaveButton,
+#SettingSetting QPushButton#SettingDraftButton,
+#SettingSetting QPushButton#SettingRetryButton,
+#SettingSetting QPushButton#SettingAddComponentButton {
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0 16px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 15px;
+    background-color: rgba(96, 96, 96, 0.35);
+    color: rgba(230, 230, 230, 0.92);
+    font-weight: normal;
+}
+#SettingSetting QPushButton#SettingSaveButton {
+    background-color: rgba(0, 122, 255, 0.55);
+    border: 1px solid rgba(0, 122, 255, 0.80);
+    color: #FFFFFF;
+}
+#SettingSetting QPushButton#SettingPreviewButton:hover,
+#SettingSetting QPushButton#SettingSaveButton:hover,
+#SettingSetting QPushButton#SettingDraftButton:hover,
+#SettingSetting QPushButton#SettingRetryButton:hover,
+#SettingSetting QPushButton#SettingAddComponentButton:hover {
+    background-color: rgba(160, 160, 160, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    color: #FFFFFF;
+}
+#SettingSetting QPushButton#SettingSaveButton:hover {
+    background-color: rgba(0, 122, 255, 0.75);
+}
+#SettingSetting QLabel#SettingEmptyHint,
+#SettingSetting QLabel#SettingFooterHint {
+    color: rgba(185, 185, 185, 0.80);
+    font-weight: normal;
+}
+#SettingSetting QComboBox#SettingScopeCombo {
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0 12px;
+    border: 1px solid rgba(80, 80, 80, 0.70);
+    border-radius: 15px;
+    background-color: rgba(20, 20, 20, 0.75);
+    color: rgba(240, 240, 240, 0.95);
+}
+#SettingSetting CollapsibleGroupBox[nestingLevel="1"] {
+    margin-left: 12px;
+}
+#SettingSetting CollapsibleGroupBox[nestingLevel="2"] {
+    margin-left: 24px;
+}
+#SettingSetting QLabel#SettingUncoveredPath {
+    font-weight: normal;
+    color: rgba(235, 235, 235, 0.92);
+}
+#SettingSetting QLabel#SettingUncoveredMeta {
+    font-weight: normal;
+    font-size: 0.82em;
+    color: rgba(175, 175, 175, 0.85);
+}
+#SettingSetting QPushButton#SettingAddComponentButton {
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0 12px;
+    border-radius: 13px;
+}
+#SettingSetting QLabel#SettingAboutText {
+    font-weight: normal;
+    color: rgba(225, 225, 225, 0.92);
+    padding: 4px 8px;
+}
+
+
+/* --------------------------------------------------------------------------
+ * 设置页 · dry-run 变更预览对话框（#SettingPreviewDialog）
+ * ------------------------------------------------------------------------ */
+#SettingPreviewDialog {
+    background-color: #232323;
+}
+
+#SettingPreviewDialog QLabel {
+    color: rgba(240, 240, 240, 0.95);
+}
+
+#SettingPreviewDialog QTableWidget {
+    background-color: rgba(20, 20, 20, 0.90);
+    color: rgba(240, 240, 240, 0.95);
+    gridline-color: rgba(90, 90, 90, 0.50);
+}
+
+#SettingPreviewDialog QHeaderView::section {
+    background-color: rgba(60, 60, 60, 0.90);
+    color: rgba(240, 240, 240, 0.95);
+    border: none;
+    padding: 4px;
+}
+
+#SettingPreviewDialog QPushButton {
+    min-height: 28px;
+    padding: 0 16px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 14px;
+    background-color: rgba(96, 96, 96, 0.35);
+    color: rgba(235, 235, 235, 0.92);
+}
+
+#SettingPreviewDialog QPushButton:hover {
+    background-color: rgba(150, 150, 150, 0.55);
 }

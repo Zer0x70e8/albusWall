@@ -126,22 +126,26 @@ def _parse_values_option(raw: Any) -> dict[str, Any]:
 def _dirty_report(
         config: Any,
         payload: dict[str, Any],
-        before: frozenset,
 ) -> dict[str, Any]:
     """给 ``setting.set`` 的返回值补上「本次还有哪些没落盘」。
 
-    用调用前的 ``dirty_nodes()`` 做差集：只报**本次新增**的残留节点，
-    不会把别处留下的脏节点算到这次调用头上。
+    判定依据是**本次碰过的节点**（``SettingWriteResult.nodes``）里仍在 dirty
+    的那些。**不能**用调用前后的 ``dirty_nodes()`` 差集：某节点上次写失败就
+    一直脏着（``flush`` 非 ``strict`` 时只留 dirty），这次又写失败时它不在
+    差集里，于是命令报 ``ok=True`` —— 用户看到「成功」，磁盘没变。
     """
-    leftover = sorted(frozenset(config.dirty_nodes()) - before)
-    payload["pending"] = [f"[{section}]{key}" for section, key in leftover]
-    payload["ok"] = not leftover
-    payload["error"] = (
+    report = dict(payload)
+    touched = {tuple(node) for node in report.get("nodes") or ()}
+    dirty = {tuple(node) for node in config.dirty_nodes()}
+    leftover = sorted(touched & dirty)
+    report["pending"] = [f"[{section}]{key}" for section, key in leftover]
+    report["ok"] = not leftover
+    report["error"] = (
         str(config.last_flush_error)
         if leftover and config.last_flush_error is not None
         else None
     )
-    return payload
+    return report
 
 
 def _apply_language_change(container: Container, result: Any) -> None:
@@ -187,9 +191,13 @@ def setup(registry: CommandRegistry, container: Container) -> None:
                 help="视图：text（默认，树形文本）/ tree / basic / "
                      "by_file / flat",
             ),
+            flag(
+                "undeclared",
+                help="只列出未声明节点（文件里有、设置树枚举不到的）",
+            ),
         ),
     )
-    def setting_schema(view: str = "text") -> Any:
+    def setting_schema(view: str = "text", undeclared: bool = False) -> Any:
         """导出配置结构。
 
         ``view`` 语义：``text`` 返回可直接打印的字符串，``flat`` 是叶子列表，
@@ -197,13 +205,17 @@ def setup(registry: CommandRegistry, container: Container) -> None:
         只留非高级项）。声明未 ``load()``、值读失败、无归属文件都只是降级
         输出，**不会**抛错。
 
+        ``--undeclared``：只列**未声明节点**（``[shortcuts]`` 这类 load hook
+        补类型的段、文件里手写且没人声明的 key）。它们不在设置树里，改不了，
+        但仍然是文件里真实存在的内容——这项让「覆盖不到的东西」至少可见。
+
         数据来自 ``configue.dump_schema_dict``（只给声明事实 + 值 + 状态），
         展示策略（``widget`` / 控件约束 / 选项文案 / ``advanced`` 分级）与
         视图装配、排版都在本侧：``_present.apply_present`` + ``render_view``。
         """
         from albuswall.configue.schema import dump_schema_dict
 
-        from ._present import apply_present, render_view
+        from ._present import apply_present, render_view, uncovered_view
 
         text = str(view or "text").strip().lower()
         if text not in _VIEWS:
@@ -214,6 +226,8 @@ def setup(registry: CommandRegistry, container: Container) -> None:
             dump_schema_dict(config=container.get("config")),
             show_advanced=(text != "basic"),
         )
+        if as_bool(undeclared, field="undeclared"):
+            return uncovered_view(dump, text)
         return render_view(dump, text)
 
     @registry.command(
@@ -243,10 +257,11 @@ def setup(registry: CommandRegistry, container: Container) -> None:
 
         返回值是 ``SettingWriteResult.to_dict()`` 再加三个字段：
 
-        * ``pending``：本次调用结束后**新增**的未落盘节点（``[section]key``）；
+        * ``pending``：**本次提交的节点里**没落盘的（``[section]key``）；
         * ``ok``：``pending`` 为空即成功；
         * ``error``：仍有残留时的 ``last_flush_error``（否则 ``None``）。
         """
+        from albuswall.configue.errors import ConfigValidationError
         from albuswall.configue.schema import save_group, save_values
 
         known = {"values", "group", "dry-run", "dry_run", "strict"}
@@ -276,7 +291,6 @@ def setup(registry: CommandRegistry, container: Container) -> None:
             )
 
         config = _config(container)
-        before = frozenset(config.dirty_nodes())
         try:
             if group:
                 result = save_group(
@@ -287,6 +301,13 @@ def setup(registry: CommandRegistry, container: Container) -> None:
                 result = save_values(
                     merged, config=config, strict=strict, dry_run=dry_run,
                 )
+        except ConfigValidationError as exc:
+            # 校验失败（类型对了、语义不合法）：仍然是**调用方**的错 →
+            # BadRequest（64），文案原样透出（含 ``[section]key``），不要
+            # 重新包装成「命令执行失败」。必须写在通用分支之前：它是
+            # ``ConfigError`` 的子类、**不是** ``ValueError``，漏在这里就会
+            # 落到 Dispatcher 的 ``CommandFailed``（70）兜底。
+            raise BadRequest(str(exc)) from exc
         except (KeyError, TypeError, ValueError) as exc:
             # 参数级问题（分组不存在 / 键未声明 / 值转不过去 / 无处可写）
             # 都是调用方的错 → BadRequest（64）。写盘失败是另一条路：
@@ -295,7 +316,7 @@ def setup(registry: CommandRegistry, container: Container) -> None:
             raise BadRequest(str(exc)) from exc
 
         _apply_language_change(container, result)
-        return _dirty_report(config, result.to_dict(), before)
+        return _dirty_report(config, result.to_dict())
 
     @registry.command(
         "setting.save",

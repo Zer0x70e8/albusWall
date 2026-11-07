@@ -252,3 +252,180 @@ def test_shared_sections_survive_load_and_flush(tmp_path):
     written = c.flush()
     assert written == [(tmp_path / "config.ini").resolve()]
     assert "debug = false" in (tmp_path / "config.ini").read_text(encoding="utf-8")
+
+
+# ==================== 冲突：validators 不同 → 装饰期报错 ====================
+
+def _range_1_100(value: int) -> None:
+    if not 1 <= value <= 100:
+        raise ValueError("1..100")
+
+
+def _range_1_10(value: int) -> None:
+    if not 1 <= value <= 10:
+        raise ValueError("1..10")
+
+
+def test_conflicting_validators_raise_at_decoration():
+    """两个类对同一节点给出不同校验器 → 装饰期冲突（不静默丢一份）。"""
+    @configclass("core", "main")
+    class Wide:
+        port: int = field(default=50, validators=[_range_1_100])
+
+    with pytest.raises(ConfigDeclarationConflict, match="validators"):
+
+        @configclass("core", "main")
+        class Narrow:
+            port: int = field(default=50, validators=[_range_1_10])
+
+
+def test_conflicting_validators_message_lists_both():
+    @configclass("core", "main")
+    class Wide:
+        port: int = field(default=50, validators=[_range_1_100])
+
+    with pytest.raises(ConfigDeclarationConflict) as info:
+        @configclass("core", "main")
+        class Narrow:
+            port: int = field(default=50, validators=[_range_1_10])
+
+    message = str(info.value)
+    assert "core/port" in message
+    assert "validators" in message
+    assert "_range_1_10" in message and "_range_1_100" in message
+    # 与 type / default 冲突一样，两个声明者都要点名
+    assert "Wide (main)" in message and "Narrow (main)" in message
+
+
+def test_same_validator_object_does_not_conflict():
+    """同一校验器对象 / ``==`` 相等的校验器 → 视为等价，可以共享。"""
+    @configclass("core", "main")
+    class First:
+        port: int = field(default=50, validators=[_range_1_100])
+
+    @configclass("core", "main")
+    class Second:
+        port: int = field(default=50, validators=[_range_1_100])
+
+    assert _CLASSES[First].fields[0].validators == (
+        _CLASSES[Second].fields[0].validators
+    )
+
+
+class _Range:
+    """可比较的校验器对象（``==`` 相等即等价）——共享声明的推荐写法。"""
+
+    def __init__(self, low: int, high: int) -> None:
+        self.low = low
+        self.high = high
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _Range):
+            return NotImplemented
+        return (self.low, self.high) == (other.low, other.high)
+
+    def __hash__(self) -> int:
+        return hash((self.low, self.high))
+
+    def __call__(self, value: int) -> None:
+        if not self.low <= value <= self.high:
+            raise ValueError(f"{self.low}..{self.high}")
+
+    def __repr__(self) -> str:
+        return f"Range({self.low}, {self.high})"
+
+
+def test_equal_but_distinct_validator_objects_do_not_conflict():
+    """``==`` 相等的两个校验器实例可以共享声明（不比 identity）。"""
+    @configclass("core", "main")
+    class A:
+        port: int = field(default=50, validators=[_Range(1, 100)])
+
+    @configclass("core", "main")
+    class B:
+        port: int = field(default=50, validators=[_Range(1, 100)])
+
+    assert _CLASSES[A].fields[0].validators[0] is not \
+        _CLASSES[B].fields[0].validators[0]
+
+
+def test_lambda_validators_never_compare_equal():
+    """两个 lambda 永不相等是**预期行为**：同一节点用两份 lambda 声明即冲突。"""
+    @configclass("core", "main")
+    class A:
+        port: int = field(
+            default=50, validators=[lambda v: v > 0],
+        )
+
+    with pytest.raises(ConfigDeclarationConflict, match="validators"):
+
+        @configclass("core", "main")
+        class B:
+            port: int = field(
+                default=50, validators=[lambda v: v > 0],
+            )
+
+
+def test_both_empty_validators_do_not_conflict():
+    @configclass("core", "main")
+    class Plain:
+        port: int = 50
+
+    @configclass("core", "main")
+    class AlsoPlain:
+        port: int = 50
+
+
+def test_empty_versus_present_validators_is_a_conflict():
+    """一处声明了校验器、一处没有 → 不等价（同一个格子两种规则）。"""
+    @configclass("core", "main")
+    class Checked:
+        port: int = field(default=50, validators=[_range_1_100])
+
+    with pytest.raises(ConfigDeclarationConflict, match="validators"):
+
+        @configclass("core", "main")
+        class Unchecked:
+            port: int = 50
+
+
+def test_validator_count_mismatch_is_a_conflict():
+    @configclass("core", "main")
+    class One:
+        port: int = field(default=50, validators=[_range_1_100])
+
+    with pytest.raises(ConfigDeclarationConflict, match="validators"):
+
+        @configclass("core", "main")
+        class Two:
+            port: int = field(
+                default=50, validators=[_range_1_100, _range_1_10],
+            )
+
+
+def test_conflicting_validators_leave_registry_untouched():
+    @configclass("core", "main")
+    class Wide:
+        port: int = field(default=50, validators=[_range_1_100])
+
+    before = dict(_CLASSES)
+    with pytest.raises(ConfigDeclarationConflict):
+        @configclass("core", "main")
+        class Narrow:
+            port: int = field(default=50, validators=[_range_1_10])
+
+    assert _CLASSES == before
+    assert _FIELD_OWNER[("core", "port")] == "main"
+
+
+def test_redecorating_same_class_may_change_validators():
+    """重复装饰同一个类允许改 validators（刷新自己，不与自己冲突）。"""
+    class C:
+        port: int = field(default=50, validators=[_range_1_100])
+
+    configclass("core", "main")(C)
+    assert _CLASSES[C].fields[0].validators == (_range_1_100,)
+
+    C.port = field(default=50, validators=[_range_1_10])
+    configclass("core", "main")(C)
+    assert _CLASSES[C].fields[0].validators == (_range_1_10,)

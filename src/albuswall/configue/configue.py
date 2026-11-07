@@ -44,7 +44,7 @@ from .errors import (
     LoadReport,
 )
 from .registry import _CLASSES, _FIELD_OWNER, _FILES, FileInfo
-from .resolver import Node, Resolver
+from .resolver import _MISSING, Node, Resolver
 from .tree import _ConfigTree
 from .utils.ini_transform import DELETE
 
@@ -53,7 +53,12 @@ __all__ = ["Configue"]
 _logger = logging.getLogger(__name__)
 
 #: 退出时仍会写盘的文件策略（``off`` / ``manual`` 只认显式 ``flush()``）。
-_ATEXIT_POLICIES: frozenset[str] = frozenset({"atexit", "debounce", "now"})
+#:
+#: ``now`` **不**在这里：它在每次赋值时就 ``flush(file=...)`` 了，退出时那一次
+#: 必然是 no-op（没有 dirty 就没有写入），列进来只是白跑一趟路径推导。
+#: ``debounce`` 需要在退出时补一次（定时器可能还没到点）；``atexit`` 本来就是
+#: 攒到退出才写。
+_ATEXIT_POLICIES: frozenset[str] = frozenset({"atexit", "debounce"})
 
 
 # noinspection protected-member
@@ -860,6 +865,63 @@ class Configue:
         """当前待回写的节点集合（``resolver.dirty_nodes()`` 的薄包装）。"""
         return self.resolver.dirty_nodes()
 
+    def value_sources(self, section: str, key: str) -> list[dict[str, Any]]:
+        """返回定义过该节点的所有文件，按优先级从低到高。
+
+        每个 dict::
+
+            {
+                "file": Path,       # 定义过该节点的文件（不转 str，与
+                                    # target_file_of 一致，UI 侧自己 str）
+                "raw": Any,         # 该文件里这个 key 的原始值（**不展开** ${}）
+                "effective": bool,  # 该文件的值是否是当前生效值
+                                    # （即 origin_of 指向它）
+                "readonly": bool,   # is_readonly_path(file)
+            }
+
+        用途是设置页的「这个值从哪来」视图，以及排查「我改了为什么没生效」
+        （生效值可能是更高优先级文件，或只读文件把写回目标挤到别处）。
+        节点未定义过时返回 ``[]``。
+
+        实现要点：
+
+        * 顺序直接沿用 ``resolver.definitions_of``（``load()`` 的升序遍历
+          决定了它就是「低 → 高」）；
+        * ``effective`` 用 ``origin_of`` 判，而不是「列表最后一个」——运行期
+          ``set(..., target=...)`` / ``reset()`` 都能让生效值和定义顺序不一致；
+        * ``definitions`` 与 ``file_raw`` 理论上可能不一致（防御性跳过
+          ``_MISSING`` 的条目，不输出半截记录）；
+        * **不加缓存**：这是诊断接口，调用频率低，跟着 resolver 的当前状态走
+          比缓存正确更重要。
+        """
+        resolver = self.resolver
+        definitions = resolver.definitions_of(section, key)
+        if not definitions:
+            return []
+
+        effective = resolver.origin_of(section, key)
+        sources: list[dict[str, Any]] = []
+        seen: set[Path] = set()
+        for path in definitions:
+            path = Path(path)
+            # definitions 允许重复（同一个文件多次注入）；对外只报一次，
+            # 否则 UI 会看到两条一模一样的来源。
+            if path in seen:
+                continue
+            seen.add(path)
+            raw = resolver.values_of_file(path).get(
+                (section, key), _MISSING,
+            )
+            if raw is _MISSING:
+                continue
+            sources.append({
+                "file": path,
+                "raw": raw,
+                "effective": effective == path,
+                "readonly": self.is_readonly_path(path),
+            })
+        return sources
+
     # ------------------------------------------------------------------
     # 恢复默认
     # ------------------------------------------------------------------
@@ -1039,7 +1101,12 @@ class Configue:
         _logger.error("%s: %s", context, exc)
 
     def _atexit_flush(self) -> None:
-        """解释器退出时的兜底写盘（只写「自动」策略的文件）。"""
+        """解释器退出时的兜底写盘（只写「自动」策略的文件）。
+
+        退出路径不能抛异常，但**也不能无声失败**：除了 ``error`` 日志，失败
+        还要记进 ``last_flush_error``（与 ``flush`` 的所有其它失败路径一致），
+        这样「退出前那一次写没成功」至少是**可查**的，而不是只剩一行日志。
+        """
         if getattr(self, "_closed", True):
             return
         for name, finfo in list(_FILES.items()):
@@ -1048,7 +1115,7 @@ class Configue:
             try:
                 self.flush(file=name)
             except Exception as exc:  # noqa: BLE001  退出路径不能抛
-                _logger.error("atexit flush failed for %s: %s", name, exc)
+                self._record_flush_error(f"atexit flush failed for {name!r}", exc)
 
     # ------------------------------------------------------------------
     # close

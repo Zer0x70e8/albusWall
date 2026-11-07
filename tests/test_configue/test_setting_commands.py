@@ -19,7 +19,7 @@ import pytest
 
 from albuswall.command import CommandRegistry
 from albuswall.command.exceptions import BadRequest, UnknownCommand
-from albuswall.configue import ConfigFile, Configue, configclass, reg
+from albuswall.configue import ConfigFile, Configue, configclass, field, reg
 from albuswall.configue.schema import _MANUAL_SCHEMA, invalidate_schema
 from albuswall.core import Container
 from albuswall.service import CommandService
@@ -113,10 +113,34 @@ def test_schema_views(service):
     assert flat[0]["key"] == "demo.batch_size"
 
     tree = svc.execute("setting.schema", kwargs={"view": "tree"})
-    assert set(tree) == {"groups", "items", "by_file", "unbound", "summary"}
+    assert set(tree) == {
+        "schema_version", "groups", "items", "by_file", "unbound", "summary",
+        "source", "uncovered",
+    }
 
     by_file = svc.execute("setting.schema", kwargs={"view": "by_file"})
     assert "files" in by_file and "unbound" in by_file
+    assert "uncovered" in by_file
+
+
+def test_schema_undeclared_lists_unknown_keys(service):
+    """``--undeclared``：文件里有、设置树枚举不到的 key 必须列出来。"""
+    svc, cfg, path = service
+    extra = path.parent / "b.ini"
+    extra.write_text("[misc]\nsecret = 42\n", encoding="utf-8")
+    reg(ConfigFile.INI, "b.ini", name="b", order=50)
+    cfg.load()          # load() 只加载「尚未加载」的文件，正好把 b.ini 读进来
+
+    text = svc.execute("setting.schema", kwargs={"undeclared": True})
+    assert isinstance(text, str)
+    assert "[misc]secret" in text
+
+    rows = svc.execute(
+        "setting.schema", kwargs={"undeclared": True, "view": "flat"},
+    )
+    assert isinstance(rows, list)
+    assert [row["path"] for row in rows] == ["[misc]secret"]
+    assert rows[0]["typed"] is False
 
 
 def test_schema_unknown_view_is_bad_request(service):
@@ -171,6 +195,22 @@ def test_set_writes_and_reports(service):
     assert result["error"] is None
     assert "batch_size = 64" in path.read_text(encoding="utf-8")
     assert cfg.dirty_nodes() == frozenset()
+
+
+def test_set_reports_failure_for_already_dirty_node(service, monkeypatch):
+    """「上次就脏、这次又写失败」必须报 ``ok=False``（差集法会报成功）。"""
+    svc, cfg, path = service
+
+    # 先留一个上次写盘失败的节点（写内存成功、flush 失败 → 仍然 dirty）
+    monkeypatch.setattr(Configue, "flush", lambda *a, **k: [])
+    cfg.resolver.set("demo", "batch_size", 99, persist=True)
+    assert ("demo", "batch_size") in cfg.dirty_nodes()
+
+    result = svc.execute("setting.set", ["demo.batch_size=64"])
+
+    assert result["ok"] is False
+    assert result["pending"] == ["[demo]batch_size"]
+    assert "batch_size = 64" not in path.read_text(encoding="utf-8")
 
 
 def test_set_via_values_option_and_group(service):
@@ -334,3 +374,106 @@ def test_setting_handler_setup_does_not_require_config():
                 "setup 里不应该解析容器依赖："
                 f"container.{node.func.attr}() 必须在命令函数体内懒取"
             )
+
+
+# ══════════════════════════════════════════════════════════════
+# setting.set：校验失败 → BadRequest（64），不是 CommandFailed（70）
+# ══════════════════════════════════════════════════════════════
+
+def _port_range(value: int) -> None:
+    if not 1 <= value <= 65535:
+        raise ValueError("端口必须在 1-65535 之间")
+
+
+@pytest.fixture
+def checked_service(tmp_path: Path, fake_container: Container):
+    """带 ``validators`` 的真配置：``[demo]port = 8000``。"""
+    path = tmp_path / "a.ini"
+    path.write_text("[demo]\nport = 8000\n", encoding="utf-8")
+
+    reg(ConfigFile.INI, "a.ini", name="a", order=10)
+
+    @configclass("demo", "a")
+    class Checked:
+        port: int = field(default=8000, validators=[_port_range])
+
+    cfg = Configue(base_dir=tmp_path)
+    cfg.load()
+
+    fake_container.set("config", cfg)
+    registry = CommandRegistry()
+    setup_handlers(registry, fake_container)
+    return CommandService(registry), cfg, path
+
+
+def test_validation_failure_is_bad_request(checked_service):
+    """校验失败是**调用方**的错：400，且文案原样透出（含 ``[section]key``）。"""
+    svc, cfg, _path = checked_service
+
+    with pytest.raises(BadRequest) as info:
+        svc.execute("setting", ["set", "demo.port=99999"])
+
+    exc = info.value
+    assert exc.code == "bad_request"
+    assert exc.exit_code == 64
+    assert "[demo]port" in str(exc)
+    assert "端口必须在 1-65535 之间" in str(exc)
+    # 不是「命令执行失败」的包装文案
+    assert "raised" not in str(exc)
+    # 内存与磁盘都没动
+    assert cfg.resolver.get_typed("demo", "port") == 8000
+    assert cfg.dirty_nodes() == frozenset()
+
+
+def test_valid_value_still_writes(checked_service):
+    svc, cfg, path = checked_service
+
+    out = svc.execute("setting", ["set", "demo.port=8080"])
+
+    assert out["ok"] is True
+    assert out["applied"] == ["demo.port"]
+    assert cfg.resolver.get_typed("demo", "port") == 8080
+    assert "port = 8080" in path.read_text(encoding="utf-8")
+
+
+def test_coerce_failure_keeps_original_mapping(checked_service):
+    """非校验失败（coerce 转不过去）仍走原来的 ``ValueError`` 分支。"""
+    svc, cfg, _path = checked_service
+
+    with pytest.raises(BadRequest) as info:
+        svc.execute("setting", ["set", "demo.port=abc"])
+
+    assert info.value.code == "bad_request"
+    assert "cannot convert" in str(info.value)
+    assert cfg.resolver.get_typed("demo", "port") == 8000
+
+
+def test_validation_failure_via_group_is_bad_request(checked_service):
+    svc, cfg, _path = checked_service
+
+    with pytest.raises(BadRequest) as info:
+        svc.execute("setting", ["set", "port=0"], {"group": "demo"})
+
+    assert "[demo]port" in str(info.value)
+    assert cfg.resolver.get_typed("demo", "port") == 8000
+
+
+def test_validation_failure_on_save_group_path(checked_service):
+    """``save_group`` 分支同样映射成 BadRequest（同一个 except）。"""
+    svc, cfg, _path = checked_service
+
+    with pytest.raises(BadRequest) as info:
+        svc.execute(
+            "setting", ["set"], {"group": "demo", "values": '{"port": -1}'},
+        )
+
+    assert "[demo]port" in str(info.value)
+    assert cfg.resolver.get_typed("demo", "port") == 8000
+
+
+def test_setting_save_does_not_validate(checked_service):
+    """``setting.save`` 只落盘已有 dirty 节点，不跑校验器（无 400）。"""
+    svc, _cfg, _path = checked_service
+    out = svc.execute("setting", ["save"])
+    assert out["dry_run"] is False
+    assert out["ok"] is True

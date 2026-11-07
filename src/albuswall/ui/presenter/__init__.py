@@ -21,6 +21,7 @@
     tag_editor_presenter.py    tag_editor  标签新建 / 重命名 / 删除
     source_presenter.py        source      导入源页（卡片 + 表单）
     search_presenter.py        search      浮动搜索栏（按标签过滤）
+    settings_presenter.py      settings    设置页（dump ⇄ 被动视图 ⇄ 写回）
     source_form.py            ——          表单 ⇄ DTO 的桥（非 presenter）
     shortcuts.py              ——          界面动作 → 快捷键槽（keymap）登记
 
@@ -56,6 +57,7 @@ from .base import (
 from .content_presenter import ContentPresenter
 from .main import MainPresenter
 from .search_presenter import SearchPresenter
+from .settings_presenter import SettingsPresenter
 from .shortcuts import UI_SLOTS, install_ui_shortcuts
 from .source_presenter import SourcePresenter
 from .tag_editor_presenter import TagEditorPresenter
@@ -85,6 +87,7 @@ __all__ = [
     "Presenter",
     "PresenterFactory",
     "SearchPresenter",
+    "SettingsPresenter",
     "UI_SLOTS",
     "SourcePresenter",
     "TagBarPresenter",

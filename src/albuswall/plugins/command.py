@@ -37,6 +37,6 @@ def command(container: Container) -> tuple[Callable[[], None], Callable[[], None
         Application.on_loop(lambda app: _assemble_commands(container))
 
     def stop() -> None:
-        _logger.info("2")
+        _logger.info("Command service stopped.")
 
     return start, stop

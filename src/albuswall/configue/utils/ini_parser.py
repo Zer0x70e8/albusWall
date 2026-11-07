@@ -36,7 +36,16 @@ from configparser import (
 from enum import Enum  # configue: _deconvert 的 Enum 分支需要，原本是注释掉的
 from pathlib import Path
 from pprint import pformat
-from typing import Any, Callable, Dict, Optional, Union, get_args, get_origin
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Literal,
+    Optional,
+    Union,
+    get_args,
+    get_origin,
+)
 
 try:
     import albuswall
@@ -460,6 +469,17 @@ def _convert_dict_item(
                 continue
         return value
 
+    # ── Literal：字符串按成员原样命中，其余按成员类型转换后判等 ──
+    if origin is Literal:
+        if isinstance(value, str):
+            return _convert_literal(value, args, custom_converters)
+        if value in args:
+            return value
+        raise ValueError(
+            f"{value!r} is not a valid value for Literal; "
+            f"expected one of: {_literal_members_text(args)}"
+        )
+
     # ── 标量 ─────────────────────────────────────────
     if isinstance(value, str):
         return _convert(value, typ, custom_converters)
@@ -483,6 +503,54 @@ def _convert_dict_item(
                 f"failed to convert {value!r} to {typ!r}: {exc}"
             ) from exc
     return value
+
+
+def _literal_members_text(members: tuple[Any, ...]) -> str:
+    """``Literal`` 合法成员的报错文本（``'a', 'b'``）。"""
+    return ", ".join(repr(member) for member in members)
+
+
+def _convert_literal(
+        raw: str,
+        members: tuple[Any, ...],
+        custom_converters: Optional[Dict[Any, Callable[[str], Any]]] = None,
+) -> Any:
+    """把 ``raw`` 收敛成 ``Literal[...]`` 的某个成员（对称于 ``_deconvert``）。
+
+    规则：
+
+    - 成员是 ``str`` → 与 ``raw.strip()`` **精确**比较（不做大小写归一）；
+    - 成员是 ``None`` → 空串命中（``Optional`` 风格的空值）；
+    - 其余成员（``int`` / ``float`` / ``bool`` / ``Enum`` 成员 / 任何带构造
+      的类型）→ 复用 ``_convert(text, type(member))`` 试转换，结果与成员相等
+      即命中（``Enum`` 成员因此按 **value** 命中，与 ``EnumType(raw)`` 同源）；
+    - 全不中 → ``ValueError``，消息里列出合法成员。
+    """
+    text = raw.strip()
+    for member in members:
+        if isinstance(member, str):
+            if text == member:
+                return member
+            continue
+        if member is None:
+            if text == "":
+                return None
+            continue
+        # noinspection PyBroadException
+        try:
+            converted = _convert(text, type(member), custom_converters)
+        except Exception:  # noqa: BLE001  这个成员不匹配，继续试下一个
+            continue
+        # noinspection PyBroadException
+        try:
+            if converted == member:
+                return member
+        except Exception:  # noqa: BLE001  比较失败按不匹配处理
+            continue
+    raise ValueError(
+        f"{raw!r} is not a valid value for Literal; "
+        f"expected one of: {_literal_members_text(members)}"
+    )
 
 
 # noinspection PyNoneFunctionAssignment
@@ -545,6 +613,10 @@ def _convert(
                     continue
             logger.trace("[_convert] All Union members failed, returning None")
             return None
+    if origin is Literal:
+        result = _convert_literal(raw, args, custom_converters)
+        logger.trace(f"[_convert] Literal result: {result!r}")
+        return result
     # 注意：container 分支必须放在 union 分支**外面**——它只处理
     # ``dict[...] / list[...] / tuple[...] / set[...]``，与 Union 无关。
     # （历史 bug：这些分支曾被缩进进 ``if origin in _UNION_ORIGINS``，
@@ -989,6 +1061,12 @@ def _deconvert(
     origin = get_origin(converter)
     if origin is not None:
         args = get_args(converter)
+        # Literal：值本身已经是成员之一，直接写成文本即可（Enum 成员写 value，
+        # 与 ``_convert`` 的 ``EnumType(raw)`` 对称，否则读回来会变成成员名）。
+        if origin is Literal:
+            if isinstance(value, Enum):
+                return str(value.value)
+            return str(value)
         if origin in _UNION_ORIGINS:
             non_none = [t for t in args if t is not type(None)]
             if not non_none:

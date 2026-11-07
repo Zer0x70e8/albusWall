@@ -30,6 +30,7 @@ CONFIG_FILE_PATH = get_user_config_dir(
 DATA_FILE_PATH = get_user_data_dir(
     albuswall.__name__, albuswall.__author__)
 CONFIG_FILE_NAME = "config.ini"
+BUILTIN_PLUGINS_MODEL = "albuswall.plugins"
 
 _logger = getLogger(__package__)
 
@@ -67,6 +68,7 @@ def _boot(app: Application):
         base_dir=CONFIG_FILE_PATH,
         file_name=CONFIG_FILE_NAME,
         ignore_missing=True,
+        seed_defaults=True,
     )
     app.resolve_slot("config")
 
@@ -76,7 +78,7 @@ def _boot(app: Application):
     # SlotNotResolvedError。
     app.resolve_slot("plugins")
     discover_all(
-        builtin_package="albuswall.plugins",
+        builtin_package=BUILTIN_PLUGINS_MODEL,
         user_dir=None,
     )
     manager = app.plugins()

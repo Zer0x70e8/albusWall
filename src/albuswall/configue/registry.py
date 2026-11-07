@@ -51,6 +51,7 @@ from typing import (
     Any,
     Callable,
     ClassVar,
+    Iterable,
     Literal,
     Union,
     get_args,
@@ -77,6 +78,7 @@ __all__ = [
     "field_owner",
     "ConfigFile",
     "AutosavePolicy",
+    "Validator",
     "FileInfo",
     "FieldInfo",
     "ClassInfo",
@@ -102,6 +104,14 @@ ROOT = "__default__"
 
 # noinspection SpellCheckingInspection
 AutosavePolicy = Literal["off", "manual", "atexit", "debounce", "now"]
+
+#: 字段校验器签名：**抛异常 = 非法，不抛 = 合法**。
+#:
+#: 刻意只约定这一个形态（不返回 bool、不返回错误消息）：校验器里最简单的
+#: 写法就是 ``lambda v: (_ for _ in ()).throw(ValueError("..."))`` 或
+#: ``assert``；异常消息就是给用户看的文案。写回层负责把它收口成
+#: ``ConfigValidationError``（见 ``schema._save_entries``）。
+Validator = Callable[[Any], None]
 
 
 class ConfigFile(str, Enum):
@@ -156,6 +166,10 @@ class FieldInfo:
     label: str | Callable[[], str] = ""
     #: 说明文案，同上。
     description: str | Callable[[], str] = ""
+    #: 字段级校验器（``field(validators=[...])``）。**写回时**在类型转换
+    #: 之后执行：抛异常即非法，异常消息就是给用户的文案。本层只是搬运，
+    #: 具体校验器由声明方提供（不内置 Range / Pattern 之类）。
+    validators: tuple[Validator, ...] = ()
 
     @property
     def has_default(self) -> bool:
@@ -180,6 +194,8 @@ class _FieldSpec:
     #: 展示名：``str`` 或「返回译文的可调用对象」（dump 时求值）。
     label: str | Callable[[], str] = ""
     description: str | Callable[[], str] = ""
+    #: 校验器元组（见 :data:`Validator`）；``field()`` 只做透传。
+    validators: tuple[Validator, ...] = ()
 
 
 def field(
@@ -187,6 +203,7 @@ def field(
         default: Any = _MISSING,
         label: str | Callable[[], str] = "",
         description: str | Callable[[], str] = "",
+        validators: Iterable[Validator] = (),
 ) -> Any:
     """声明字段元数据，用法类似 ``dataclasses.field``。
 
@@ -201,8 +218,41 @@ def field(
     求值**，而是在 ``dump_schema`` 时求值——于是语言切了之后再 dump 一次就是
     新文案。需要 i18n 时用 :func:`albuswall.ui.config_i18n.field`（把 i18n key
     包成 callable，本层不 import 任何翻译框架）。
+
+    ``validators`` 是一组 ``Callable[[Any], None]``：**抛异常 = 非法，不抛 =
+    合法**。它们在 ``save_values`` / ``save_group`` 的**类型转换之后**执行，
+    失败抛 :class:`~albuswall.configue.errors.ConfigValidationError`（与
+    ``ValueError`` 区分开）。本层**不内置**任何具体校验器（范围 / 正则 /
+    长度……）——只有骨架，具体规则由声明方随用随加::
+
+        def _port_range(value: int) -> None:
+            if not 1 <= value <= 65535:
+                raise ValueError("端口必须在 1-65535 之间")
+
+        port: int = field(default=8000, validators=[_port_range])
     """
-    return _FieldSpec(default=default, label=label, description=description)
+    return _FieldSpec(
+        default=default,
+        label=label,
+        description=description,
+        validators=_coerce_validators(validators),
+    )
+
+
+def _coerce_validators(validators: Iterable[Validator]) -> tuple[Validator, ...]:
+    """``None`` / 单个 callable / 任意可迭代 → 校验器元组（装饰期收口）。"""
+    if validators is None:  # type: ignore[comparison-overlap]
+        return ()
+    if callable(validators):
+        return (validators,)
+    coerced = tuple(validators)
+    for validator in coerced:
+        if not callable(validator):
+            raise TypeError(
+                f"field(validators=...): {validator!r} is not callable; "
+                f"a validator must be Callable[[Any], None]"
+            )
+    return coerced
 
 
 # ---------------------------------------------------------------------------
@@ -411,11 +461,19 @@ def _type_matches(value: Any, expected: Any) -> bool:
     - 泛型别名（``list[str]``）不能直接 ``isinstance``，退化成对 ``origin``
       的判定（只校验容器种类，不校验元素类型——元素级校验交给读取期的
       ``_convert``）；
+    - ``Literal[...]``：赋值必须是枚举出来的成员之一（不 fail-open——声明层
+      已经列出了合法值，放过别的值会让「能显示」与「能写入」不一致）；
     - 其它无法 ``isinstance`` 的（``Any`` / 特殊形式）fail-open。
     """
     origin = get_origin(expected)
     if origin is Union or origin is getattr(types, "UnionType", Union):
         return any(_type_matches(value, arg) for arg in get_args(expected))
+
+    if origin is Literal:
+        try:
+            return value in get_args(expected)
+        except Exception:  # noqa: BLE001  不可哈希 / 比较异常 → 不匹配
+            return False
 
     probe = origin if origin is not None else expected
     if probe is type(None):
@@ -622,18 +680,25 @@ def configclass(
                 default = raw_default.default
                 label = raw_default.label
                 description = raw_default.description
+                validators = raw_default.validators
             elif isinstance(raw_default, _ConfigSlot):
                 # 重复装饰幂等：从已有 slot 恢复 default；label/description 退化为空
                 default = raw_default.default
                 label = ""
                 description = ""
+                validators = ()
             else:
                 default = raw_default
                 label = ""
                 description = ""
+                validators = ()
 
             field_path = class_path + (name,)
-            fields.append(FieldInfo(field_path, resolved, default, label, description))
+            fields.append(
+                FieldInfo(
+                    field_path, resolved, default, label, description, validators,
+                )
+            )
 
         # 撞方法名检测
         for f in fields:
@@ -724,6 +789,33 @@ def _defaults_equal(one: Any, other: Any) -> bool:
         return False
 
 
+def _validators_equal(one: Any, other: Any) -> bool:
+    """两组校验器是否等价（逐项 ``==``，**不比 identity**）。
+
+    为什么不用 ``is``：共享声明要求「同一个格子的两种解释」完全一致，而
+    ``lambda`` 每次求值都是新对象、且 ``==`` 恒假——**两个 lambda 永不相等
+    是预期行为**：要共享声明就用可比较的校验器对象，即「同一个模块级函数」
+    或「实现了 ``__eq__`` 的校验器类」（例：``@dataclass(frozen=True)`` 的
+    ``Range``）。注意 ``functools.partial`` **不**实现 ``__eq__``（比较的是
+    identity），它不能用来表达「等价的两份校验器」。
+
+    比较本身抛异常当作「不一致」（宁可报冲突，也不能放过不一致的语义）。
+    """
+    one_items = tuple(one or ())
+    other_items = tuple(other or ())
+    if len(one_items) != len(other_items):
+        return False
+    for left, right in zip(one_items, other_items):
+        if left is right:
+            continue
+        try:
+            if not bool(left == right):
+                return False
+        except Exception:  # noqa: BLE001  比较不出来就当不一致
+            return False
+    return True
+
+
 def _describe_declaration(cls: type, file: str, f: FieldInfo) -> str:
     """``Core (main): bool = False`` 形式的一行声明摘要。"""
     type_name = getattr(f.type, "__name__", None) or repr(f.type)
@@ -738,9 +830,16 @@ def _collect_declaration_conflicts(
 ) -> list[str]:
     """新声明与已登记声明之间的冲突描述（空列表 = 全部等价，可以共享）。
 
-    比较维度只有两个：**类型** 与 **默认值**（``label`` / ``description`` 是
-    纯展示信息，不参与判定）。同一个类自己的旧声明不参与比较——重复装饰
-    允许改动注解与默认值，那是在刷新自己。
+    比较维度有三个：**类型**、**默认值**、**校验器**（``label`` /
+    ``description`` 是纯展示信息，不参与判定）。``validators`` 参与比较的
+    原因：它决定「什么值能写进去」，两个类对同一节点给出不同校验规则时，
+    自动建树只能选中一份（``_auto_groups`` 按节点去重，先声明者赢），
+    另一份会被**静默丢弃**——那种「看起来都生效、实际只有一个生效」的
+    状态正是本校验要防的。**不做并集合并**（那会掩盖冲突，且让「合法值
+    集合」变成不可预测的推导结果）。
+
+    同一个类自己的旧声明不参与比较——重复装饰允许改动注解、默认值与
+    校验器，那是在刷新自己。
     """
     conflicts: list[str] = []
     reported: set[tuple[str, str]] = set()
@@ -760,6 +859,11 @@ def _collect_declaration_conflicts(
                 if not _defaults_equal(f.default, other_f.default):
                     problems.append(
                         f"default {other_f.default!r} != {f.default!r}"
+                    )
+                if not _validators_equal(f.validators, other_f.validators):
+                    problems.append(
+                        f"validators {tuple(other_f.validators)!r} != "
+                        f"{tuple(f.validators)!r}"
                     )
                 if not problems:
                     continue

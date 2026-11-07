@@ -22,7 +22,6 @@ from ..exceptions import UnknownCommand
 
 def setup(registry: CommandRegistry, container: Container) -> None:
     # builtin 不依赖业务 service；container 仅为满足 HandlerModule 契约。
-    _ = container
 
     registry.register(Command(
         path="ping",

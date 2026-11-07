@@ -14,11 +14,11 @@ from pathlib import Path
 
 import pytest
 
+from albuswall.common.setting_widget import WIDGETS
 from albuswall.service.command.handlers import _present
 from albuswall.service.command.handlers._present import (
     PRESENT_GROUP_OVERRIDES,
     PRESENT_OVERRIDES,
-    WIDGETS,
     SettingWidget,
     apply_present,
     by_file_view,
@@ -371,7 +371,7 @@ def test_render_view_shapes(dump):
     assert len(render_view(presented, "flat")) == len(presented["items"])
 
     by_file = render_view(presented, "by_file")
-    assert set(by_file) == {"files", "unbound"}
+    assert set(by_file) == {"files", "unbound", "uncovered"}
     assert by_file["files"][0]["file"] == "/tmp/a.ini"
     assert [item["key"] for item in by_file["files"][0]["items"]] == [
         "demo.batch_size", "demo.theme", "advanced.secret.level",
