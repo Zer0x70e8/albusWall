@@ -28,7 +28,7 @@ from .base import Presenter, register_presenter
 
 if TYPE_CHECKING:
     from albuswall.core.container import Container
-    from albuswall.ui.widgets.floating_search_bar import FloatingSearchBar
+    from albuswall.ui.widgets import FloatingSearchBar
     from albuswall.ui.window.window import Window
 
     from .main import MainPresenter

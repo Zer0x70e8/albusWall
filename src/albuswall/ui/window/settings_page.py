@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from ..i18n import Retranslatable
 from ..setting import SettingView
-from ..widgets.blur_overlay_label import BlurLabel
+from ..widgets import BlurLabel
 from .utils import install_close_button
 
 __all__ = ["SettingsPage"]

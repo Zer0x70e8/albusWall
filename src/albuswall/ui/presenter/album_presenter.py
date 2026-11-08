@@ -19,7 +19,7 @@
 
 封面是派生数据（虚拟相册取 scope 首项、物理相册取 ``cover_asset_id``
 或最新资产），资产集合一变就要重新解析 —— 见 :meth:`reload_covers`。
-解码走 :class:`~albuswall.ui.widgets.image_loader.ImageLoader`（后台线程），
+解码走 :class:`~albuswall.ui.widgets.widget.image_loader.ImageLoader`（后台线程），
 路径解析留在主线程，回填按 uuid 对齐。
 """
 
@@ -37,7 +37,7 @@ from albuswall.dto.album.command import AlbumCreate
 from albuswall.ui.model import AlbumModel, AlbumRole
 from albuswall.ui.window.settings import window_state
 
-from ..widgets.image_loader import get_loader
+from ..widgets import get_loader
 from .base import Presenter, register_presenter
 from .thumbnails import square_pixmap
 

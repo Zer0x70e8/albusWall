@@ -1,5 +1,6 @@
 #
-""""""
+"""内容网格视图（``TileView``）：``QListView`` + 委托绘制的缩略图卡片。
+"""
 
 from __future__ import annotations
 

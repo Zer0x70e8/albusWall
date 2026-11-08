@@ -1,11 +1,14 @@
 #
 """albusWall 主窗口 —— 纯视图层。
 
-:class:`Window` 只做三件事：
+:class:`Window` 只做四件事：
 
 1. **搭图层**：背景模糊层 → 内容层 → overlay 浮层 → 标题栏；
 2. **同步几何**：窗口 resize 时把各层铺满 / 对齐到标题栏下沿；
-3. **组装子控件**：标题栏、内容区、相册页、导入源页、详情页、设置页、菜单。
+3. **组装子控件**：标题栏、内容区、相册页、导入源页、详情页、设置页、菜单；
+4. **补回窗口交互**：自绘边框（``FramelessWindowHint``）没有系统标题栏，
+   拖拽移动 / 边缘缩放由 :class:`~albuswall.ui.platform.window_resizer.
+   WindowResizer` 装在窗口上代劳。
 
 它**不**查询数据、不调度服务、不安装快捷键、不读配置、不认识任何
 model / delegate / DTO。所有业务动作都由外部（插件 / presenter）通过
@@ -17,9 +20,9 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
+from ..platform import WindowResizer
 from ..utils import auto_set_object_names
-from ..widgets.blur_overlay_label import BlurLabel
-from ..widgets.passthrough_stack_widget import PassthroughStack
+from ..widgets import BlurLabel, PassthroughStack
 from .album import Album
 from .content import Content
 from .detail import Detail
@@ -70,6 +73,7 @@ class Window(QWidget):
     detail: Detail
     settings_page: SettingsPage
     menu: Menu
+    window_resizer: WindowResizer
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -136,6 +140,12 @@ class Window(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop, True)
+
+        # 自绘边框把系统标题栏和原生边框一起去掉了，拖拽移动 / 边缘缩放没有
+        # 任何东西负责，必须自己补（见 albuswall.ui.platform.window_resizer）：
+        # 它挂在窗口上、在应用层过滤鼠标事件，只在「标题栏区域」或「边缘
+        # ``margin`` 像素」上生效，按钮 / 输入框等交互控件照常收到点击。
+        self.window_resizer = WindowResizer(self, self)
 
     # ------------------------------------------------------------------ #
     # 图层

@@ -1,5 +1,6 @@
 #
-""""""
+"""事件穿透的 ``QStackedWidget``（``PassthroughStack``）：空白页不拦鼠标。
+"""
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QStackedWidget, QWidget

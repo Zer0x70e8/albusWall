@@ -1,5 +1,6 @@
 #
-""""""
+"""浮动搜索栏与标签建议浮层（``FloatingSearchBar`` / ``SearchSuggestionPopup``）。
+"""
 
 from typing import Optional, Dict, List, Iterable, Tuple
 
@@ -9,18 +10,9 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QVBoxLayout,
 )
 
-from ..anims.search_bar_anim_protocol import SearchAnimator
-from ..i18n import Retranslatable
-from ..utils.qt_objectname_utils import set_widget_object_name
-
-
-class SearchBarLayoutPlaceholder(QPushButton):
-    """锚点按钮。始终保留在布局中，展开时被搜索栏覆盖。"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("SearchPlaceholder")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+from ...anims.search_bar_anim_protocol import SearchAnimator
+from ...i18n import Retranslatable
+from ...utils.qt_objectname_utils import set_widget_object_name
 
 
 class SearchSuggestionPopup(Retranslatable, QFrame):

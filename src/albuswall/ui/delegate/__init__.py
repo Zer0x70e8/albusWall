@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 
-from ..widgets.tag_chip_delegate import TagChipDelegate
+from ..widgets import TagChipDelegate
 from .album_cover_delegate import AlbumCoverDelegate
 from .asset_thumb_delegate import AssetThumbDelegate
 from .info_cell_delegate import InfoCellDelegate, InfoMode

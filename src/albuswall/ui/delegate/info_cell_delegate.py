@@ -1,7 +1,7 @@
 #
 """网格单元格的「缩略图 + 底部信息条」委托。
 
-内容网格（``Content`` → :class:`~albuswall.ui.widgets.tile_view.TileView`）是
+内容网格（``Content`` → :class:`~albuswall.ui.widgets.view.tile_view.TileView`）是
 标准的 ``QListView``，所以这里的委托是普通的 ``QStyledItemDelegate``：
 格子几何来自 ``option.rect``（视图已强制成 ``cell_size × cell_size``），数据
 按 :class:`~albuswall.ui.model.roles.ItemRole` 契约直接问模型 —— 不再需要

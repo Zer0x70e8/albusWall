@@ -32,8 +32,7 @@ from PySide6.QtWidgets import (
 
 from ..delegate import AlbumCoverDelegate, TrashAlbumDelegate
 from ..i18n import Retranslatable
-from ..widgets.blur_overlay_label import BlurLabel
-from ..widgets.square_grid import SquareGridView
+from ..widgets import BlurLabel, SquareGridView
 
 
 from .utils import install_close_button

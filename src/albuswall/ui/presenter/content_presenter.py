@@ -10,14 +10,14 @@
   （标题 / 收藏 / 回收站剩余天数）。这一步顺带触发服务层的
   ``assets_viewed`` 广播 —— 按需缩略图生成就是从这里被点着的；
 * **缩略图文件** —— ``ThumbnailService.get_thumbnail_path`` 取路径，没有就让
-  服务补生成；像素解码交给 :class:`~albuswall.ui.widgets.image_loader.ImageLoader`
+  服务补生成；像素解码交给 :class:`~albuswall.ui.widgets.widget.image_loader.ImageLoader`
   的线程池，回主线程按行号回填 ``AssetGridModel``。
 
 绘制
 ====
 
 内容层就是一个 ``QListView``（
-:class:`~albuswall.ui.widgets.tile_view.TileView`），模型直接投给视图，
+:class:`~albuswall.ui.widgets.view.tile_view.TileView`），模型直接投给视图，
 **委托仍由这里显式装上**（``QListView`` 默认委托只画图标 + 文字，收藏角标
 就丢了）。这里装的是 :class:`~albuswall.ui.delegate.InfoCellDelegate` 的
 ``AUTO`` 模式：
@@ -75,8 +75,8 @@ from albuswall.ui.delegate import InfoCellDelegate, InfoMode
 from albuswall.ui.model import AssetEntry, AssetGridModel
 from albuswall.ui.window.settings import window_state
 
-from ..widgets.image_loader import get_loader
-from ..widgets.tile_view import DEFAULT_COLUMN_COUNT
+from ..widgets import get_loader
+from ..widgets.view.tile_view import DEFAULT_COLUMN_COUNT
 from .base import Presenter, register_presenter
 from .thumbnails import square_pixmap
 
@@ -238,7 +238,7 @@ class ContentPresenter(Presenter):
         """按 ``[window] tile_columns`` 恢复网格列数（``0`` = 由视图换算）。
 
         越界值（小于最小列数 / 大于最大列数）由
-        :meth:`~albuswall.ui.widgets.tile_view.TileView.set_column_count`
+        :meth:`~albuswall.ui.widgets.view.tile_view.TileView.set_column_count`
         自己 clamp，这里不做二次判断。
         """
         columns = int(window_state().tile_columns or 0)

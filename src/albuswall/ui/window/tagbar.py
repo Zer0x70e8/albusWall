@@ -4,7 +4,7 @@
 纯视图组件：
 
 * chip 列表由外部注入 model（外部只需提供 ``DisplayRole`` 文本与
-  :data:`~albuswall.ui.widgets.tag_chip_view.TAG_ROLE` 标识）；
+  :data:`~albuswall.ui.widgets.view.tag_chip_view.TAG_ROLE` 标识）；
 * 标签树弹窗的 model 同样由外部注入；
 * 所有用户动作都只发意图信号，不含任何增删改查。
 """
@@ -33,9 +33,7 @@ from PySide6.QtWidgets import (
 
 from ..i18n import Retranslatable
 from ..model.roles import TagRole
-from ..widgets import BlurLabel
-from ..widgets.anchored_popup import AnchoredPopup
-from ..widgets.tag_chip_view import TagChipView
+from ..widgets import AnchoredPopup, BlurLabel, TagChipView
 
 __all__ = ["TagBar"]
 

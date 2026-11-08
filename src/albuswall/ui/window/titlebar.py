@@ -32,10 +32,11 @@ from PySide6.QtWidgets import (
 from ..anims.search_bar_anim import GeometryAnimator
 from ..anims.search_bar_anim_protocol import SearchAnimator
 from ..i18n import Retranslatable
-from ..widgets.action_buttons import (
-    CloseButton, MaximizeButton, MinimizeButton)
-from ..widgets.floating_search_bar import (
+from ..widgets import (
+    CloseButton,
     FloatingSearchBar,
+    MaximizeButton,
+    MinimizeButton,
     SearchBarLayoutPlaceholder,
 )
 

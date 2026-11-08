@@ -12,7 +12,7 @@
 线程
 ====
 
-大图与导航条缩略图由 :class:`~albuswall.ui.widgets.image_loader.ImageLoader`
+大图与导航条缩略图由 :class:`~albuswall.ui.widgets.widget.image_loader.ImageLoader`
 在后台线程解码，回调用 ``token`` 对齐（``full:<uuid>`` / ``nav:<uuid>``），
 过期的 token 直接丢弃。缩略图**生成**走 ``ThumbnailService``（按需）。
 
@@ -37,7 +37,7 @@ from albuswall.common.enums import ThumbSpec
 from albuswall.service.view.service import SCOPE_DELETED
 from albuswall.ui.model import NavigationModel
 
-from ..widgets.image_loader import get_loader
+from ..widgets import get_loader
 from .base import Presenter, register_presenter
 from .thumbnails import square_pixmap
 

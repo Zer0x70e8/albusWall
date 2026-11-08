@@ -15,7 +15,7 @@ from typing import Any
 
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from ..widgets.collapsible_group_box import CollapsibleGroupBox
+from ..widgets import CollapsibleGroupBox
 from . import strings
 
 __all__ = ["SettingGroupBox"]

@@ -22,8 +22,8 @@ from PySide6.QtCore import QModelIndex, Qt, Signal
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QListView
 
-from ..model.roles import TagRole
-from .tag_chip_delegate import TagChipDelegate
+from ...model.roles import TagRole
+from ..widget.tag_chip_delegate import TagChipDelegate
 
 __all__ = ["TagChipView", "TAG_ROLE"]
 

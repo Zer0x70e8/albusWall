@@ -35,7 +35,7 @@
 内容视图（``TileView``，也是 ``QAbstractItemView``）是**唯一**的例外：空格是
 「快速预览」、回车是「详情」，两件事分开。它用类属性
 ``space_previews = True`` 声明「空格由我自己处理」（见
-:mod:`albuswall.ui.widgets.tile_view`），规则 2 因此跳过它 —— 与本模块装的
+:mod:`albuswall.ui.widgets.view.tile_view`），规则 2 因此跳过它 —— 与本模块装的
 顺序无关，也不依赖窗口里有没有内容层。
 
 用法

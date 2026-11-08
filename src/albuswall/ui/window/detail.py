@@ -36,8 +36,7 @@ from PySide6.QtWidgets import (
 from ..i18n import Retranslatable
 from ..model import NavigationModel
 from ..model.roles import NavigationRole
-from ..widgets import BlurLabel
-from ..widgets.image_viewer import ImageViewer
+from ..widgets import BlurLabel, ImageViewer
 
 from .panel import InformationPanel
 from .tagbar import TagBar

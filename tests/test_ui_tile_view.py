@@ -56,7 +56,7 @@ def _view(count: int = 0, *, columns: int = 5, size=(500, 400), pixmap=None):
     """
     from PySide6.QtWidgets import QWidget
 
-    from albuswall.ui.widgets.tile_view import TileView
+    from albuswall.ui.widgets import TileView
 
     model = _model(count, pixmap)
     host = QWidget()

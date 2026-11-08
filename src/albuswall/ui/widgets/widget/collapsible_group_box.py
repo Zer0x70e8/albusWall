@@ -1,5 +1,6 @@
 #
-""""""
+"""可折叠分组框（``CollapsibleGroupBox``）：标题栏 + 高度折叠动画。
+"""
 
 from PySide6.QtWidgets import (
     QGroupBox, QStyle, QStyleOptionGroupBox,
@@ -7,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Property, Qt
 
-from ..anims.collapse_animation import CollapseAnimation
+from ...anims.collapse_animation import CollapseAnimation
 
 
 # noinspection PyPep8Naming,PyShadowingNames

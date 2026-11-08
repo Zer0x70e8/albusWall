@@ -4,7 +4,7 @@
 对应实现：
 
 * :mod:`albuswall.ui.utils.activation_keys` —— 应用级事件过滤器；
-* :mod:`albuswall.ui.widgets.tile_view` —— 内容网格的唯一例外
+* :mod:`albuswall.ui.widgets.view.tile_view` —— 内容网格的唯一例外
   （空格 = 预览、回车 = 详情，``space_previews`` 标记让过滤器放行）；
 * :meth:`albuswall.ui.window.detail.Detail.eventFilter` —— 预览模式的退出键。
 """
@@ -250,7 +250,7 @@ def test_enter_opens_menu_button_menu_like_space(filtered_app):
 
 def _grid():
     from albuswall.ui.model import AssetGridModel
-    from albuswall.ui.widgets.tile_view import TileView
+    from albuswall.ui.widgets import TileView
 
     model = AssetGridModel()
     for row in range(9):
@@ -266,7 +266,7 @@ def _grid():
 
 def _empty_grid():
     from albuswall.ui.model import AssetGridModel
-    from albuswall.ui.widgets.tile_view import TileView
+    from albuswall.ui.widgets import TileView
 
     model = AssetGridModel()
     grid = TileView()

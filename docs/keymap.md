@@ -321,7 +321,7 @@ Qt 对同一个物理键有多种写法，**配置里写的**与**事件里转�
 | 焦点链（Tab / 方向键） | Qt | binder 永不接管（规则 4） |
 | Esc 两级（取消焦点 → 收浮层） | `Window.keyPressEvent` | binder 不接管；和弦进行中按 Esc 只放弃前缀 |
 | 空格 / 回车 = 激活 | `utils/activation_keys.py` | binder 让渡（规则 5）；它合成的空格是非自发事件，binder 不理 |
-| 网格光标 / 快速预览 | `widgets/tile_view.py` | `keymap_passthrough` 属性 + 规则 5 |
+| 网格光标 / 快速预览 | `widgets/view/tile_view.py` | `keymap_passthrough` 属性 + 规则 5 |
 | 搜索栏 / 标签树弹窗 | 各自控件 | 弹窗是独立顶层窗口，靠规则 3 排除 |
 
 ## 校验与错误
@@ -422,7 +422,7 @@ Qt 的 Tab 链只看焦点策略，**不看控件是否画了焦点指示器**�
 | 视图 / presenter 接线 | **已接线**：`ui/presenter/shortcuts.py` 登记 18 个槽，`ui/bootstrap.py` 的 phase 5 调 `install_ui_shortcuts()` 并 `load_shortcuts()`；仍是按鸭子类型用容器里的注册表（`keymap` 不反向 import presenter） |
 | 默认表与代码的对应 | **已对上**：18 条命令都有槽；`load()` 之后 `unbound_slots()` 恰好是随包表里 `= []` 的 6 条；`tests/test_ui_shortcuts.py` 断言「`UI_SLOTS` 的命令集合 == `shortcuts.ini` 的命令集合」且「只有那 6 条没有键位」 |
 | 键位编辑 UI | 设置页已接回主窗口，并有一个可编辑的「快捷键」分组（命令 → JSON 绑定记录）；按键映射编辑页尚未实现：没有 Qt 行模型、没有录键控件、没有冲突提示、没有「恢复默认」按钮。`conflicts()` / `unbound_slots()` / `binding_for()` 是留给它的查询接口；**只读**的查看入口已经有了（`albusctl ui shortcuts`，见上文，底层是 `shortcut_config_info()`），缺的是编辑与落盘那一半（槽的 `help` 文案现在是英文短句，设置页出现时再走 i18n） |
-| 提示未来的组件标记 | `ui/widgets/collapsible_group_box.py` 与 `ui/widgets/tile_view.py` 设的 Qt 属性 `keymap_passthrough` 由 `keymap/qt_binder.py` 读取（规则 5：空格 / 回车让渡给控件） |
+| 提示未来的组件标记 | `ui/widgets/widget/collapsible_group_box.py` 与 `ui/widgets/view/tile_view.py` 设的 Qt 属性 `keymap_passthrough` 由 `keymap/qt_binder.py` 读取（规则 5：空格 / 回车让渡给控件） |
 | 命令层接口 | `albuswall/command/registry.py` 的 docstring 有 `TODO(ui)`：快捷键绑定归界面层，命令注册表不提供接口 |
 | 设置写回 | **已接入**：`shortcuts.ini`（默认表 + 用户表）由 `setup_config` 用 `reg()` 登记，值走 `Resolver`，写回走 `ShortcutRegistry.save_shortcut()` / `persist()`，恢复默认走 `Configue.reset()`。`[shortcuts]` 的 key 是运行期才知道的，所以**不**出现在 `setting.schema` 的自动树里（它没有 `@configclass` 字段）；只读视图是 `albusctl ui shortcuts` |
 | 热重载 | **已接通（进程内）**：`ShortcutRegistry.bind_config(config)` 订阅配置变更，`set` / `reset` / 重新 `load()` 都会重建绑定表。**外部改文件**仍然要重启（`QFileSystemWatcher` 没做——仓库没有 watcher 基础设施，task 明确不新造） |
