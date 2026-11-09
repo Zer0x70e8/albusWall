@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-"""View widgets: composite controls that render data (tile, list, form, ...).
+"""View widgets: composite controls that render data (tile, list, grid, ...).
+
+表单控件不在本层：它已升格为独立子包 ``widget.form_widget``。
 
 Names are resolved lazily (see :mod:`albuswall.ui.widgets._lazy`), so asking
 for ``TileView`` does not import the other view modules.
@@ -13,7 +15,6 @@ from .._lazy import install
 
 _LAZY: dict[str, str] = {
     "ColumnListView": "column_list_view",
-    "FormView": "form_view",
     "ImageViewer": "image_viewer",
     "SquareGridView": "square_grid",
     "TagChipView": "tag_chip_view",
@@ -22,7 +23,6 @@ _LAZY: dict[str, str] = {
 
 __all__ = [
     "ColumnListView",
-    "FormView",
     "ImageViewer",
     "SquareGridView",
     "TagChipView",
@@ -31,7 +31,6 @@ __all__ = [
 
 if TYPE_CHECKING:  # pragma: no cover - 仅供 IDE / 类型检查器
     from .column_list_view import ColumnListView
-    from .form_view import FormView
     from .image_viewer import ImageViewer
     from .square_grid import SquareGridView
     from .tag_chip_view import TagChipView

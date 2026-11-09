@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # noinspection SpellCheckingInspection
-"""12 栅格布局（``Grid12Layout``）。
+"""12 栅格布局（Grid12Layout）。
 
 栅格划分方式与浏览器栅格系统一致：把可用宽度等分为 12 列，
 控件通过 ``(row, col, colspan)`` 定位。

@@ -5,14 +5,20 @@ Flat public surface: callers never need to know about the physical
 ``widget`` / ``view`` / ``layout`` split.
 
     from albuswall.ui.widgets import FormView, TileView, CloseButton
+    from albuswall.ui.widgets import RowControl, RowSpec   # 表单四轴
 
 Import cost stays minimal: every public name maps to the **exact** module that
-defines it, so importing ``FormView`` only imports ``view/form_view.py``
-(and its own dependencies) — never the whole package. The three sub-packages
-are exposed as well, for callers that want to be explicit about the layer:
+defines it, so importing ``TileView`` only imports ``view/tile_view.py``
+(and its own dependencies) — never the whole package. The sub-packages are
+exposed as well, for callers that want to be explicit about the layer:
 
     from albuswall.ui.widgets.layout import Grid12Layout
     from albuswall.ui.widgets import view
+    from albuswall.ui.widgets.widget.form_widget import FormView
+
+表单控件是一个独立子包（``widget.form_widget``）：``FormView`` 与四轴枚举 /
+预设（``RowControl`` / ``RowAccess`` / ``ResetPosition`` / ``ValidationMode`` /
+``RowSpec``）在顶层同时也直接可达。
 
 Add a new class: put it in the matching sub-package, list it in that
 sub-package's ``_LAZY`` / ``__all__`` **and** in ``_LAZY`` below.
@@ -32,11 +38,9 @@ _LAZY: dict[str, str] = {
     # ---- layout ----
     "ColumnLayoutCalculator": "layout.column_layout_calculator",
     "Grid12Layout": "layout.grid12_layout",
-    "RowFormat": "layout.row_format",
     "SearchBarLayoutPlaceholder": "layout.search_bar_layout",
     # ---- view ----
     "ColumnListView": "view.column_list_view",
-    "FormView": "view.form_view",
     "ImageViewer": "view.image_viewer",
     "SquareGridView": "view.square_grid",
     "TagChipView": "view.tag_chip_view",
@@ -58,14 +62,62 @@ _LAZY: dict[str, str] = {
     "get_loader": "widget.image_loader",
     "PassthroughStack": "widget.passthrough_stack_widget",
     "TagChipDelegate": "widget.tag_chip_delegate",
+    "MarqueeLabel": "widget.marquee_label",
+    "TagLabel": "widget.tag_label",
+    # ---- form (widget.form_widget 子包) ----
+    "FormView": "widget.form_widget",
+    "RowHandle": "widget.form_widget",
+    "ValidationError": "widget.form_widget",
+    "RowControl": "widget.form_widget",
+    "RowAccess": "widget.form_widget",
+    "BrowseKind": "widget.form_widget",
+    "ResetPosition": "widget.form_widget",
+    "ValidationMode": "widget.form_widget",
+    "RowSpec": "widget.form_widget",
 }
 
+#: 顶层子包（按名字导入也行：``from albuswall.ui.widgets import view``）
 _SUBPACKAGES: tuple[str, ...] = ("layout", "view", "widget")
 
-# `from albuswall.ui.widgets import *` 使用的公开名单
 __all__ = [
-    *_SUBPACKAGES,
-    *_LAZY,
+    "AnchoredPopup",
+    "BlurLabel",
+    "BrowseKind",
+    "CloseButton",
+    "CollapsibleGroupBox",
+    "ColumnLayoutCalculator",
+    "ColumnListView",
+    "FloatingSearchBar",
+    "FoldButton",
+    "FormView",
+    "Grid12Layout",
+    "ImageLoader",
+    "ImageViewer",
+    "MarqueeLabel",
+    "MaximizeButton",
+    "MinimizeButton",
+    "PassthroughStack",
+    "PinButton",
+    "PixmapCache",
+    "ResetPosition",
+    "RowAccess",
+    "RowControl",
+    "RowHandle",
+    "RowSpec",
+    "SearchBarLayoutPlaceholder",
+    "SearchSuggestionPopup",
+    "SquareGridView",
+    "TagChipDelegate",
+    "TagChipView",
+    "TagLabel",
+    "TileView",
+    "ValidationError",
+    "ValidationMode",
+    "get_cache",
+    "get_loader",
+    "layout",
+    "view",
+    "widget",
 ]
 
 # ============================================================
@@ -76,12 +128,10 @@ if TYPE_CHECKING:  # pragma: no cover
     from .layout import (
         ColumnLayoutCalculator,
         Grid12Layout,
-        RowFormat,
         SearchBarLayoutPlaceholder,
     )
     from .view import (
         ColumnListView,
-        FormView,
         ImageViewer,
         SquareGridView,
         TagChipView,
@@ -95,6 +145,7 @@ if TYPE_CHECKING:  # pragma: no cover
         FloatingSearchBar,
         FoldButton,
         ImageLoader,
+        MarqueeLabel,
         MaximizeButton,
         MinimizeButton,
         PassthroughStack,
@@ -102,8 +153,20 @@ if TYPE_CHECKING:  # pragma: no cover
         PixmapCache,
         SearchSuggestionPopup,
         TagChipDelegate,
+        TagLabel,
         get_cache,
         get_loader,
+    )
+    from .widget.form_widget import (
+        BrowseKind,
+        FormView,
+        ResetPosition,
+        RowAccess,
+        RowControl,
+        RowHandle,
+        RowSpec,
+        ValidationError,
+        ValidationMode,
     )
 
 install(__name__, globals(), _LAZY, _SUBPACKAGES)

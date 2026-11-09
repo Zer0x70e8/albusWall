@@ -3,7 +3,7 @@
 
 Nothing here paints or owns data; these modules only measure / place.
 Names are resolved lazily (see :mod:`albuswall.ui.widgets._lazy`), so asking
-for ``RowFormat`` does not import the other layout modules.
+for ``Grid12Layout`` does not import the other layout modules.
 """
 
 from __future__ import annotations
